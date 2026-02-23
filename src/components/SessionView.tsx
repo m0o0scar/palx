@@ -1784,7 +1784,7 @@ export function SessionView({
                             title={isPreviewVisible ? 'Hide preview panel' : 'Show preview panel'}
                         >
                             <Globe className="w-3 h-3" />
-                            <span className={headerButtonLabelClass}>Preview/Close</span>
+                            <span className={headerButtonLabelClass}>{isPreviewVisible ? 'Close' : 'Preview'}</span>
                         </button>
                     </div>
 
