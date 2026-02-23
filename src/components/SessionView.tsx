@@ -13,7 +13,7 @@ import {
     writeSessionPromptFile
 } from '@/app/actions/session';
 import { getConfig, updateConfig } from '@/app/actions/config';
-import { Trash2, ExternalLink, Play, GitCommitHorizontal, GitMerge, GitPullRequestArrow, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, Grip, ChevronDown, Plus, Globe, MousePointer2, ArrowLeft, ArrowRight, RotateCw } from 'lucide-react';
+import { Trash2, ExternalLink, Play, GitCommitHorizontal, GitMerge, GitPullRequestArrow, GitBranch, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, Grip, ChevronDown, Plus, Globe, MousePointer2, ArrowLeft, ArrowRight, RotateCw } from 'lucide-react';
 import SessionFileBrowser from './SessionFileBrowser';
 import { getBaseName } from '@/lib/path';
 import { notifySessionsUpdated } from '@/lib/session-updates';
@@ -1726,7 +1726,7 @@ export function SessionView({
                         disabled={!worktree || !branch}
                         title="Open this worktree and branch in Trident"
                     >
-                        <ExternalLink className="w-3 h-3" />
+                        <GitBranch className="w-3 h-3" />
                         <span className={headerButtonLabelClass}>Diff with Trident</span>
                     </button>
 
