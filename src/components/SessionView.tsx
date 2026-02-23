@@ -235,7 +235,7 @@ export function SessionView({
     isResume,
     onSessionStart
 }: SessionViewProps) {
-    const headerButtonLabelClass = 'hidden min-[1600px]:inline';
+    const headerButtonLabelClass = 'hidden min-[1900px]:inline';
 
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const terminalRef = useRef<HTMLIFrameElement>(null);
@@ -1728,7 +1728,7 @@ export function SessionView({
                             title="Open this worktree and branch in Trident"
                         >
                             <GitBranch className="w-3 h-3" />
-                            <span className={headerButtonLabelClass}>Diff with Trident</span>
+                            <span className={headerButtonLabelClass}>Diff</span>
                         </button>
                         <div className="w-[1px] h-4 bg-base-content/10"></div>
                         <button
@@ -1750,7 +1750,7 @@ export function SessionView({
                             title="Browse files and insert absolute paths into the agent input"
                         >
                             {isInsertingFilePaths ? <span className="loading loading-spinner loading-xs"></span> : <FolderOpen className="w-3 h-3" />}
-                            <span className={headerButtonLabelClass}>Insert Files</span>
+                            <span className={headerButtonLabelClass}>Add Files</span>
                         </button>
                         <div className="w-[1px] h-4 bg-base-content/10"></div>
                         <button
@@ -1773,7 +1773,7 @@ export function SessionView({
                                     title="Run dev server script in terminal"
                                 >
                                     {isStartingDevServer ? <span className="loading loading-spinner loading-xs"></span> : <Play className="w-3 h-3" />}
-                                    <span className={headerButtonLabelClass}>Start Dev Server</span>
+                                    <span className={headerButtonLabelClass}>Dev</span>
                                 </button>
                                 <div className="w-[1px] h-4 bg-base-content/10"></div>
                             </>
@@ -1784,7 +1784,7 @@ export function SessionView({
                             title={isPreviewVisible ? 'Hide preview panel' : 'Show preview panel'}
                         >
                             <Globe className="w-3 h-3" />
-                            <span className={headerButtonLabelClass}>{isPreviewVisible ? 'Close Preview' : 'Show Preview'}</span>
+                            <span className={headerButtonLabelClass}>Preview/Close</span>
                         </button>
                     </div>
 
