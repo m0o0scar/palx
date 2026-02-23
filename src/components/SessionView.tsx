@@ -1720,65 +1720,73 @@ export function SessionView({
                         </button>
                     </div>
 
-                    <button
-                        className="btn btn-ghost btn-xs gap-1 h-6 min-h-6"
-                        onClick={handleShowDiffWithTrident}
-                        disabled={!worktree || !branch}
-                        title="Open this worktree and branch in Trident"
-                    >
-                        <GitBranch className="w-3 h-3" />
-                        <span className={headerButtonLabelClass}>Diff with Trident</span>
-                    </button>
-
-                    <button
-                        className="btn btn-ghost btn-xs gap-1 h-6 min-h-6"
-                        onClick={() => setIsFileBrowserOpen(true)}
-                        disabled={isInsertingFilePaths}
-                        title="Browse files and insert absolute paths into the agent input"
-                    >
-                        {isInsertingFilePaths ? <span className="loading loading-spinner loading-xs"></span> : <FolderOpen className="w-3 h-3" />}
-                        <span className={headerButtonLabelClass}>Insert Files</span>
-                    </button>
-
-                    <button
-                        className="btn btn-ghost btn-xs gap-1 h-6 min-h-6"
-                        onClick={handleNewAttempt}
-                        title="Start a new attempt in a new tab with this session context"
-                    >
-                        <Plus className="w-3 h-3" />
-                        <span className={headerButtonLabelClass}>New Attempt</span>
-                    </button>
-
-                    {devServerScript?.trim() && (
+                    <div className="flex items-center border border-base-content/20 rounded overflow-hidden bg-base-100">
                         <button
-                            className="btn btn-ghost btn-xs gap-1 h-6 min-h-6"
-                            onClick={handleStartDevServer}
-                            disabled={isStartingDevServer}
-                            title="Run dev server script in terminal"
+                            className="btn btn-ghost btn-xs rounded-none h-6 min-h-6 border-none px-2 hover:bg-base-content/10"
+                            onClick={handleShowDiffWithTrident}
+                            disabled={!worktree || !branch}
+                            title="Open this worktree and branch in Trident"
                         >
-                            {isStartingDevServer ? <span className="loading loading-spinner loading-xs"></span> : <Play className="w-3 h-3" />}
-                            <span className={headerButtonLabelClass}>Start Dev Server</span>
+                            <GitBranch className="w-3 h-3" />
+                            <span className={headerButtonLabelClass}>Diff with Trident</span>
                         </button>
-                    )}
+                        <div className="w-[1px] h-4 bg-base-content/10"></div>
+                        <button
+                            className="btn btn-ghost btn-xs rounded-none h-6 min-h-6 border-none px-2 hover:bg-base-content/10"
+                            onClick={handleCommit}
+                            disabled={isRequestingCommit}
+                            title="Ask agent to create a commit with current changes"
+                        >
+                            {isRequestingCommit ? <span className="loading loading-spinner loading-xs"></span> : <GitCommitHorizontal className="w-3 h-3" />}
+                            <span className={headerButtonLabelClass}>Commit ({uncommittedFileCount})</span>
+                        </button>
+                    </div>
 
-                    <button
-                        className="btn btn-ghost btn-xs gap-1 h-6 min-h-6"
-                        onClick={() => setIsPreviewVisible((previous) => !previous)}
-                        title={isPreviewVisible ? 'Hide preview panel' : 'Show preview panel'}
-                    >
-                        <Globe className="w-3 h-3" />
-                        <span className={headerButtonLabelClass}>{isPreviewVisible ? 'Close Preview' : 'Show Preview'}</span>
-                    </button>
+                    <div className="flex items-center border border-base-content/20 rounded overflow-hidden bg-base-100">
+                        <button
+                            className="btn btn-ghost btn-xs rounded-none h-6 min-h-6 border-none px-2 hover:bg-base-content/10"
+                            onClick={() => setIsFileBrowserOpen(true)}
+                            disabled={isInsertingFilePaths}
+                            title="Browse files and insert absolute paths into the agent input"
+                        >
+                            {isInsertingFilePaths ? <span className="loading loading-spinner loading-xs"></span> : <FolderOpen className="w-3 h-3" />}
+                            <span className={headerButtonLabelClass}>Insert Files</span>
+                        </button>
+                        <div className="w-[1px] h-4 bg-base-content/10"></div>
+                        <button
+                            className="btn btn-ghost btn-xs rounded-none h-6 min-h-6 border-none px-2 hover:bg-base-content/10"
+                            onClick={handleNewAttempt}
+                            title="Start a new attempt in a new tab with this session context"
+                        >
+                            <Plus className="w-3 h-3" />
+                            <span className={headerButtonLabelClass}>New Attempt</span>
+                        </button>
+                    </div>
 
-                    <button
-                        className="btn btn-ghost btn-xs gap-1 h-6 min-h-6"
-                        onClick={handleCommit}
-                        disabled={isRequestingCommit}
-                        title="Ask agent to create a commit with current changes"
-                    >
-                        {isRequestingCommit ? <span className="loading loading-spinner loading-xs"></span> : <GitCommitHorizontal className="w-3 h-3" />}
-                        <span className={headerButtonLabelClass}>Commit ({uncommittedFileCount})</span>
-                    </button>
+                    <div className="flex items-center border border-base-content/20 rounded overflow-hidden bg-base-100">
+                        {devServerScript?.trim() && (
+                            <>
+                                <button
+                                    className="btn btn-ghost btn-xs rounded-none h-6 min-h-6 border-none px-2 hover:bg-base-content/10"
+                                    onClick={handleStartDevServer}
+                                    disabled={isStartingDevServer}
+                                    title="Run dev server script in terminal"
+                                >
+                                    {isStartingDevServer ? <span className="loading loading-spinner loading-xs"></span> : <Play className="w-3 h-3" />}
+                                    <span className={headerButtonLabelClass}>Start Dev Server</span>
+                                </button>
+                                <div className="w-[1px] h-4 bg-base-content/10"></div>
+                            </>
+                        )}
+                        <button
+                            className="btn btn-ghost btn-xs rounded-none h-6 min-h-6 border-none px-2 hover:bg-base-content/10"
+                            onClick={() => setIsPreviewVisible((previous) => !previous)}
+                            title={isPreviewVisible ? 'Hide preview panel' : 'Show preview panel'}
+                        >
+                            <Globe className="w-3 h-3" />
+                            <span className={headerButtonLabelClass}>{isPreviewVisible ? 'Close Preview' : 'Show Preview'}</span>
+                        </button>
+                    </div>
 
 
 
