@@ -63,9 +63,15 @@ type GitRepoSelectorProps = {
   mode?: 'home' | 'new';
   repoPath?: string | null;
   prefillFromSession?: string | null;
+  initialError?: string | null;
 };
 
-export default function GitRepoSelector({ mode = 'home', repoPath = null, prefillFromSession = null }: GitRepoSelectorProps) {
+export default function GitRepoSelector({
+  mode = 'home',
+  repoPath = null,
+  prefillFromSession = null,
+  initialError = null,
+}: GitRepoSelectorProps) {
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [isSelectingRoot, setIsSelectingRoot] = useState(false);
 
@@ -94,7 +100,7 @@ export default function GitRepoSelector({ mode = 'home', repoPath = null, prefil
 
   const [loading, setLoading] = useState(false);
   const [deletingSessionName, setDeletingSessionName] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isInstallingAgentCli, setIsInstallingAgentCli] = useState(false);
   const [installingAgentCli, setInstallingAgentCli] = useState<SupportedAgentCli | null>(null);
@@ -108,6 +114,12 @@ export default function GitRepoSelector({ mode = 'home', repoPath = null, prefil
   const collapsedSessionSetupLabel = selectedProvider && selectedModel
     ? `Show Session Setup (${selectedProvider.name} / ${selectedModel})`
     : 'Show Session Setup';
+
+  useEffect(() => {
+    if (initialError) {
+      setError(initialError);
+    }
+  }, [initialError]);
 
   const notifySessionsChanged = useCallback(() => {
     notifySessionsUpdated();
@@ -1490,6 +1502,27 @@ export default function GitRepoSelector({ mode = 'home', repoPath = null, prefil
                   Done
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mode === 'new' && !selectedRepo && (!repoPath || !!error) && (
+        <div className="card w-full max-w-2xl bg-base-200 shadow-xl">
+          <div className="card-body">
+            <h2 className="card-title flex items-center gap-2">
+              <FolderGit2 className="w-6 h-6 text-primary" />
+              Git Repository Selector
+            </h2>
+            {error ? (
+              <div className="alert alert-error text-sm py-2 px-3 mt-2">{error}</div>
+            ) : (
+              <div className="text-sm opacity-70 mt-2">No repository specified.</div>
+            )}
+            <div className="mt-4">
+              <button className="btn btn-primary btn-sm" onClick={() => router.push('/')}>
+                Choose Repository
+              </button>
             </div>
           </div>
         </div>
