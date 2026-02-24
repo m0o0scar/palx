@@ -1220,6 +1220,15 @@ export function SessionView({
                 const fallbackName = typeof firstReactComponent === 'string' && firstReactComponent.trim().length > 0
                     ? firstReactComponent.trim()
                     : '';
+                const builtInComponents = new Set([
+                    'Suspense', 'ErrorBoundary', 'Router', 'AppRouter', 'LayoutRouter',
+                    'RenderFromTemplateContext', 'ScrollAndFocusHandler', 'InnerLayoutRouter',
+                    'RedirectErrorBoundary', 'NotFoundBoundary', 'LoadingBoundary',
+                    'ReactDevOverlay', 'HotReload', 'AppContainer', 'Route', 'Link', 'Image',
+                    'OuterLayoutRouter', 'Head', 'StringRefs', 'Fragment', 'Profiler',
+                    'StrictMode', 'SuspenseList', 'Script', 'Page'
+                ]);
+
                 const stackComponentNames = Array.from(
                     new Set(
                         reactStack
@@ -1228,9 +1237,12 @@ export function SessionView({
                                 const name = (entry as { name?: unknown }).name;
                                 return typeof name === 'string' ? name.trim() : '';
                             })
-                            .filter(Boolean)
+                            .filter((name) => name && !builtInComponents.has(name))
                     )
                 );
+
+                console.log('Filtered stack component names:', stackComponentNames);
+
                 const identifier = componentReference
                     || fallbackName
                     || (typeof selectedElement?.selector === 'string' ? selectedElement.selector : '');
