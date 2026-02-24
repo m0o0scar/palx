@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import simpleGit from 'simple-git';
+import { getTmuxSessionName, TerminalSessionRole } from '@/lib/terminal-session';
 
 export type FileSystemItem = {
   name: string;
@@ -227,11 +228,12 @@ export async function installAgentCli(agentCli: string): Promise<{ success: bool
 // Global variable to track the ttyd process
 declare global {
   var ttydProcess: ReturnType<typeof import('child_process').spawn> | undefined;
+  var ttydPersistenceMode: 'tmux' | 'shell' | undefined;
 }
 
-export async function startTtydProcess(): Promise<{ success: boolean; error?: string }> {
+export async function startTtydProcess(): Promise<{ success: boolean; persistenceMode?: 'tmux' | 'shell'; error?: string }> {
   if (global.ttydProcess) {
-    return { success: true };
+    return { success: true, persistenceMode: global.ttydPersistenceMode || 'shell' };
   }
 
   try {
@@ -266,9 +268,25 @@ export async function startTtydProcess(): Promise<{ success: boolean; error?: st
       '-W',
     ];
 
+    let persistenceMode: 'tmux' | 'shell' = 'shell';
     if (hasTmux) {
+      // Ensure tmux sessions keep enough history and support mouse wheel scrolling.
+      spawnSync('tmux', ['start-server'], {
+        stdio: 'ignore',
+        env: process.env,
+      });
+      spawnSync('tmux', ['set-option', '-g', 'mouse', 'on'], {
+        stdio: 'ignore',
+        env: process.env,
+      });
+      spawnSync('tmux', ['set-option', '-g', 'history-limit', '200000'], {
+        stdio: 'ignore',
+        env: process.env,
+      });
+
       // Use URL args so each iframe can attach to a dedicated tmux session.
       ttydArgs.push('-a', 'tmux');
+      persistenceMode = 'tmux';
     } else {
       const shell = isWindows ? 'powershell' : 'bash';
       console.warn('tmux is unavailable; falling back to non-persistent ttyd shell mode.');
@@ -289,20 +307,49 @@ export async function startTtydProcess(): Promise<{ success: boolean; error?: st
     child.on('error', (err) => {
       console.error('Failed to start ttyd:', err);
       global.ttydProcess = undefined;
+      global.ttydPersistenceMode = undefined;
     });
 
     child.on('exit', () => {
       global.ttydProcess = undefined;
+      global.ttydPersistenceMode = undefined;
     });
 
     global.ttydProcess = child;
+    global.ttydPersistenceMode = persistenceMode;
 
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    return { success: true };
+    return { success: true, persistenceMode };
   } catch (error) {
     console.error('Error starting ttyd:', error);
     return { success: false, error: 'Failed to start ttyd. Make sure ttyd is installed and in your PATH.' };
+  }
+}
+
+export async function terminateSessionTerminalSessions(sessionName: string): Promise<void> {
+  if (os.platform() === 'win32') return;
+
+  try {
+    const { spawnSync } = await import('child_process');
+    const tmuxExists =
+      spawnSync('which', ['tmux'], {
+        stdio: 'ignore',
+        env: process.env,
+      }).status === 0;
+
+    if (!tmuxExists) return;
+
+    const roles: TerminalSessionRole[] = ['agent', 'terminal'];
+    for (const role of roles) {
+      const tmuxSession = getTmuxSessionName(sessionName, role);
+      spawnSync('tmux', ['kill-session', '-t', tmuxSession], {
+        stdio: 'ignore',
+        env: process.env,
+      });
+    }
+  } catch (error) {
+    console.error('Failed to terminate session terminal sessions:', error);
   }
 }
 

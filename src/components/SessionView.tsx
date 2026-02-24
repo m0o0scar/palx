@@ -17,6 +17,7 @@ import { Trash2, ExternalLink, Play, GitCommitHorizontal, GitMerge, GitPullReque
 import SessionFileBrowser from './SessionFileBrowser';
 import { getBaseName } from '@/lib/path';
 import { notifySessionsUpdated } from '@/lib/session-updates';
+import { buildTtydTerminalSrc } from '@/lib/terminal-session';
 
 const SUPPORTED_IDES = [
     { id: 'vscode', name: 'VS Code', protocol: 'vscode' },
@@ -75,21 +76,6 @@ const TERMINAL_PANEL_RIGHT_GAP = 16;
 const TERMINAL_MINIMIZED_VISIBLE_WIDTH = 40;
 const TRIDENT_WORKSPACE_URL = 'http://localhost:3100/workspace';
 const TERMINAL_BOOTSTRAP_STORAGE_PREFIX = 'viba:terminal-bootstrap:';
-
-const sanitizeTmuxSessionName = (value: string): string => {
-    const safe = value.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
-    return safe || 'session';
-};
-
-const buildTerminalSrc = (sessionName: string, role: 'agent' | 'terminal'): string => {
-    const tmuxSession = `viba-${sanitizeTmuxSessionName(sessionName).slice(0, 40)}-${role}`;
-    const params = new URLSearchParams();
-    params.append('arg', 'new-session');
-    params.append('arg', '-A');
-    params.append('arg', '-s');
-    params.append('arg', tmuxSession);
-    return `/terminal?${params.toString()}`;
-};
 
 const clampAgentPaneRatio = (value: number): number => Math.max(0.2, Math.min(0.8, value));
 
@@ -225,6 +211,7 @@ export interface SessionViewProps {
     attachmentNames?: string[];
     onExit: (force?: boolean) => void;
     isResume?: boolean;
+    terminalPersistenceMode?: 'tmux' | 'shell';
     onSessionStart?: () => void;
 }
 
@@ -244,6 +231,7 @@ export function SessionView({
     attachmentNames,
     onExit,
     isResume,
+    terminalPersistenceMode = 'shell',
     onSessionStart
 }: SessionViewProps) {
     const headerButtonLabelClass = 'hidden min-[1900px]:inline';
@@ -256,8 +244,8 @@ export function SessionView({
     const splitResizeRef = useRef({ startX: 0, startRatio: DEFAULT_AGENT_PANE_RATIO });
     const agentFrameLinkCleanupRef = useRef<(() => void) | null>(null);
     const terminalFrameLinkCleanupRef = useRef<(() => void) | null>(null);
-    const agentTerminalSrc = useMemo(() => buildTerminalSrc(sessionName, 'agent'), [sessionName]);
-    const floatingTerminalSrc = useMemo(() => buildTerminalSrc(sessionName, 'terminal'), [sessionName]);
+    const agentTerminalSrc = useMemo(() => buildTtydTerminalSrc(sessionName, 'agent'), [sessionName]);
+    const floatingTerminalSrc = useMemo(() => buildTtydTerminalSrc(sessionName, 'terminal'), [sessionName]);
 
     const getTerminalBootstrapKey = useCallback((slot: 'agent' | 'terminal') => {
         return `${TERMINAL_BOOTSTRAP_STORAGE_PREFIX}${sessionName}:${slot}`;
@@ -1440,8 +1428,14 @@ export function SessionView({
                     } catch { /* ignore if API unavailable */ }
 
                     const alreadyBootstrapped = hasTerminalBootstrapped('agent');
-                    if (alreadyBootstrapped) {
-                        setFeedback('Reconnected to terminal');
+                    const shouldSkipResumeInjection = Boolean(isResume) && terminalPersistenceMode === 'tmux';
+                    if (alreadyBootstrapped || shouldSkipResumeInjection) {
+                        if (shouldSkipResumeInjection && !alreadyBootstrapped) {
+                            markTerminalBootstrapped('agent');
+                            setFeedback('Attached to persisted terminal');
+                        } else {
+                            setFeedback('Reconnected to terminal');
+                        }
                         win.focus();
                         const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
                         if (textarea) (textarea as HTMLElement).focus();
@@ -1657,7 +1651,11 @@ export function SessionView({
                     }
 
                     const alreadyBootstrapped = hasTerminalBootstrapped('terminal');
-                    if (alreadyBootstrapped) {
+                    const shouldSkipResumeInjection = Boolean(isResume) && terminalPersistenceMode === 'tmux';
+                    if (alreadyBootstrapped || shouldSkipResumeInjection) {
+                        if (shouldSkipResumeInjection && !alreadyBootstrapped) {
+                            markTerminalBootstrapped('terminal');
+                        }
                         win.focus();
                         const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
                         if (textarea) (textarea as HTMLElement).focus();
