@@ -92,11 +92,6 @@ type PreviewComponentStackEntry = {
     } | null;
 };
 
-type ResolveComponentSourceResponse = {
-    sourcePath?: string;
-    error?: string;
-};
-
 const isWindowsAbsolutePath = (value: string): boolean => /^[a-zA-Z]:[\\/]/.test(value);
 
 const normalizePickerSourceFileName = (value: string): string => {
@@ -634,9 +629,9 @@ export function SessionView({
         setIsInsertingFilePaths(false);
     }, [pasteIntoAgentIframe]);
 
-    const resolveComponentSourcePathByName = useCallback(async (componentName: string): Promise<string | null> => {
-        const normalizedName = normalizeComponentLookupName(componentName);
-        if (!normalizedName) return null;
+    const resolveComponentSourcePathByNames = useCallback(async (componentNames: string[]): Promise<{ resolvedName: string; sourcePath: string } | null> => {
+        const normalizedNames = componentNames.map(normalizeComponentLookupName).filter(Boolean);
+        if (normalizedNames.length === 0) return null;
 
         const roots = Array.from(
             new Set(
@@ -655,15 +650,15 @@ export function SessionView({
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        componentName: normalizedName,
+                        componentNames: normalizedNames,
                         workspaceRoot,
                     }),
                 });
 
-                const payload = await response.json().catch(() => null) as ResolveComponentSourceResponse | null;
+                const payload = await response.json().catch(() => null) as { resolvedName?: string; sourcePath?: string; error?: string } | null;
                 if (!response.ok) {
                     console.warn('Component source resolve miss', {
-                        componentName: normalizedName,
+                        componentNames: normalizedNames,
                         workspaceRoot,
                         error: payload?.error || response.statusText,
                     });
@@ -671,7 +666,9 @@ export function SessionView({
                 }
 
                 const sourcePath = typeof payload?.sourcePath === 'string' ? payload.sourcePath.trim() : '';
-                if (sourcePath) return sourcePath;
+                const resolvedName = typeof payload?.resolvedName === 'string' ? payload.resolvedName.trim() : '';
+                
+                if (sourcePath && resolvedName) return { sourcePath, resolvedName };
             } catch (error) {
                 console.error('Failed to resolve component source path:', error);
             }
@@ -1249,19 +1246,12 @@ export function SessionView({
                 }
 
                 void (async () => {
-                    let finalIdentifier = '';
+                    let finalIdentifier = componentReference || '';
 
-                    if (stackComponentNames.length > 0) {
-                        const results = await Promise.all(
-                            stackComponentNames.map(async (componentName) => {
-                                const resolvedPath = await resolveComponentSourcePathByName(componentName);
-                                return { componentName, resolvedPath };
-                            })
-                        );
-
-                        const firstValid = results.find((r) => r.resolvedPath);
-                        if (firstValid) {
-                            finalIdentifier = `${firstValid.componentName} (${firstValid.resolvedPath})`;
+                    if (!finalIdentifier && stackComponentNames.length > 0) {
+                        const result = await resolveComponentSourcePathByNames(stackComponentNames);
+                        if (result?.resolvedName && result?.sourcePath) {
+                            finalIdentifier = `${result.resolvedName} (${result.sourcePath})`;
                         }
                     }
 
@@ -1287,7 +1277,7 @@ export function SessionView({
         return () => {
             window.removeEventListener('message', handlePreviewMessage);
         };
-    }, [pasteIntoAgentIframe, repo, resolveComponentSourcePathByName, worktree]);
+    }, [pasteIntoAgentIframe, repo, resolveComponentSourcePathByNames, worktree]);
 
     useEffect(() => {
         setIsPreviewPickerActive(false);

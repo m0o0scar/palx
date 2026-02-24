@@ -9,8 +9,9 @@ export const runtime = 'nodejs';
 const execFileAsync = promisify(execFile);
 
 type ResolveComponentSourceRequestBody = {
-  componentName?: unknown;
-  workspaceRoot?: unknown;
+  componentName?: string;
+  componentNames?: string[];
+  workspaceRoot?: string;
 };
 
 const SEARCH_GLOBS = [
@@ -282,13 +283,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
   }
 
+  const componentNames = Array.isArray(body.componentNames)
+    ? body.componentNames.map((n) => typeof n === 'string' ? normalizeComponentLookupName(n) : '').filter(Boolean)
+    : [];
+
   const componentName = typeof body.componentName === 'string'
     ? normalizeComponentLookupName(body.componentName)
     : '';
+
+  const namesToResolve = componentNames.length > 0 ? componentNames : (componentName ? [componentName] : []);
   const workspaceRoot = typeof body.workspaceRoot === 'string' ? body.workspaceRoot.trim() : '';
 
-  if (!componentName) {
-    return NextResponse.json({ error: 'componentName is required' }, { status: 400 });
+  if (namesToResolve.length === 0) {
+    return NextResponse.json({ error: 'componentName or componentNames is required' }, { status: 400 });
   }
 
   if (!workspaceRoot || !path.isAbsolute(workspaceRoot)) {
@@ -301,13 +308,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'workspaceRoot must be a directory' }, { status: 400 });
     }
 
-    const sourcePath = await resolveSourcePathByComponentName(workspaceRoot, componentName);
-
-    if (!sourcePath) {
-      return NextResponse.json({ error: 'Source file not found' }, { status: 404 });
+    for (const name of namesToResolve) {
+      const sourcePath = await resolveSourcePathByComponentName(workspaceRoot, name);
+      if (sourcePath) {
+        return NextResponse.json({ sourcePath, resolvedName: name });
+      }
     }
 
-    return NextResponse.json({ sourcePath });
+    return NextResponse.json({ error: 'Source file not found' }, { status: 404 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to resolve component source';
     return NextResponse.json({ error: message }, { status: 500 });
