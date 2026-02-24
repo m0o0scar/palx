@@ -27,6 +27,7 @@ export default function SessionPage() {
 
     // True = send --resume to agent; False = send fresh start params
     const [isResume, setIsResume] = useState<boolean>(true);
+    const [terminalPersistenceMode, setTerminalPersistenceMode] = useState<'tmux' | 'shell'>('shell');
 
     useEffect(() => {
         document.documentElement.classList.add('session-page');
@@ -47,6 +48,7 @@ export default function SessionPage() {
                     setLoading(false);
                     return;
                 }
+                setTerminalPersistenceMode(ttydResult.persistenceMode === 'tmux' ? 'tmux' : 'shell');
 
                 const data = await getSessionMetadata(sessionId);
                 if (!data) {
@@ -155,6 +157,7 @@ export default function SessionPage() {
             attachmentNames={attachmentNames}
             onExit={handleExit}
             isResume={isResume}
+            terminalPersistenceMode={terminalPersistenceMode}
             onSessionStart={handleSessionStart}
         />
     );

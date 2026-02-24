@@ -4,7 +4,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import simpleGit from 'simple-git';
-import { prepareSessionWorktree, removeWorktree } from './git';
+import { prepareSessionWorktree, removeWorktree, terminateSessionTerminalSessions } from './git';
 
 export type SessionMetadata = {
   sessionName: string;
@@ -355,6 +355,7 @@ export async function deleteSession(sessionName: string): Promise<{ success: boo
 
     // 1. Remove worktree
     const result = await removeWorktree(metadata.repoPath, metadata.worktreePath, metadata.branchName);
+    await terminateSessionTerminalSessions(sessionName);
     if (!result.success) {
       return result;
     }
