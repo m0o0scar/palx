@@ -61,33 +61,33 @@ export async function listPathEntries(dirPath: string): Promise<FileSystemItem[]
       return a.name.localeCompare(b.name);
     });
 
-    const items: FileSystemItem[] = [];
+    const items = await Promise.all(
+      sortedEntries.map(async (entry) => {
+        if (!entry.isDirectory() && !entry.isFile()) return null;
 
-    for (const entry of sortedEntries) {
-      if (!entry.isDirectory() && !entry.isFile()) continue;
+        const fullPath = path.join(dirPath, entry.name);
+        let isGitRepo = false;
 
-      const fullPath = path.join(dirPath, entry.name);
-      let isGitRepo = false;
-
-      if (entry.isDirectory()) {
-        try {
-          const gitDir = path.join(fullPath, '.git');
-          await fs.access(gitDir);
-          isGitRepo = true;
-        } catch {
-          isGitRepo = false;
+        if (entry.isDirectory()) {
+          try {
+            const gitDir = path.join(fullPath, '.git');
+            await fs.access(gitDir);
+            isGitRepo = true;
+          } catch {
+            isGitRepo = false;
+          }
         }
-      }
 
-      items.push({
-        name: entry.name,
-        path: fullPath,
-        isDirectory: entry.isDirectory(),
-        isGitRepo,
-      });
-    }
+        return {
+          name: entry.name,
+          path: fullPath,
+          isDirectory: entry.isDirectory(),
+          isGitRepo,
+        } as FileSystemItem;
+      })
+    );
 
-    return items;
+    return items.filter((item): item is FileSystemItem => item !== null);
   } catch (error) {
     console.error('Error listing directory entries:', error);
     return [];
