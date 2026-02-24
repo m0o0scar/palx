@@ -11,8 +11,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_ROOT = path.resolve(__dirname, "..");
 const require = createRequire(import.meta.url);
-const NEXT_BIN = require.resolve("next/dist/bin/next");
 const DEFAULT_PORT = 3200;
+
+function getNextBin() {
+  return require.resolve("next/dist/bin/next");
+}
 
 function isCommandAvailable(command) {
   const probe = process.platform === "win32" ? "where" : "which";
@@ -32,7 +35,7 @@ function runCommand(command, args) {
   return result.status === 0;
 }
 
-function getInstallStrategies(packageName) {
+export function getInstallStrategies(packageName) {
   if (process.platform === "darwin") {
     return [
       {
@@ -254,7 +257,7 @@ async function findAvailablePort(startPort, maxAttempts = 20) {
 
 function runNext(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [NEXT_BIN, ...args], {
+    const child = spawn(process.execPath, [getNextBin(), ...args], {
       cwd: APP_ROOT,
       stdio: "inherit",
       env: process.env,
@@ -316,4 +319,6 @@ async function main() {
   }
 }
 
-main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}
