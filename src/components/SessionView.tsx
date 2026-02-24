@@ -29,6 +29,15 @@ const SUPPORTED_IDES = [
 type TerminalWindow = Window & {
     term?: {
         paste: (text: string) => void;
+        buffer?: {
+            active?: {
+                baseY: number;
+                cursorY: number;
+                getLine?: (line: number) => {
+                    translateToString: (trimRight?: boolean, startColumn?: number, endColumn?: number) => string;
+                } | undefined;
+            };
+        };
         options: {
             linkHandler?: TerminalLinkHandler | null;
             theme?: Record<string, string>;
@@ -68,6 +77,7 @@ type TerminalLinkHandlerOptions = {
 type PreviewNavigationAction = 'back' | 'forward' | 'reload';
 type TerminalBootstrapSlot = 'agent' | 'terminal';
 type TerminalBootstrapState = 'idle' | 'in_progress' | 'done';
+type TerminalBootstrapRegistry = Record<string, TerminalBootstrapState>;
 
 const quoteShellArg = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 const TERMINAL_SIZE_STORAGE_KEY = 'viba-terminal-size';
@@ -78,6 +88,8 @@ const TERMINAL_PANEL_RIGHT_GAP = 16;
 const TERMINAL_MINIMIZED_VISIBLE_WIDTH = 40;
 const TRIDENT_WORKSPACE_URL = 'http://localhost:3100/workspace';
 const TERMINAL_BOOTSTRAP_STORAGE_PREFIX = 'viba:terminal-bootstrap:';
+const TERMINAL_BOOTSTRAP_RUNTIME_KEY = '__vibaTerminalBootstrapRegistry';
+const SHELL_PROMPT_PATTERN = /(?:\$|%|#|>) $/;
 
 const clampAgentPaneRatio = (value: number): number => Math.max(0.2, Math.min(0.8, value));
 
@@ -265,8 +277,38 @@ export function SessionView({
         return `${TERMINAL_BOOTSTRAP_STORAGE_PREFIX}${sessionName}:${slot}`;
     }, [sessionName]);
 
+    const getRuntimeBootstrapKey = useCallback((slot: TerminalBootstrapSlot) => {
+        return `${sessionName}:${slot}`;
+    }, [sessionName]);
+
+    const getRuntimeBootstrapRegistry = useCallback((): TerminalBootstrapRegistry | null => {
+        if (typeof window === 'undefined') return null;
+        const runtimeWindow = window as Window & {
+            __vibaTerminalBootstrapRegistry?: TerminalBootstrapRegistry;
+        };
+        if (!runtimeWindow[TERMINAL_BOOTSTRAP_RUNTIME_KEY]) {
+            runtimeWindow[TERMINAL_BOOTSTRAP_RUNTIME_KEY] = {};
+        }
+        return runtimeWindow[TERMINAL_BOOTSTRAP_RUNTIME_KEY] || null;
+    }, []);
+
+    const getRuntimeBootstrapState = useCallback((slot: TerminalBootstrapSlot): TerminalBootstrapState => {
+        const registry = getRuntimeBootstrapRegistry();
+        if (!registry) return 'idle';
+        return registry[getRuntimeBootstrapKey(slot)] || 'idle';
+    }, [getRuntimeBootstrapRegistry, getRuntimeBootstrapKey]);
+
+    const setRuntimeBootstrapState = useCallback((slot: TerminalBootstrapSlot, state: TerminalBootstrapState): void => {
+        const registry = getRuntimeBootstrapRegistry();
+        if (!registry) return;
+        registry[getRuntimeBootstrapKey(slot)] = state;
+    }, [getRuntimeBootstrapRegistry, getRuntimeBootstrapKey]);
+
     const hasTerminalBootstrapped = useCallback((slot: TerminalBootstrapSlot): boolean => {
         if (terminalBootstrapStateRef.current[slot] === 'done') {
+            return true;
+        }
+        if (getRuntimeBootstrapState(slot) === 'done') {
             return true;
         }
         try {
@@ -274,31 +316,54 @@ export function SessionView({
         } catch {
             return false;
         }
-    }, [getTerminalBootstrapKey]);
+    }, [getRuntimeBootstrapState, getTerminalBootstrapKey]);
 
     const beginTerminalBootstrap = useCallback((slot: TerminalBootstrapSlot): boolean => {
         const current = terminalBootstrapStateRef.current[slot];
-        if (current === 'done' || current === 'in_progress') {
+        const runtimeState = getRuntimeBootstrapState(slot);
+        if (current === 'done' || current === 'in_progress' || runtimeState === 'done' || runtimeState === 'in_progress') {
             return false;
         }
         terminalBootstrapStateRef.current[slot] = 'in_progress';
+        setRuntimeBootstrapState(slot, 'in_progress');
         return true;
-    }, []);
+    }, [getRuntimeBootstrapState, setRuntimeBootstrapState]);
 
     const resetTerminalBootstrap = useCallback((slot: TerminalBootstrapSlot): void => {
         if (terminalBootstrapStateRef.current[slot] !== 'done') {
             terminalBootstrapStateRef.current[slot] = 'idle';
         }
-    }, []);
+        if (getRuntimeBootstrapState(slot) !== 'done') {
+            setRuntimeBootstrapState(slot, 'idle');
+        }
+    }, [getRuntimeBootstrapState, setRuntimeBootstrapState]);
 
     const markTerminalBootstrapped = useCallback((slot: TerminalBootstrapSlot): void => {
         terminalBootstrapStateRef.current[slot] = 'done';
+        setRuntimeBootstrapState(slot, 'done');
         try {
             window.sessionStorage.setItem(getTerminalBootstrapKey(slot), '1');
         } catch {
             // Ignore storage failures (private mode / disabled storage).
         }
-    }, [getTerminalBootstrapKey]);
+    }, [getTerminalBootstrapKey, setRuntimeBootstrapState]);
+
+    const isShellPromptReady = useCallback((term: TerminalWindow['term']): boolean => {
+        const activeBuffer = term?.buffer?.active;
+        if (!activeBuffer || typeof activeBuffer.getLine !== 'function') {
+            // Fall back to ready when xterm internals are unavailable.
+            return true;
+        }
+
+        const cursorLine = activeBuffer.baseY + activeBuffer.cursorY;
+        for (let offset = 0; offset < 6; offset += 1) {
+            const line = activeBuffer.getLine(cursorLine - offset);
+            const text = line?.translateToString(true) ?? '';
+            if (!text.trim()) continue;
+            return SHELL_PROMPT_PATTERN.test(text);
+        }
+        return false;
+    }, []);
 
     const [feedback, setFeedback] = useState<string>('Initializing...');
     const [cleanupPhase, setCleanupPhase] = useState<CleanupPhase>('idle');
@@ -1475,6 +1540,11 @@ export function SessionView({
                         return;
                     }
 
+                    if (!isShellPromptReady(term) && attempts < 10) {
+                        setTimeout(() => checkAndInject(attempts + 1), 200);
+                        return;
+                    }
+
                     if (!beginTerminalBootstrap('agent')) {
                         setFeedback('Reconnected to terminal');
                         win.focus();
@@ -1701,6 +1771,11 @@ export function SessionView({
                         win.focus();
                         const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
                         if (textarea) (textarea as HTMLElement).focus();
+                        return;
+                    }
+
+                    if (!isShellPromptReady(term) && attempts < 10) {
+                        setTimeout(() => checkAndInject(attempts + 1), 200);
                         return;
                     }
 
