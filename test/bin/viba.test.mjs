@@ -1,5 +1,10 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { getInstallStrategies } from '../../bin/viba.mjs';
 
 describe('getInstallStrategies', () => {
@@ -77,5 +82,25 @@ describe('getInstallStrategies', () => {
 
     const strategies = getInstallStrategies('ttyd');
     assert.strictEqual(strategies.length, 0);
+  });
+
+  it('runs when invoked via a symlinked bin path', () => {
+    const thisFile = fileURLToPath(import.meta.url);
+    const repoRoot = path.resolve(path.dirname(thisFile), '../..');
+    const sourceBin = path.join(repoRoot, 'bin', 'viba.mjs');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'viba-cli-bin-'));
+    const symlinkBin = path.join(tempDir, 'viba-cli');
+
+    try {
+      fs.symlinkSync(sourceBin, symlinkBin);
+      const result = spawnSync(process.execPath, [symlinkBin, '--help'], {
+        encoding: 'utf8',
+      });
+
+      assert.strictEqual(result.status, 0);
+      assert.match(result.stdout, /Usage: viba-cli \[options\]/);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

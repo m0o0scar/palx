@@ -28,7 +28,7 @@
     "prepack": "rm -rf .next && npm run build",
     "start": "node ./bin/viba.mjs",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test src/**/*.test.ts",
+    "test": "node --experimental-strip-types --test src/**/*.test.ts test/**/*.test.mjs",
     "cli": "node ./bin/viba.mjs",
     "pack:preview": "npm pack --dry-run"
   },

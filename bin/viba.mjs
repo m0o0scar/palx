@@ -284,6 +284,20 @@ async function main() {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main();
+function isDirectExecution() {
+  if (!process.argv[1]) {
+    return false;
+  }
+
+  try {
+    const invokedPath = fs.realpathSync(path.resolve(process.argv[1]));
+    const modulePath = fs.realpathSync(fileURLToPath(import.meta.url));
+    return invokedPath === modulePath;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
+  void main();
 }
