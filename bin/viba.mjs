@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "../src/lib/cli-args.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -187,47 +188,6 @@ Options:
 `);
 }
 
-function parseArgs(argv) {
-  const options = {
-    mode: "start",
-    port: undefined,
-    portExplicit: false,
-  };
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-
-    if (arg === "--help" || arg === "-h") {
-      printHelp();
-      process.exit(0);
-    }
-
-    if (arg === "--dev") {
-      options.mode = "dev";
-      continue;
-    }
-
-    if (arg === "--port" || arg === "-p") {
-      const value = argv[i + 1];
-      if (!value) {
-        throw new Error("Missing value for --port.");
-      }
-      const parsed = Number.parseInt(value, 10);
-      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
-        throw new Error(`Invalid port: ${value}`);
-      }
-      options.port = parsed;
-      options.portExplicit = true;
-      i += 1;
-      continue;
-    }
-
-    throw new Error(`Unknown option: ${arg}`);
-  }
-
-  return options;
-}
-
 function checkPortAvailable(port) {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -283,6 +243,11 @@ function ensureBuildExists() {
 async function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
+    if (options.help) {
+      printHelp();
+      process.exit(0);
+    }
+
     ensureCommandInstalled("ttyd");
     if (process.platform !== "win32") {
       ensureCommandInstalled("tmux");
