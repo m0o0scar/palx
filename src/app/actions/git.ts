@@ -251,7 +251,7 @@ export async function startTtydProcess(): Promise<{ success: boolean; persistenc
   try {
     const { spawn, spawnSync } = await import('child_process');
 
-    const env: any = { ...process.env };
+    const env: NodeJS.ProcessEnv = { ...process.env };
     // Clean up environment variables to prevent conflicts
     // Specifically remove TURBOPACK which causes "Multiple bundler flags set" error
     // when running next dev inside the terminal if the parent process has it set.
