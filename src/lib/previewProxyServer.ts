@@ -4,7 +4,7 @@ import { createProxyMiddleware, responseInterceptor } from 'http-proxy-middlewar
 
 const PROXY_HOST = '127.0.0.1';
 const PICKER_SCRIPT_PATH = '/__viba_preview_picker.js';
-const PICKER_SCRIPT_VERSION = '3';
+const PICKER_SCRIPT_VERSION = '4';
 
 const PICKER_CLIENT_SCRIPT_TEMPLATE = String.raw`(() => {
   if (window.__vibaPreviewPickerInstalled) {
@@ -60,6 +60,32 @@ const PICKER_CLIENT_SCRIPT_TEMPLATE = String.raw`(() => {
     }
 
     return null;
+  };
+
+  const getAnchorFromTarget = (target) => {
+    const element = getElementFromTarget(target);
+    if (!element) {
+      return null;
+    }
+
+    if (element instanceof HTMLAnchorElement) {
+      return element;
+    }
+
+    return element.closest('a[href]');
+  };
+
+  const resolveHttpUrl = (value) => {
+    try {
+      const parsed = new URL(value, window.location.href);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return null;
+      }
+
+      return parsed.toString();
+    } catch {
+      return null;
+    }
   };
 
   const buildSelector = (element) => {
@@ -338,6 +364,44 @@ const PICKER_CLIENT_SCRIPT_TEMPLATE = String.raw`(() => {
 
   const handleClick = (event) => {
     if (!pickerActive) {
+      const anchor = getAnchorFromTarget(event.target);
+      if (!anchor || event.defaultPrevented) {
+        return;
+      }
+
+      if (typeof event.button === 'number' && event.button !== 0) {
+        return;
+      }
+
+      const resolvedUrl = resolveHttpUrl(anchor.href);
+      if (!resolvedUrl) {
+        return;
+      }
+
+      if (event.metaKey || event.ctrlKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') {
+          event.stopImmediatePropagation();
+        }
+
+        window.parent.postMessage({
+          type: 'viba:preview-link-open',
+          url: toTargetUrl(resolvedUrl),
+        }, '*');
+        return;
+      }
+
+      const anchorTarget = (anchor.getAttribute('target') || '').trim().toLowerCase();
+      if (anchorTarget === '_blank') {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') {
+          event.stopImmediatePropagation();
+        }
+
+        window.location.assign(resolvedUrl);
+      }
       return;
     }
 

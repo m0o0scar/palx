@@ -46,18 +46,22 @@ export type TerminalLinkHandler = {
 
 export type TerminalLinkHandlerOptions = {
     onLinkActivated?: () => void;
+    directOpenBehavior?: TerminalLinkOpenBehavior;
+    modifierOpenBehavior?: TerminalLinkOpenBehavior;
 };
 
 interface UseTerminalLinkProps {
     onLoadPreview: (url: string, openPreview: boolean) => Promise<boolean>;
 }
 
+export type TerminalLinkOpenBehavior = 'preview' | 'new_tab';
+
 export function useTerminalLink({ onLoadPreview }: UseTerminalLinkProps) {
-    const handleTerminalLinkOpen = useCallback((rawUrl: string, openInNewTab: boolean): boolean => {
+    const handleTerminalLinkOpen = useCallback((rawUrl: string, openBehavior: TerminalLinkOpenBehavior): boolean => {
         const normalized = normalizePreviewUrl(rawUrl);
         if (!normalized) return false;
 
-        if (openInNewTab) {
+        if (openBehavior === 'new_tab') {
             window.open(normalized, '_blank', 'noopener,noreferrer');
             return true;
         }
@@ -76,6 +80,11 @@ export function useTerminalLink({ onLoadPreview }: UseTerminalLinkProps) {
         const terminal = frameWindow?.term;
         if (!frameWindow || !terminal) return;
         const notifyLinkActivated = options?.onLinkActivated;
+        const directOpenBehavior = options?.directOpenBehavior ?? 'preview';
+        const modifierOpenBehavior = options?.modifierOpenBehavior ?? 'new_tab';
+        const resolveOpenBehavior = (openWithModifier: boolean): TerminalLinkOpenBehavior => (
+            openWithModifier ? modifierOpenBehavior : directOpenBehavior
+        );
 
         const restorers: Array<() => void> = [];
 
@@ -106,11 +115,12 @@ export function useTerminalLink({ onLoadPreview }: UseTerminalLinkProps) {
         const originalOpen = frameWindow.open.bind(frameWindow);
         const patchedOpen: Window['open'] = (...args) => {
             const openWithModifier = Date.now() - lastModifierState.at < 1000;
-            const shouldOpenInNewTab = openWithModifier && (lastModifierState.metaKey || lastModifierState.ctrlKey);
+            const shouldTreatAsModifierOpen = openWithModifier && (lastModifierState.metaKey || lastModifierState.ctrlKey);
+            const openBehavior = resolveOpenBehavior(shouldTreatAsModifierOpen);
 
             if (typeof args[0] === 'string' && args[0].trim()) {
                 notifyLinkActivated?.();
-                const handled = handleTerminalLinkOpen(args[0], shouldOpenInNewTab);
+                const handled = handleTerminalLinkOpen(args[0], openBehavior);
                 if (handled) {
                     return null;
                 }
@@ -124,7 +134,7 @@ export function useTerminalLink({ onLoadPreview }: UseTerminalLinkProps) {
                     location: {
                         set href(url: string) {
                             notifyLinkActivated?.();
-                            const handled = handleTerminalLinkOpen(url, shouldOpenInNewTab);
+                            const handled = handleTerminalLinkOpen(url, openBehavior);
 
                             if (!handled) {
                                 fallbackWindow = originalOpen();
@@ -165,8 +175,8 @@ export function useTerminalLink({ onLoadPreview }: UseTerminalLinkProps) {
                     const originalHandler = provider._handler;
                     provider._handler = (event: MouseEvent | undefined, url: string) => {
                         notifyLinkActivated?.();
-                        const shouldOpenInNewTab = Boolean(event?.metaKey || event?.ctrlKey);
-                        const handled = handleTerminalLinkOpen(url, shouldOpenInNewTab);
+                        const shouldTreatAsModifierOpen = Boolean(event?.metaKey || event?.ctrlKey);
+                        const handled = handleTerminalLinkOpen(url, resolveOpenBehavior(shouldTreatAsModifierOpen));
                         if (!handled) {
                             originalHandler(event, url);
                         }
@@ -189,8 +199,8 @@ export function useTerminalLink({ onLoadPreview }: UseTerminalLinkProps) {
                                     const originalActivate = link.activate.bind(link);
                                     link.activate = (event: MouseEvent | undefined, text: string) => {
                                         notifyLinkActivated?.();
-                                        const shouldOpenInNewTab = Boolean(event?.metaKey || event?.ctrlKey);
-                                        const handled = handleTerminalLinkOpen(text, shouldOpenInNewTab);
+                                        const shouldTreatAsModifierOpen = Boolean(event?.metaKey || event?.ctrlKey);
+                                        const handled = handleTerminalLinkOpen(text, resolveOpenBehavior(shouldTreatAsModifierOpen));
                                         if (!handled) {
                                             originalActivate(event, text);
                                         }
@@ -213,8 +223,8 @@ export function useTerminalLink({ onLoadPreview }: UseTerminalLinkProps) {
             allowNonHttpProtocols: existingLinkHandler?.allowNonHttpProtocols ?? false,
             activate: (event, url, range) => {
                 notifyLinkActivated?.();
-                const shouldOpenInNewTab = Boolean(event?.metaKey || event?.ctrlKey);
-                const handled = handleTerminalLinkOpen(url, shouldOpenInNewTab);
+                const shouldTreatAsModifierOpen = Boolean(event?.metaKey || event?.ctrlKey);
+                const handled = handleTerminalLinkOpen(url, resolveOpenBehavior(shouldTreatAsModifierOpen));
                 if (!handled) {
                     existingLinkHandler?.activate?.(event, url, range);
                 }

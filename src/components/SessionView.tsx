@@ -1356,6 +1356,13 @@ export function SessionView({
                 return;
             }
 
+            if (payload.type === 'viba:preview-link-open') {
+                if (typeof payload.url === 'string' && payload.url.trim().length > 0) {
+                    window.open(payload.url, '_blank', 'noopener,noreferrer');
+                }
+                return;
+            }
+
             if (payload.type === 'viba:preview-location-change') {
                 if (typeof payload.url === 'string' && payload.url.trim().length > 0) {
                     setPreviewInputUrl(payload.url);
@@ -1560,7 +1567,10 @@ export function SessionView({
                 if (win && win.term) {
                     ensureTmuxStatusBarHidden('agent');
                     const term = win.term;
-                    attachTerminalLinkHandler(iframe, agentFrameLinkCleanupRef);
+                    attachTerminalLinkHandler(iframe, agentFrameLinkCleanupRef, {
+                        directOpenBehavior: 'new_tab',
+                        modifierOpenBehavior: 'new_tab',
+                    });
 
                     // Set selection highlight color via xterm.js 5 theme API (canvas renderer)
                     try {
@@ -1792,6 +1802,8 @@ export function SessionView({
                     const term = win.term;
                     attachTerminalLinkHandler(iframe, terminalFrameLinkCleanupRef, {
                         onLinkActivated: () => setIsTerminalMinimized(true),
+                        directOpenBehavior: 'preview',
+                        modifierOpenBehavior: 'new_tab',
                     });
 
                     // Set selection highlight color via xterm.js 5 theme API (canvas renderer)
