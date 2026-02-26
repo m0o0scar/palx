@@ -1740,12 +1740,6 @@ export function SessionView({
                             const normalizedAgentName = agent.toLowerCase();
                             const notificationMcpScriptPath = agentNotificationMcpScriptPath?.trim() || '';
                             const hasNotificationMcpServer = Boolean(notificationMcpScriptPath);
-                            const codexMcpConfigArgs = hasNotificationMcpServer
-                                ? [
-                                    `-c ${quoteShellArg(`mcp_servers.${AGENT_NOTIFICATION_MCP_SERVER_NAME}.command="node"`)}`,
-                                    `-c ${quoteShellArg(`mcp_servers.${AGENT_NOTIFICATION_MCP_SERVER_NAME}.args=${JSON.stringify([notificationMcpScriptPath, '--session', sessionName])}`)}`,
-                                ].join(' ')
-                                : '';
                             const geminiAllowedMcpArg = hasNotificationMcpServer
                                 ? ` --allowed-mcp-server-names ${quoteShellArg(AGENT_NOTIFICATION_MCP_SERVER_NAME)}`
                                 : '';
@@ -1756,7 +1750,7 @@ export function SessionView({
                                 if (normalizedAgentName.includes('gemini')) {
                                     agentCmd = `gemini --resume latest --yolo${geminiAllowedMcpArg}`;
                                 } else if (normalizedAgentName.includes('codex')) {
-                                    agentCmd = `codex resume --last --sandbox danger-full-access --ask-for-approval on-request --search${codexMcpConfigArgs ? ` ${codexMcpConfigArgs}` : ''}`;
+                                    agentCmd = `codex resume --last --sandbox danger-full-access --ask-for-approval on-request --search`;
                                 } else if (normalizedAgentName === 'agent' || normalizedAgentName.includes('cursor')) {
                                     agentCmd = `agent${cursorApproveMcpsArg} resume`;
                                 } else {
@@ -1824,7 +1818,7 @@ export function SessionView({
 
                                 if (normalizedAgentName.includes('codex')) {
                                     // Codex: codex --model gpt-5.3-codex --sandbox danger-full-access --ask-for-approval on-request --search
-                                    agentCmd = `codex${modelArg} --sandbox danger-full-access --ask-for-approval on-request --search${codexMcpConfigArgs ? ` ${codexMcpConfigArgs}` : ''}${safeMessage}`;
+                                    agentCmd = `codex${modelArg} --sandbox danger-full-access --ask-for-approval on-request --search${safeMessage}`;
                                 } else if (normalizedAgentName.includes('gemini')) {
                                     // Gemini: gemini --model gemini-3-pro-preview --yolo
                                     agentCmd = `gemini${modelArg} --yolo${geminiAllowedMcpArg}${safeMessage}`;

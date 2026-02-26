@@ -105,6 +105,10 @@ function sanitizeSessionFileStem(value: string): string {
   return safe || 'session';
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function getSessionNotificationsDir(): Promise<string> {
   const notificationsDir = path.join(await getVibaRootDir(), 'session-notifications');
   try {
@@ -222,6 +226,44 @@ export async function ensureAgentNotificationMcpSetup(): Promise<{
       );
     } catch (e: unknown) {
       warnings.push(`Cursor MCP setup failed: ${getErrorMessage(e)}`);
+    }
+
+    try {
+      const codexConfigPath = path.join(os.homedir(), '.codex', 'config.toml');
+      let codexConfig = '';
+      try {
+        codexConfig = await fs.readFile(codexConfigPath, 'utf-8');
+      } catch (e: unknown) {
+        const errorCode =
+          typeof e === 'object' && e !== null && 'code' in e
+            ? (e as { code?: string }).code
+            : undefined;
+        if (errorCode !== 'ENOENT') {
+          throw e;
+        }
+      }
+
+      const escapedServerName = escapeRegex(AGENT_NOTIFICATION_MCP_SERVER_NAME);
+      const block = [
+        `[mcp_servers.${AGENT_NOTIFICATION_MCP_SERVER_NAME}]`,
+        `command = "node"`,
+        `args = ["${scriptPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`,
+        `startup_timeout_sec = 30`,
+      ].join('\n');
+      const sectionPattern = new RegExp(
+        String.raw`(^|\n)\[mcp_servers\.${escapedServerName}\][\s\S]*?(?=\n\[|$)`,
+      );
+      const hasSection = sectionPattern.test(codexConfig);
+      const nextConfig = hasSection
+        ? codexConfig.replace(sectionPattern, `$1${block}`)
+        : `${codexConfig.trimEnd()}${codexConfig.trim().length > 0 ? '\n\n' : ''}${block}\n`;
+
+      if (nextConfig !== codexConfig) {
+        await fs.mkdir(path.dirname(codexConfigPath), { recursive: true });
+        await fs.writeFile(codexConfigPath, nextConfig, 'utf-8');
+      }
+    } catch (e: unknown) {
+      warnings.push(`Codex MCP setup failed: ${getErrorMessage(e)}`);
     }
 
     return {
