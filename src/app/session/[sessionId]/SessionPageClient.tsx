@@ -3,7 +3,13 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { SessionView } from '@/components/SessionView';
-import { consumeSessionLaunchContext, getSessionMetadata, SessionMetadata, markSessionInitialized } from '@/app/actions/session';
+import {
+    consumeSessionLaunchContext,
+    ensureAgentNotificationMcpSetup,
+    getSessionMetadata,
+    markSessionInitialized,
+    SessionMetadata
+} from '@/app/actions/session';
 import { getSessionTerminalSources, startTtydProcess } from '@/app/actions/git';
 
 export default function SessionPage() {
@@ -32,6 +38,7 @@ export default function SessionPage() {
     // True = send --resume to agent; False = send fresh start params
     const [isResume, setIsResume] = useState<boolean>(true);
     const [terminalPersistenceMode, setTerminalPersistenceMode] = useState<'tmux' | 'shell'>('shell');
+    const [agentNotificationMcpScriptPath, setAgentNotificationMcpScriptPath] = useState<string | undefined>(undefined);
 
     useEffect(() => {
         document.documentElement.classList.add('session-page');
@@ -46,6 +53,7 @@ export default function SessionPage() {
         const loadSession = async () => {
             try {
                 setTerminalSources(null);
+                setAgentNotificationMcpScriptPath(undefined);
 
                 // Ensure ttyd is running
                 const ttydResult = await startTtydProcess();
@@ -66,6 +74,17 @@ export default function SessionPage() {
                 setMetadata(data);
                 const resolvedTerminalSources = await getSessionTerminalSources(data.sessionName, data.repoPath);
                 setTerminalSources(resolvedTerminalSources);
+                const mcpSetupResult = await ensureAgentNotificationMcpSetup();
+                if (mcpSetupResult.success && mcpSetupResult.scriptPath) {
+                    setAgentNotificationMcpScriptPath(mcpSetupResult.scriptPath);
+                } else {
+                    console.error('Failed to setup agent notification MCP integration:', mcpSetupResult.error);
+                }
+                if (mcpSetupResult.warnings && mcpSetupResult.warnings.length > 0) {
+                    for (const warning of mcpSetupResult.warnings) {
+                        console.warn(warning);
+                    }
+                }
 
                 // Determine fresh start vs resume purely from the initialized flag:
                 // - initialized === false  → first open, send startup params
@@ -180,6 +199,7 @@ export default function SessionPage() {
             onSessionStart={handleSessionStart}
             agentTerminalSrc={terminalSources.agentTerminalSrc}
             floatingTerminalSrc={terminalSources.floatingTerminalSrc}
+            agentNotificationMcpScriptPath={agentNotificationMcpScriptPath}
         />
     );
 }

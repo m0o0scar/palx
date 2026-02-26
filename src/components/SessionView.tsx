@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 // import { useRouter } from 'next/navigation';
 import {
     deleteSessionInBackground,
+    getSessionAgentNotificationEvents,
     getSessionDivergence,
     getSessionUncommittedFileCount,
     listSessionBaseBranches,
@@ -57,6 +58,10 @@ const PLAN_MODE_STARTUP_INSTRUCTION =
     'Plan mode: inspect the relevant code first, present a concrete implementation plan, and wait for explicit user approval before any file edits or write commands.';
 const AUTO_COMMIT_INSTRUCTION =
     'After each round, if work is complete and files changed, commit all changes without confirmation. Use a commit message with a clear title and a detailed body explaining what changed and why. If GITHUB_TOKEN or GITLAB_TOKEN is set, push the current branch after committed rounds and create (or update) a GitHub Pull Request or GitLab Merge Request with an appropriate title and description; include the PR/MR link in the first push reply.';
+const AGENT_NOTIFICATION_MCP_SERVER_NAME = 'viba_notify';
+const AGENT_REPLY_FINISHED_TOOL_NAME = 'notify_reply_finished';
+const AGENT_REPLY_NOTIFICATION_INSTRUCTION =
+    `When you finish a user-facing reply, call the MCP tool ${AGENT_NOTIFICATION_MCP_SERVER_NAME}.${AGENT_REPLY_FINISHED_TOOL_NAME} exactly once.`;
 
 const clampAgentPaneRatio = (value: number): number => Math.max(0.2, Math.min(0.8, value));
 
@@ -186,6 +191,7 @@ export interface SessionViewProps {
     onSessionStart?: () => void;
     agentTerminalSrc?: string;
     floatingTerminalSrc?: string;
+    agentNotificationMcpScriptPath?: string;
 }
 
 export function SessionView({
@@ -208,6 +214,7 @@ export function SessionView({
     onSessionStart,
     agentTerminalSrc: agentTerminalSrcOverride,
     floatingTerminalSrc: floatingTerminalSrcOverride,
+    agentNotificationMcpScriptPath,
 }: SessionViewProps) {
     const headerButtonLabelClass = 'hidden min-[1900px]:inline';
 
@@ -534,6 +541,10 @@ export function SessionView({
     const [isResolvingElement, setIsResolvingElement] = useState(false);
     const [agentPaneRatio, setAgentPaneRatio] = useState(DEFAULT_AGENT_PANE_RATIO);
     const [isSplitResizing, setIsSplitResizing] = useState(false);
+    const [agentReplyNotification, setAgentReplyNotification] = useState<{ id: string; message: string } | null>(null);
+    const agentReplyNotificationCursorRef = useRef(0);
+    const hasInitializedAgentReplyCursorRef = useRef(false);
+    const agentReplyNotificationTimerRef = useRef<number | null>(null);
 
     const [isTerminalMinimized, setIsTerminalMinimized] = useState(true);
 
@@ -545,6 +556,89 @@ export function SessionView({
     const [terminalInteractionMode, setTerminalInteractionMode] = useState<TerminalInteractionMode>('scroll');
     const [isUpdatingTerminalInteractionMode, setIsUpdatingTerminalInteractionMode] = useState(false);
     const terminalInteractionRequestIdRef = useRef(0);
+
+    const clearAgentReplyNotificationTimer = useCallback(() => {
+        if (agentReplyNotificationTimerRef.current !== null) {
+            window.clearTimeout(agentReplyNotificationTimerRef.current);
+            agentReplyNotificationTimerRef.current = null;
+        }
+    }, []);
+
+    const dismissAgentReplyNotification = useCallback(() => {
+        clearAgentReplyNotificationTimer();
+        setAgentReplyNotification(null);
+    }, [clearAgentReplyNotificationTimer]);
+
+    useEffect(() => {
+        return () => {
+            clearAgentReplyNotificationTimer();
+        };
+    }, [clearAgentReplyNotificationTimer]);
+
+    useEffect(() => {
+        hasInitializedAgentReplyCursorRef.current = false;
+        agentReplyNotificationCursorRef.current = 0;
+        dismissAgentReplyNotification();
+    }, [dismissAgentReplyNotification, sessionName]);
+
+    useEffect(() => {
+        if (!sessionName) return;
+
+        let cancelled = false;
+        let isPolling = false;
+
+        const pollAgentNotifications = async () => {
+            if (cancelled || isPolling) return;
+            isPolling = true;
+
+            const previousCursor = agentReplyNotificationCursorRef.current;
+            const result = await getSessionAgentNotificationEvents(sessionName, previousCursor);
+
+            if (cancelled) {
+                isPolling = false;
+                return;
+            }
+
+            if (result.success) {
+                agentReplyNotificationCursorRef.current = result.cursor;
+
+                if (!hasInitializedAgentReplyCursorRef.current) {
+                    hasInitializedAgentReplyCursorRef.current = true;
+                    isPolling = false;
+                    return;
+                }
+
+                const replyFinishedEvents = result.events.filter((event) => event.type === 'reply_finished');
+                const latestReplyFinishedEvent = replyFinishedEvents[replyFinishedEvents.length - 1];
+
+                if (latestReplyFinishedEvent) {
+                    const message = latestReplyFinishedEvent.message?.trim() || 'Agent finished replying';
+                    setAgentReplyNotification({
+                        id: latestReplyFinishedEvent.id,
+                        message,
+                    });
+                    setFeedback(message);
+                    clearAgentReplyNotificationTimer();
+                    agentReplyNotificationTimerRef.current = window.setTimeout(() => {
+                        setAgentReplyNotification(null);
+                        agentReplyNotificationTimerRef.current = null;
+                    }, 6000);
+                }
+            }
+
+            isPolling = false;
+        };
+
+        void pollAgentNotifications();
+        const intervalId = window.setInterval(() => {
+            void pollAgentNotifications();
+        }, 2000);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(intervalId);
+        };
+    }, [clearAgentReplyNotificationTimer, sessionName]);
 
     useEffect(() => {
         setLastFileBrowserPath(worktree || repo);
@@ -1643,15 +1737,28 @@ export function SessionView({
                     if (agent) {
                         const startAgentProcess = async () => {
                             let agentCmd = '';
+                            const normalizedAgentName = agent.toLowerCase();
+                            const notificationMcpScriptPath = agentNotificationMcpScriptPath?.trim() || '';
+                            const hasNotificationMcpServer = Boolean(notificationMcpScriptPath);
+                            const codexMcpConfigArgs = hasNotificationMcpServer
+                                ? [
+                                    `-c ${quoteShellArg(`mcp_servers.${AGENT_NOTIFICATION_MCP_SERVER_NAME}.command="node"`)}`,
+                                    `-c ${quoteShellArg(`mcp_servers.${AGENT_NOTIFICATION_MCP_SERVER_NAME}.args=${JSON.stringify([notificationMcpScriptPath, '--session', sessionName])}`)}`,
+                                ].join(' ')
+                                : '';
+                            const geminiAllowedMcpArg = hasNotificationMcpServer
+                                ? ` --allowed-mcp-server-names ${quoteShellArg(AGENT_NOTIFICATION_MCP_SERVER_NAME)}`
+                                : '';
+                            const cursorApproveMcpsArg = hasNotificationMcpServer ? ' --approve-mcps' : '';
 
                             if (isResume) {
                                 // Resume logic (keep startup runtime flags but do not override model)
-                                if (agent.toLowerCase().includes('gemini')) {
-                                    agentCmd = `gemini --resume latest --yolo`;
-                                } else if (agent.toLowerCase().includes('codex')) {
-                                    agentCmd = `codex resume --last --sandbox danger-full-access --ask-for-approval on-request --search`;
-                                } else if (agent.toLowerCase() === 'agent' || agent.toLowerCase().includes('cursor')) {
-                                    agentCmd = `agent resume`;
+                                if (normalizedAgentName.includes('gemini')) {
+                                    agentCmd = `gemini --resume latest --yolo${geminiAllowedMcpArg}`;
+                                } else if (normalizedAgentName.includes('codex')) {
+                                    agentCmd = `codex resume --last --sandbox danger-full-access --ask-for-approval on-request --search${codexMcpConfigArgs ? ` ${codexMcpConfigArgs}` : ''}`;
+                                } else if (normalizedAgentName === 'agent' || normalizedAgentName.includes('cursor')) {
+                                    agentCmd = `agent${cursorApproveMcpsArg} resume`;
                                 } else {
                                     // Generic fallback: <agent> resume
                                     agentCmd = `${quoteShellArg(agent)} resume`;
@@ -1685,6 +1792,9 @@ export function SessionView({
                                         instructionLines.push(PLAN_MODE_STARTUP_INSTRUCTION);
                                     }
                                     instructionLines.push(AUTO_COMMIT_INSTRUCTION);
+                                    if (hasNotificationMcpServer) {
+                                        instructionLines.push(AGENT_REPLY_NOTIFICATION_INSTRUCTION);
+                                    }
 
                                     const fullMessage = [
                                         '# Instructions',
@@ -1712,15 +1822,15 @@ export function SessionView({
 
                                 const modelArg = (model && model.toLowerCase() !== 'auto') ? ` --model ${quoteShellArg(model)}` : '';
 
-                                if (agent.toLowerCase().includes('codex')) {
+                                if (normalizedAgentName.includes('codex')) {
                                     // Codex: codex --model gpt-5.3-codex --sandbox danger-full-access --ask-for-approval on-request --search
-                                    agentCmd = `codex${modelArg} --sandbox danger-full-access --ask-for-approval on-request --search${safeMessage}`;
-                                } else if (agent.toLowerCase().includes('gemini')) {
+                                    agentCmd = `codex${modelArg} --sandbox danger-full-access --ask-for-approval on-request --search${codexMcpConfigArgs ? ` ${codexMcpConfigArgs}` : ''}${safeMessage}`;
+                                } else if (normalizedAgentName.includes('gemini')) {
                                     // Gemini: gemini --model gemini-3-pro-preview --yolo
-                                    agentCmd = `gemini${modelArg} --yolo${safeMessage}`;
-                                } else if (agent.toLowerCase() === 'agent' || agent.toLowerCase().includes('cursor')) {
+                                    agentCmd = `gemini${modelArg} --yolo${geminiAllowedMcpArg}${safeMessage}`;
+                                } else if (normalizedAgentName === 'agent' || normalizedAgentName.includes('cursor')) {
                                     // Cursor: agent --model opus-4.6-thinking
-                                    agentCmd = `agent${modelArg}${safeMessage}`;
+                                    agentCmd = `agent${modelArg}${cursorApproveMcpsArg}${safeMessage}`;
                                 } else {
                                     // Generic fallback: <agent> --model <model>
                                     agentCmd = `${quoteShellArg(agent)}${modelArg}${safeMessage}`;
@@ -2323,6 +2433,23 @@ export function SessionView({
                     />
                 </div>
             </div>
+
+            {agentReplyNotification && (
+                <div className="pointer-events-none fixed right-4 top-16 z-40">
+                    <div className="pointer-events-auto alert alert-success shadow-lg border border-success/30 py-2 pr-2 pl-3 text-xs">
+                        <span className="font-medium truncate max-w-[380px]" title={agentReplyNotification.message}>
+                            {agentReplyNotification.message}
+                        </span>
+                        <button
+                            className="btn btn-ghost btn-xs ml-2"
+                            onClick={dismissAgentReplyNotification}
+                            type="button"
+                        >
+                            Dismiss
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {isFileBrowserOpen && (
                 <SessionFileBrowser

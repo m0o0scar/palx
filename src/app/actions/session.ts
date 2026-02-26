@@ -45,9 +45,28 @@ export type SessionPrefillContext = {
   model: string;
 };
 
+export type SessionAgentNotificationEvent = {
+  id: string;
+  type: string;
+  timestamp: string;
+  message?: string;
+  source?: string;
+};
+
+const AGENT_NOTIFICATION_MCP_SERVER_NAME = 'viba_notify';
+
+async function getVibaRootDir(): Promise<string> {
+  const vibaDir = path.join(os.homedir(), '.viba');
+  try {
+    await fs.mkdir(vibaDir, { recursive: true });
+  } catch {
+    // Ignore if exists
+  }
+  return vibaDir;
+}
+
 async function getSessionsDir(): Promise<string> {
-  const homedir = os.homedir();
-  const sessionsDir = path.join(homedir, '.viba', 'sessions');
+  const sessionsDir = path.join(await getVibaRootDir(), 'sessions');
   try {
     await fs.mkdir(sessionsDir, { recursive: true });
   } catch {
@@ -57,8 +76,7 @@ async function getSessionsDir(): Promise<string> {
 }
 
 async function getSessionContextsDir(): Promise<string> {
-  const homedir = os.homedir();
-  const contextsDir = path.join(homedir, '.viba', 'session-contexts');
+  const contextsDir = path.join(await getVibaRootDir(), 'session-contexts');
   try {
     await fs.mkdir(contextsDir, { recursive: true });
   } catch {
@@ -73,14 +91,224 @@ async function getSessionContextFilePath(sessionName: string): Promise<string> {
 }
 
 async function getSessionPromptsDir(): Promise<string> {
-  const homedir = os.homedir();
-  const promptsDir = path.join(homedir, '.viba', 'session-prompts');
+  const promptsDir = path.join(await getVibaRootDir(), 'session-prompts');
   try {
     await fs.mkdir(promptsDir, { recursive: true });
   } catch {
     // Ignore if exists
   }
   return promptsDir;
+}
+
+function sanitizeSessionFileStem(value: string): string {
+  const safe = value.trim().replace(/[^a-zA-Z0-9._-]/g, '-');
+  return safe || 'session';
+}
+
+async function getSessionNotificationsDir(): Promise<string> {
+  const notificationsDir = path.join(await getVibaRootDir(), 'session-notifications');
+  try {
+    await fs.mkdir(notificationsDir, { recursive: true });
+  } catch {
+    // Ignore if exists
+  }
+  return notificationsDir;
+}
+
+async function getSessionNotificationFilePath(sessionName: string): Promise<string> {
+  const notificationsDir = await getSessionNotificationsDir();
+  return path.join(notificationsDir, `${sanitizeSessionFileStem(sessionName)}.jsonl`);
+}
+
+type JsonRecord = Record<string, unknown>;
+
+async function upsertJsonMcpServer(
+  filePath: string,
+  serverName: string,
+  serverConfig: JsonRecord,
+): Promise<void> {
+  let root: JsonRecord = {};
+
+  try {
+    const raw = await fs.readFile(filePath, 'utf-8');
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`Invalid JSON object at ${filePath}`);
+    }
+
+    root = parsed as JsonRecord;
+  } catch (e: unknown) {
+    const errorCode =
+      typeof e === 'object' && e !== null && 'code' in e
+        ? (e as { code?: string }).code
+        : undefined;
+    if (errorCode !== 'ENOENT') {
+      throw e;
+    }
+  }
+
+  const existingServersRaw = root.mcpServers;
+  const existingServers =
+    existingServersRaw && typeof existingServersRaw === 'object' && !Array.isArray(existingServersRaw)
+      ? (existingServersRaw as JsonRecord)
+      : {};
+
+  const nextServers: JsonRecord = {
+    ...existingServers,
+    [serverName]: serverConfig,
+  };
+
+  const unchanged =
+    existingServersRaw
+    && typeof existingServersRaw === 'object'
+    && !Array.isArray(existingServersRaw)
+    && JSON.stringify(existingServers) === JSON.stringify(nextServers);
+  if (unchanged) return;
+
+  root.mcpServers = nextServers;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(root, null, 2)}\n`, 'utf-8');
+}
+
+async function ensureAgentNotificationMcpScript(): Promise<string> {
+  const sourcePath = path.join(process.cwd(), 'bin', 'viba-agent-mcp.mjs');
+  const targetDir = path.join(await getVibaRootDir(), 'bin');
+  const targetPath = path.join(targetDir, 'viba-agent-mcp.mjs');
+
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.copyFile(sourcePath, targetPath);
+  try {
+    await fs.chmod(targetPath, 0o755);
+  } catch {
+    // Ignore chmod failures on unsupported filesystems.
+  }
+
+  return targetPath;
+}
+
+export async function ensureAgentNotificationMcpSetup(): Promise<{
+  success: boolean;
+  scriptPath?: string;
+  warnings?: string[];
+  error?: string;
+}> {
+  try {
+    const scriptPath = await ensureAgentNotificationMcpScript();
+    const warnings: string[] = [];
+
+    try {
+      await upsertJsonMcpServer(
+        path.join(os.homedir(), '.gemini', 'settings.json'),
+        AGENT_NOTIFICATION_MCP_SERVER_NAME,
+        {
+          command: 'node',
+          args: [scriptPath],
+          env: {},
+        },
+      );
+    } catch (e: unknown) {
+      warnings.push(`Gemini MCP setup failed: ${getErrorMessage(e)}`);
+    }
+
+    try {
+      await upsertJsonMcpServer(
+        path.join(os.homedir(), '.cursor', 'mcp.json'),
+        AGENT_NOTIFICATION_MCP_SERVER_NAME,
+        {
+          command: 'node',
+          args: [scriptPath],
+        },
+      );
+    } catch (e: unknown) {
+      warnings.push(`Cursor MCP setup failed: ${getErrorMessage(e)}`);
+    }
+
+    return {
+      success: true,
+      scriptPath,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
+  } catch (e: unknown) {
+    console.error('Failed to setup notification MCP server:', e);
+    return {
+      success: false,
+      error: getErrorMessage(e),
+    };
+  }
+}
+
+export async function getSessionAgentNotificationEvents(
+  sessionName: string,
+  afterCursor = 0,
+): Promise<{
+  success: boolean;
+  cursor: number;
+  events: SessionAgentNotificationEvent[];
+  error?: string;
+}> {
+  const safeCursor = Number.isFinite(afterCursor) ? Math.max(0, Math.floor(afterCursor)) : 0;
+
+  try {
+    const filePath = await getSessionNotificationFilePath(sessionName);
+    const content = await fs.readFile(filePath, 'utf-8');
+    const lines = content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const boundedCursor = Math.min(safeCursor, lines.length);
+    const nextEvents: SessionAgentNotificationEvent[] = [];
+
+    for (const line of lines.slice(boundedCursor)) {
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+
+        const event = parsed as Record<string, unknown>;
+        const id = typeof event.id === 'string' ? event.id : '';
+        const type = typeof event.type === 'string' ? event.type : '';
+        const timestamp = typeof event.timestamp === 'string' ? event.timestamp : '';
+
+        if (!id || !type || !timestamp) continue;
+
+        nextEvents.push({
+          id,
+          type,
+          timestamp,
+          message: typeof event.message === 'string' ? event.message : undefined,
+          source: typeof event.source === 'string' ? event.source : undefined,
+        });
+      } catch {
+        // Ignore malformed JSONL records.
+      }
+    }
+
+    return {
+      success: true,
+      cursor: lines.length,
+      events: nextEvents,
+    };
+  } catch (e: unknown) {
+    const errorCode =
+      typeof e === 'object' && e !== null && 'code' in e
+        ? (e as { code?: string }).code
+        : undefined;
+    if (errorCode === 'ENOENT') {
+      return {
+        success: true,
+        cursor: safeCursor,
+        events: [],
+      };
+    }
+
+    console.error('Failed to read session agent notifications:', e);
+    return {
+      success: false,
+      cursor: safeCursor,
+      events: [],
+      error: getErrorMessage(e),
+    };
+  }
 }
 
 export async function saveSessionMetadata(metadata: SessionMetadata): Promise<void> {
@@ -368,6 +596,8 @@ export async function deleteSession(sessionName: string): Promise<{ success: boo
     const promptsDir = await getSessionPromptsDir();
     const promptFilePath = path.join(promptsDir, `${sessionName}.txt`);
     await fs.rm(promptFilePath, { force: true });
+    const notificationsFilePath = await getSessionNotificationFilePath(sessionName);
+    await fs.rm(notificationsFilePath, { force: true });
 
     return { success: true };
   } catch (e: unknown) {
