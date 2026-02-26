@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FolderGit2, GitBranch as GitBranchIcon, Plus, X, ChevronRight, FolderCog, Bot, Cpu, Trash2, Play, KeyRound, Settings, ExternalLink } from 'lucide-react';
+import { FolderGit2, GitBranch as GitBranchIcon, Plus, X, ChevronRight, FolderCog, Bot, Cpu, Trash2, Play, KeyRound, Settings, ExternalLink, CloudDownload } from 'lucide-react';
 import FileBrowser from './FileBrowser';
 import {
   checkIsGitRepo,
@@ -17,7 +17,7 @@ import {
   installAgentCli,
   SupportedAgentCli,
 } from '@/app/actions/git';
-import { resolveRepositoryByName } from '@/app/actions/repository';
+import { cloneRemoteRepository, resolveRepositoryByName } from '@/app/actions/repository';
 import { copySessionAttachments, createSession, deleteSession, getSessionPrefillContext, listSessions, saveSessionLaunchContext, SessionMetadata } from '@/app/actions/session';
 import { getConfig, updateConfig, updateRepoSettings, Config } from '@/app/actions/config';
 import { listCredentials } from '@/app/actions/credentials';
@@ -96,6 +96,12 @@ export default function GitRepoSelector({
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [isSelectingRoot, setIsSelectingRoot] = useState(false);
   const [isRepoSettingsDialogOpen, setIsRepoSettingsDialogOpen] = useState(false);
+  const [isCloneRemoteDialogOpen, setIsCloneRemoteDialogOpen] = useState(false);
+  const [remoteRepoUrl, setRemoteRepoUrl] = useState('');
+  const [cloneCredentialSelection, setCloneCredentialSelection] = useState<RepoCredentialSelection>('auto');
+  const [cloneRemoteError, setCloneRemoteError] = useState<string | null>(null);
+  const [isCloningRemote, setIsCloningRemote] = useState(false);
+  const [isLoadingCloneCredentialOptions, setIsLoadingCloneCredentialOptions] = useState(false);
 
   const [config, setConfig] = useState<Config | null>(null);
 
@@ -209,6 +215,40 @@ export default function GitRepoSelector({
     setRepoSettingsError(null);
     setIsLoadingCredentialOptions(false);
   }, [isSavingRepoSettings]);
+
+  const openCloneRemoteDialog = useCallback(() => {
+    setIsCloneRemoteDialogOpen(true);
+    setRemoteRepoUrl('');
+    setCloneCredentialSelection('auto');
+    setCloneRemoteError(null);
+    setIsLoadingCloneCredentialOptions(true);
+
+    void (async () => {
+      try {
+        const result = await listCredentials();
+        if (!result.success) {
+          setCloneRemoteError(result.error);
+          return;
+        }
+
+        setCredentialOptions(result.credentials);
+      } catch (error) {
+        console.error(error);
+        setCloneRemoteError('Failed to load credentials.');
+      } finally {
+        setIsLoadingCloneCredentialOptions(false);
+      }
+    })();
+  }, []);
+
+  const dismissCloneRemoteDialog = useCallback(() => {
+    if (isCloningRemote) return;
+    setIsCloneRemoteDialogOpen(false);
+    setRemoteRepoUrl('');
+    setCloneCredentialSelection('auto');
+    setCloneRemoteError(null);
+    setIsLoadingCloneCredentialOptions(false);
+  }, [isCloningRemote]);
 
   // Load config and all sessions on mount
   useEffect(() => {
@@ -328,6 +368,48 @@ export default function GitRepoSelector({
       return false;
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCloneRemoteRepo = async () => {
+    if (isCloningRemote) return;
+
+    const trimmedRemoteUrl = remoteRepoUrl.trim();
+    if (!trimmedRemoteUrl) {
+      setCloneRemoteError('Please enter a remote repository URL.');
+      return;
+    }
+
+    setIsCloningRemote(true);
+    setCloneRemoteError(null);
+    setError(null);
+
+    try {
+      const result = await cloneRemoteRepository(
+        trimmedRemoteUrl,
+        cloneCredentialSelection === 'auto' ? null : cloneCredentialSelection,
+      );
+
+      if (!result.success || !result.repoPath) {
+        setCloneRemoteError(result.error || 'Failed to clone repository.');
+        return;
+      }
+
+      const opened = await handleSelectRepo(result.repoPath);
+      if (!opened) {
+        setCloneRemoteError('Repository was cloned, but failed to open it.');
+        return;
+      }
+
+      setIsCloneRemoteDialogOpen(false);
+      setRemoteRepoUrl('');
+      setCloneCredentialSelection('auto');
+      setCloneRemoteError(null);
+    } catch (error) {
+      console.error(error);
+      setCloneRemoteError('Failed to clone repository.');
+    } finally {
+      setIsCloningRemote(false);
     }
   };
 
@@ -1116,6 +1198,13 @@ export default function GitRepoSelector({
     canConfirm: !isSavingRepoSettings,
   });
 
+  useDialogKeyboardShortcuts({
+    enabled: mode === 'home' && isCloneRemoteDialogOpen,
+    onConfirm: handleCloneRemoteRepo,
+    onDismiss: dismissCloneRemoteDialog,
+    canConfirm: !isCloningRemote && remoteRepoUrl.trim().length > 0 && !isLoadingCloneCredentialOptions,
+  });
+
   const handleResumeSession = async (session: SessionMetadata) => {
     if (!selectedRepo) return;
     setLoading(true);
@@ -1196,7 +1285,7 @@ export default function GitRepoSelector({
   return (
     <>
       {mode === 'home' && (
-        <div className="card w-full max-w-2xl bg-base-200 shadow-xl">
+        <div className="card w-full max-w-4xl bg-base-200 shadow-xl">
           <div className="card-body">
             <h2 className="card-title flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -1219,6 +1308,9 @@ export default function GitRepoSelector({
                 >
                   <FolderCog className="w-4 h-4" />
                   {config?.defaultRoot ? "Change Default" : "Set Default Root"}
+                </button>
+                <button className="btn btn-secondary btn-sm gap-2" onClick={openCloneRemoteDialog}>
+                  <CloudDownload className="w-4 h-4" /> Clone Remote Repo
                 </button>
                 <button className="btn btn-primary btn-sm gap-2" onClick={() => setIsBrowsing(true)}>
                   <Plus className="w-4 h-4" /> Open Local Repo
@@ -1366,6 +1458,90 @@ export default function GitRepoSelector({
                 >
                   {isSavingRepoSettings ? <span className="loading loading-spinner loading-xs"></span> : null}
                   Save
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mode === 'home' && isCloneRemoteDialogOpen && (
+        <div className="fixed inset-0 z-[1002] flex items-center justify-center bg-base-content/60 p-4">
+          <div className="w-full max-w-xl rounded-xl border border-base-300 bg-base-100 shadow-2xl">
+            <div className="space-y-4 p-5 md:p-6">
+              <h3 className="text-xl font-semibold">Clone Remote Repository</h3>
+              <p className="text-sm opacity-75">
+                Clone into <span className="font-mono">~/.viba/repos</span> and open it as the selected repository.
+              </p>
+
+              <div className="space-y-2">
+                <label className="text-xs uppercase tracking-wide opacity-70">Remote URL</label>
+                <input
+                  className="input input-bordered w-full font-mono text-sm"
+                  placeholder="https://github.com/org/repo.git"
+                  value={remoteRepoUrl}
+                  onChange={(event) => setRemoteRepoUrl(event.target.value)}
+                  disabled={isCloningRemote}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs uppercase tracking-wide opacity-70">Credential</label>
+                <select
+                  className="select select-bordered w-full"
+                  value={cloneCredentialSelection}
+                  onChange={(event) => setCloneCredentialSelection(event.target.value)}
+                  disabled={isCloningRemote || isLoadingCloneCredentialOptions}
+                >
+                  <option value="auto">Auto (match repository remote)</option>
+                  {credentialOptions.map((credential) => (
+                    <option key={credential.id} value={credential.id}>
+                      {getCredentialOptionLabel(credential)}
+                    </option>
+                  ))}
+                </select>
+                {credentialOptions.length === 0 && !isLoadingCloneCredentialOptions && (
+                  <div className="text-xs opacity-60">
+                    No credentials found. Clone will use anonymous access unless remote auth is otherwise configured.
+                  </div>
+                )}
+              </div>
+
+              {isLoadingCloneCredentialOptions && (
+                <div className="text-sm opacity-70 flex items-center gap-2">
+                  <span className="loading loading-spinner loading-xs"></span>
+                  Loading credentials...
+                </div>
+              )}
+
+              {isCloningRemote && (
+                <div className="alert py-2 text-sm flex items-center gap-2">
+                  <span className="loading loading-spinner loading-xs"></span>
+                  Cloning repository...
+                </div>
+              )}
+
+              {cloneRemoteError && (
+                <div className="alert alert-error text-sm py-2">
+                  {cloneRemoteError}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  className="btn btn-ghost"
+                  onClick={dismissCloneRemoteDialog}
+                  disabled={isCloningRemote}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => void handleCloneRemoteRepo()}
+                  disabled={isCloningRemote || !remoteRepoUrl.trim() || isLoadingCloneCredentialOptions}
+                >
+                  {isCloningRemote ? <span className="loading loading-spinner loading-xs"></span> : null}
+                  Clone
                 </button>
               </div>
             </div>
