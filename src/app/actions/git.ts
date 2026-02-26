@@ -417,9 +417,10 @@ export async function startTtydProcess(): Promise<{ success: boolean; persistenc
       '-p', '7681',
       '-t', 'theme={"background": "white", "foreground": "black", "cursor": "black", "selectionBackground": "rgba(59, 130, 246, 0.4)"}',
       '-t', 'disableResizeOverlay=true',
-      '-t', 'fontSize=12',
-      '-t', 'fontWeight=300',
-      '-t', 'fontWeightBold=500',
+      '-t', 'fontSize=13',
+      '-t', 'lineHeight=1.15',
+      '-t', 'fontWeight=250',
+      '-t', 'fontWeightBold=450',
       '-w', workingDir,
       '-W',
     ];
