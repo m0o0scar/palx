@@ -53,6 +53,8 @@ const TRIDENT_WORKSPACE_URL = 'http://localhost:3100/workspace';
 const TERMINAL_BOOTSTRAP_STORAGE_PREFIX = 'viba:terminal-bootstrap:';
 const TERMINAL_BOOTSTRAP_RUNTIME_KEY = '__vibaTerminalBootstrapRegistry';
 const SHELL_PROMPT_PATTERN = /(?:\$|%|#|>) $/;
+const TERMINAL_OUTPUT_LINE_SCAN_LIMIT = 200;
+const TERMINAL_TITLE_LINE_MAX_LENGTH = 120;
 const PLAN_MODE_STARTUP_INSTRUCTION =
     'Plan mode: inspect the relevant code first, present a concrete implementation plan, and wait for explicit user approval before any file edits or write commands.';
 const AUTO_COMMIT_INSTRUCTION =
@@ -174,6 +176,43 @@ const normalizeComponentLookupName = (value: string): string => {
     return match ? match[0] : '';
 };
 
+const sanitizeTerminalOutputLine = (value: string): string => {
+    if (!value) return '';
+
+    const withoutEscapeCodes = value
+        .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+        .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!withoutEscapeCodes) return '';
+    if (withoutEscapeCodes.length <= TERMINAL_TITLE_LINE_MAX_LENGTH) {
+        return withoutEscapeCodes;
+    }
+
+    return `${withoutEscapeCodes.slice(0, TERMINAL_TITLE_LINE_MAX_LENGTH - 3)}...`;
+};
+
+const readLastTerminalOutputLine = (term: TerminalWindow['term']): string => {
+    const activeBuffer = term?.buffer?.active;
+    if (!activeBuffer || typeof activeBuffer.getLine !== 'function') {
+        return '';
+    }
+
+    const cursorLine = activeBuffer.baseY + activeBuffer.cursorY;
+    for (let offset = 0; offset < TERMINAL_OUTPUT_LINE_SCAN_LIMIT; offset += 1) {
+        const line = activeBuffer.getLine(cursorLine - offset);
+        const rawText = line?.translateToString(true) ?? '';
+        const normalizedLine = sanitizeTerminalOutputLine(rawText);
+        if (!normalizedLine) continue;
+        if (SHELL_PROMPT_PATTERN.test(normalizedLine)) continue;
+        return normalizedLine;
+    }
+
+    return '';
+};
+
 export interface SessionViewProps {
     repo: string;
     worktree: string;
@@ -228,6 +267,7 @@ export function SessionView({
     const agentFrameLinkCleanupRef = useRef<(() => void) | null>(null);
     const terminalFrameLinkCleanupRef = useRef<(() => void) | null>(null);
     const terminalProcessMonitorCleanupRef = useRef<(() => void) | null>(null);
+    const agentOutputMonitorCleanupRef = useRef<(() => void) | null>(null);
     const terminalStartupScriptStateRef = useRef<{ injected: boolean; timer: number | null }>({
         injected: false,
         timer: null,
@@ -376,6 +416,61 @@ export function SessionView({
         }
     }, []);
 
+    const stopAgentOutputMonitor = useCallback(() => {
+        if (agentOutputMonitorCleanupRef.current) {
+            agentOutputMonitorCleanupRef.current();
+            agentOutputMonitorCleanupRef.current = null;
+        }
+    }, []);
+
+    const startAgentOutputMonitor = useCallback((
+        iframe: HTMLIFrameElement,
+        term: NonNullable<TerminalWindow['term']>
+    ) => {
+        stopAgentOutputMonitor();
+
+        let disposed = false;
+        let writeDisposable: TerminalOnWriteParsedDisposable | null = null;
+        let mutationObserver: MutationObserver | null = null;
+        let intervalId: number | null = null;
+
+        const updateLastOutputLine = () => {
+            if (disposed) return;
+            const nextLine = readLastTerminalOutputLine(term);
+            setAgentLastOutputLine((current) => (current === nextLine ? current : nextLine));
+        };
+
+        updateLastOutputLine();
+        intervalId = window.setInterval(updateLastOutputLine, 1000);
+
+        try {
+            const xterm = term as TerminalWithOnWriteParsed;
+            if (typeof xterm.onWriteParsed === 'function') {
+                writeDisposable = xterm.onWriteParsed(updateLastOutputLine) || null;
+            } else {
+                const screen = iframe.contentDocument?.querySelector('.xterm-screen') || iframe.contentDocument?.body;
+                if (screen) {
+                    mutationObserver = new MutationObserver(updateLastOutputLine);
+                    mutationObserver.observe(screen, { childList: true, subtree: true, characterData: true });
+                }
+            }
+        } catch (error) {
+            console.error('Failed to setup agent output monitor:', error);
+        }
+
+        agentOutputMonitorCleanupRef.current = () => {
+            disposed = true;
+            if (intervalId !== null) {
+                window.clearInterval(intervalId);
+                intervalId = null;
+            }
+            if (writeDisposable && typeof writeDisposable.dispose === 'function') {
+                writeDisposable.dispose();
+            }
+            mutationObserver?.disconnect();
+        };
+    }, [stopAgentOutputMonitor]);
+
     const startTerminalProcessMonitor = useCallback((
         iframe: HTMLIFrameElement,
         term: NonNullable<TerminalWindow['term']>
@@ -431,9 +526,20 @@ export function SessionView({
     }, [stopTerminalProcessMonitor]);
 
     useEffect(() => {
+        return () => {
+            stopAgentOutputMonitor();
+        };
+    }, [stopAgentOutputMonitor]);
+
+    useEffect(() => {
         setIsTerminalForegroundProcessRunning(false);
         stopTerminalProcessMonitor();
     }, [sessionName, stopTerminalProcessMonitor]);
+
+    useEffect(() => {
+        setAgentLastOutputLine('');
+        stopAgentOutputMonitor();
+    }, [sessionName, stopAgentOutputMonitor]);
 
     const injectTerminalStartupScript = useCallback((
         iframe: HTMLIFrameElement,
@@ -538,6 +644,7 @@ export function SessionView({
     const [isPreviewVisible, setIsPreviewVisible] = useState(false);
     const [previewInputUrl, setPreviewInputUrl] = useState('');
     const [previewUrl, setPreviewUrl] = useState('');
+    const [agentLastOutputLine, setAgentLastOutputLine] = useState('');
     const [isPreviewPickerActive, setIsPreviewPickerActive] = useState(false);
     const [isResolvingElement, setIsResolvingElement] = useState(false);
     const [agentPaneRatio, setAgentPaneRatio] = useState(DEFAULT_AGENT_PANE_RATIO);
@@ -688,6 +795,14 @@ export function SessionView({
     const [selectedIde, setSelectedIde] = useState<string>('vscode');
 
     useEffect(() => {
+        const trimmedAgentOutputLine = agentLastOutputLine.trim();
+        if (trimmedAgentOutputLine) {
+            document.title = `${trimmedAgentOutputLine} | Viba`;
+            return () => {
+                document.title = 'Viba';
+            };
+        }
+
         const trimmedTitle = title?.trim();
         if (trimmedTitle) {
             document.title = `${trimmedTitle} | Viba`;
@@ -698,7 +813,7 @@ export function SessionView({
 
         document.title = 'Viba';
         return undefined;
-    }, [title]);
+    }, [agentLastOutputLine, title]);
 
     useEffect(() => {
         const loadConfig = async () => {
@@ -1575,6 +1690,7 @@ export function SessionView({
                 if (win && win.term) {
                     ensureTmuxStatusBarHidden('agent');
                     const term = win.term;
+                    startAgentOutputMonitor(iframe, term);
                     attachTerminalLinkHandler(iframe, agentFrameLinkCleanupRef, {
                         directOpenBehavior: 'new_tab',
                         modifierOpenBehavior: 'new_tab',
