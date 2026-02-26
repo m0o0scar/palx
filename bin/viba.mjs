@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../src/lib/cli-args.mjs";
@@ -13,6 +14,10 @@ const __dirname = path.dirname(__filename);
 const APP_ROOT = path.resolve(__dirname, "..");
 const require = createRequire(import.meta.url);
 const DEFAULT_PORT = 3200;
+const AGENT_BROWSER_SKILL_NAME = "agent-browser";
+const AGENT_BROWSER_SKILL_SOURCE_URL = "https://skills.sh/vercel-labs/agent-browser/agent-browser";
+const AGENT_BROWSER_SKILL_REPO_URL = "https://github.com/vercel-labs/agent-browser";
+const AGENT_BROWSER_TARGET_AGENTS = ["codex", "cursor", "gemini-cli"];
 
 function getNextBin() {
   return require.resolve("next/dist/bin/next");
@@ -181,6 +186,52 @@ function ensureCommandInstalled(commandName) {
   throw new Error(`${commandName} is required, but automatic installation failed. Install ${commandName} manually and restart.`);
 }
 
+function getCodexSkillsDirectory() {
+  const codexHome = process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
+  return path.join(codexHome, "skills");
+}
+
+function getGlobalAgentsSkillsDirectory() {
+  return path.join(os.homedir(), ".agents", "skills");
+}
+
+function ensureAgentBrowserSkillInstalled() {
+  const targetSkillManifests = [
+    path.join(getGlobalAgentsSkillsDirectory(), AGENT_BROWSER_SKILL_NAME, "SKILL.md"),
+    path.join(getCodexSkillsDirectory(), AGENT_BROWSER_SKILL_NAME, "SKILL.md"),
+  ];
+
+  if (targetSkillManifests.some((manifestPath) => fs.existsSync(manifestPath))) {
+    return;
+  }
+
+  if (!isCommandAvailable("npx")) {
+    console.warn("Skipping Codex agent-browser skill installation: npx is not available.");
+    return;
+  }
+
+  console.log(`Ensuring Codex skill '${AGENT_BROWSER_SKILL_NAME}' is installed from ${AGENT_BROWSER_SKILL_SOURCE_URL}...`);
+  const addResult = spawnSync(
+    "npx",
+    [
+      "skills",
+      "add",
+      AGENT_BROWSER_SKILL_REPO_URL,
+      "--skill",
+      AGENT_BROWSER_SKILL_NAME,
+      "--agent",
+      ...AGENT_BROWSER_TARGET_AGENTS,
+      "-g",
+      "-y",
+    ],
+    { cwd: APP_ROOT, env: process.env, stdio: "pipe" },
+  );
+  if (addResult.status !== 0) {
+    const detail = addResult.stderr?.toString().trim() || addResult.stdout?.toString().trim() || "unknown error";
+    console.warn(`Failed to install Codex agent-browser skill via npx skills add: ${detail}`);
+  }
+}
+
 function printHelp() {
   console.log(`Usage: viba-cli [options]
 
@@ -255,6 +306,7 @@ async function main() {
     if (process.platform !== "win32") {
       ensureCommandInstalled("tmux");
     }
+    ensureAgentBrowserSkillInstalled();
 
     const envPort = Number.parseInt(process.env.PORT || "", 10);
     const preferredPort =
