@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { FolderGit2, GitBranch as GitBranchIcon, Plus, X, ChevronRight, FolderCog, Bot, Cpu, Trash2, Play, KeyRound, Settings, ExternalLink } from 'lucide-react';
 import FileBrowser from './FileBrowser';
 import {
@@ -1068,6 +1068,7 @@ export default function GitRepoSelector({
 
         // 4. Navigate to session page by path only
         const dest = `/session/${wtResult.sessionName}`;
+        notifySessionsChanged();
         router.push(dest);
         setLoading(false);
 
@@ -1179,6 +1180,14 @@ export default function GitRepoSelector({
     }
   };
 
+  const runningSessionCountByRepo = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const session of allSessions) {
+      counts.set(session.repoPath, (counts.get(session.repoPath) ?? 0) + 1);
+    }
+    return counts;
+  }, [allSessions]);
+
   const recentRepos = config?.recentRepos ?? [];
   const selectableRepos = selectedRepo
     ? (recentRepos.includes(selectedRepo) ? recentRepos : [selectedRepo, ...recentRepos])
@@ -1235,6 +1244,7 @@ export default function GitRepoSelector({
                   <div className="flex flex-col gap-2">
                     {config.recentRepos.map(repo => {
                       const credentialLabel = getRepoCredentialLabel(repo);
+                      const runningSessionCount = runningSessionCountByRepo.get(repo) ?? 0;
 
                       return (
                         <div
@@ -1253,6 +1263,14 @@ export default function GitRepoSelector({
                             </div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
+                            {runningSessionCount > 0 && (
+                              <span
+                                className="badge badge-sm badge-secondary"
+                                title={`${runningSessionCount} running session${runningSessionCount === 1 ? '' : 's'}`}
+                              >
+                                {runningSessionCount}
+                              </span>
+                            )}
                             <button
                               onClick={(e) => {
                                 void handleOpenRepoSettings(e, repo);
