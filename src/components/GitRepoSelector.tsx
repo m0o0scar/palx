@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FolderGit2, Plus, X, ChevronRight, ChevronDown, FolderCog, Bot, Trash2, KeyRound, Settings, ExternalLink, CloudDownload, Search } from 'lucide-react';
+import { FolderGit2, Plus, X, ChevronRight, ChevronDown, FolderCog, Bot, Trash2, KeyRound, Settings, ExternalLink, CloudDownload, Search, Monitor, Sun, Moon } from 'lucide-react';
 import FileBrowser from './FileBrowser';
 import {
   checkIsGitRepo,
@@ -31,8 +31,11 @@ import { useDialogKeyboardShortcuts } from '@/hooks/useDialogKeyboardShortcuts';
 
 type SessionMode = 'fast' | 'plan';
 type RepoCredentialSelection = 'auto' | string;
+type ThemeMode = 'auto' | 'light' | 'dark';
 const DEFAULT_REPO_STARTUP_COMMAND = 'npm install';
 const DEFAULT_REPO_DEV_SERVER_COMMAND = 'npm run dev';
+const THEME_MODE_STORAGE_KEY = 'viba:theme-mode';
+const THEME_MODE_SEQUENCE: ThemeMode[] = ['auto', 'light', 'dark'];
 
 function getCredentialOptionLabel(credential: Credential): string {
   if (credential.type === 'github') {
@@ -96,6 +99,7 @@ export default function GitRepoSelector({
   const [cloneRemoteError, setCloneRemoteError] = useState<string | null>(null);
   const [isCloningRemote, setIsCloningRemote] = useState(false);
   const [isLoadingCloneCredentialOptions, setIsLoadingCloneCredentialOptions] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>('auto');
 
   const [config, setConfig] = useState<Config | null>(null);
 
@@ -261,6 +265,57 @@ export default function GitRepoSelector({
     };
     loadData();
   }, []);
+
+  useEffect(() => {
+    try {
+      const storedMode = window.localStorage.getItem(THEME_MODE_STORAGE_KEY);
+      if (storedMode === 'light' || storedMode === 'dark' || storedMode === 'auto') {
+        setThemeMode(storedMode);
+        return;
+      }
+    } catch {
+      // Ignore localStorage errors and keep default theme mode.
+    }
+    setThemeMode('auto');
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const resolveDarkMode = () => themeMode === 'dark' || (themeMode === 'auto' && mediaQuery.matches);
+    const applyThemeMode = () => {
+      const shouldUseDark = resolveDarkMode();
+      document.documentElement.classList.toggle('dark', shouldUseDark);
+      document.documentElement.dataset.themeMode = themeMode;
+    };
+
+    applyThemeMode();
+
+    try {
+      window.localStorage.setItem(THEME_MODE_STORAGE_KEY, themeMode);
+    } catch {
+      // Ignore localStorage errors.
+    }
+
+    if (themeMode !== 'auto') {
+      return;
+    }
+
+    const handleThemeChange = () => {
+      applyThemeMode();
+    };
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleThemeChange);
+      return () => {
+        mediaQuery.removeEventListener('change', handleThemeChange);
+      };
+    }
+
+    mediaQuery.addListener(handleThemeChange);
+    return () => {
+      mediaQuery.removeListener(handleThemeChange);
+    };
+  }, [themeMode]);
 
   useEffect(() => {
     if (mode !== 'new') return;
@@ -1242,6 +1297,14 @@ export default function GitRepoSelector({
   const selectableRepos = selectedRepo
     ? (recentRepos.includes(selectedRepo) ? recentRepos : [selectedRepo, ...recentRepos])
     : recentRepos;
+  const currentThemeModeIndex = THEME_MODE_SEQUENCE.indexOf(themeMode);
+  const nextThemeMode = THEME_MODE_SEQUENCE[(currentThemeModeIndex + 1) % THEME_MODE_SEQUENCE.length];
+  const themeModeLabel = themeMode === 'auto' ? 'Auto' : (themeMode === 'light' ? 'Bright' : 'Dark');
+  const nextThemeModeLabel = nextThemeMode === 'auto' ? 'Auto' : (nextThemeMode === 'light' ? 'Bright' : 'Dark');
+  const ThemeModeIcon = themeMode === 'auto' ? Monitor : (themeMode === 'light' ? Sun : Moon);
+  const handleCycleThemeMode = () => {
+    setThemeMode(nextThemeMode);
+  };
 
   return (
     <>
@@ -1281,6 +1344,14 @@ export default function GitRepoSelector({
                 <button className="btn btn-primary btn-sm gap-2" onClick={openCloneRemoteDialog}>
                   <CloudDownload className="h-4 w-4" />
                   New Repository
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm btn-square text-slate-700 dark:bg-[#1e2532] dark:text-slate-300 dark:hover:bg-[#252d3d] dark:hover:text-white"
+                  onClick={handleCycleThemeMode}
+                  title={`Theme mode: ${themeModeLabel}. Click to switch to ${nextThemeModeLabel}.`}
+                  aria-label={`Theme mode: ${themeModeLabel}. Click to switch to ${nextThemeModeLabel}.`}
+                >
+                  <ThemeModeIcon className="h-4 w-4" />
                 </button>
               </div>
             </header>
