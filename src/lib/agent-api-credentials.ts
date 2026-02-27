@@ -4,7 +4,7 @@ import path from 'path';
 
 const SERVICE_NAME = 'viba-agent-api-credentials';
 const CONFIGS_FILE_NAME = 'agent-api-configs.json';
-const SUPPORTED_AGENT_APIS = ['codex', 'gemini', 'agent'] as const;
+const SUPPORTED_AGENT_APIS = ['codex'] as const;
 
 export type AgentApiCredentialAgent = typeof SUPPORTED_AGENT_APIS[number];
 
@@ -145,7 +145,7 @@ async function readAgentApiCredentialMetadata(): Promise<AgentApiCredentialMetad
       return [];
     }
 
-    // Legacy map shape: { codex: { ... }, gemini: { ... } }
+    // Legacy map shape: { codex: { ... }, ... }
     const entries = Object.entries(parsed as Record<string, unknown>);
     const migrated = entries
       .filter(([agent]) => isSupportedAgentApi(agent))

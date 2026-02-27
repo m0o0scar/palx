@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FolderGit2, GitBranch as GitBranchIcon, Plus, X, ChevronRight, FolderCog, Bot, Cpu, Trash2, Play, KeyRound, Settings, ExternalLink, CloudDownload } from 'lucide-react';
+import { FolderGit2, GitBranch as GitBranchIcon, Plus, X, ChevronRight, FolderCog, Bot, Trash2, Play, KeyRound, Settings, ExternalLink, CloudDownload } from 'lucide-react';
 import FileBrowser from './FileBrowser';
 import {
   checkIsGitRepo,
@@ -28,21 +28,6 @@ import { notifySessionsUpdated, SESSIONS_UPDATED_EVENT, SESSIONS_UPDATED_STORAGE
 import Image from 'next/image';
 import { useDialogKeyboardShortcuts } from '@/hooks/useDialogKeyboardShortcuts';
 
-import agentProvidersDataRaw from '@/data/agent-providers.json';
-
-type Model = {
-  id: string;
-  label: string;
-  description?: string;
-};
-
-type AgentProvider = {
-  name: string;
-  cli: string;
-  description?: string;
-  models: Model[];
-};
-
 type SessionMode = 'fast' | 'plan';
 type RepoCredentialSelection = 'auto' | string;
 
@@ -61,17 +46,12 @@ function getCredentialOptionLabel(credential: Credential): string {
   return `GitLab - ${credential.username} @ ${host}`;
 }
 
-const agentProvidersData = agentProvidersDataRaw as unknown as AgentProvider[];
 const SESSION_MODE_STORAGE_KEY = 'viba:new-session-mode';
 const AGENT_LOGIN_COMMANDS: Record<SupportedAgentCli, string> = {
-  gemini: 'gemini',
   codex: 'codex',
-  agent: 'agent',
 };
 const AGENT_CLI_LABELS: Record<SupportedAgentCli, string> = {
-  gemini: 'Gemini CLI',
   codex: 'Codex CLI',
-  agent: 'Cursor Agent CLI',
 };
 
 type TerminalWindow = Window & {
@@ -117,8 +97,6 @@ export default function GitRepoSelector({
   const [existingSessions, setExistingSessions] = useState<SessionMetadata[]>([]);
   const [allSessions, setAllSessions] = useState<SessionMetadata[]>([]);
 
-  const [selectedProvider, setSelectedProvider] = useState<AgentProvider | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string>('');
   const [startupScript, setStartupScript] = useState<string>('');
   const [devServerScript, setDevServerScript] = useState<string>('');
   const [showSessionAdvanced, setShowSessionAdvanced] = useState(false);
@@ -147,9 +125,7 @@ export default function GitRepoSelector({
   const [isSavingRepoSettings, setIsSavingRepoSettings] = useState(false);
   const loginTerminalRef = useRef<HTMLIFrameElement>(null);
 
-  const collapsedSessionSetupLabel = selectedProvider && selectedModel
-    ? `Show Session Setup (${selectedProvider.name} / ${selectedModel})`
-    : 'Show Session Setup';
+  const collapsedSessionSetupLabel = 'Show Session Setup';
 
   const notifySessionsChanged = useCallback(() => {
     notifySessionsUpdated();
@@ -169,11 +145,6 @@ export default function GitRepoSelector({
       console.error('Failed to refresh sessions', e);
     }
   }, [selectedRepo]);
-
-  const toSupportedAgentCli = useCallback((value: string | null | undefined): SupportedAgentCli | null => {
-    if (value === 'gemini' || value === 'codex' || value === 'agent') return value;
-    return null;
-  }, []);
 
   const resolveRepoCredentialSelection = useCallback((repo: string, credentials: Credential[] = credentialOptions): RepoCredentialSelection => {
     const repoSettings = config?.repoSettings?.[repo];
@@ -321,7 +292,7 @@ export default function GitRepoSelector({
     setSelectedRepo(path);
     setRepoFilesCache([]);
 
-    // Load saved provider/model
+    // Load saved session scripts
     await loadSavedAgentSettings(path);
 
     // Load branches
@@ -528,16 +499,6 @@ export default function GitRepoSelector({
         return;
       }
 
-      const provider = agentProvidersData.find(p => p.cli === context.agentProvider);
-      if (provider) {
-        setSelectedProvider(provider);
-        if (context.model && (context.model === 'auto' || provider.models.some(m => m.id === context.model))) {
-          setSelectedModel(context.model);
-        } else {
-          setSelectedModel('auto');
-        }
-      }
-
       setTitle(context.title || '');
       setInitialMessage(context.initialMessage || '');
       setPrefilledAttachmentNames(context.attachmentNames || []);
@@ -562,30 +523,8 @@ export default function GitRepoSelector({
 
     const settings = currentConfig.repoSettings[repoPath] || {};
 
-    const savedProviderCli = settings.agentProvider;
-    const savedModel = settings.agentModel;
     const savedStartupScript = settings.startupScript;
     const savedDevServerScript = settings.devServerScript;
-
-    if (savedProviderCli) {
-      const provider = agentProvidersData.find(p => p.cli === savedProviderCli);
-      if (provider) {
-        setSelectedProvider(provider);
-        if (savedModel && (savedModel === 'auto' || provider.models.some(m => m.id === savedModel))) {
-          setSelectedModel(savedModel);
-        } else {
-          setSelectedModel('auto');
-        }
-      } else {
-        // Default if saved one is invalid
-        setSelectedProvider(agentProvidersData[0]);
-        setSelectedModel('auto');
-      }
-    } else {
-      // Default
-      setSelectedProvider(agentProvidersData[0]);
-      setSelectedModel('auto');
-    }
 
     if (savedStartupScript !== undefined && savedStartupScript !== null) {
       setStartupScript(savedStartupScript);
@@ -660,32 +599,6 @@ export default function GitRepoSelector({
       setError(`Failed to checkout branch ${newBranch}`);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleProviderChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const cli = e.target.value;
-    const provider = agentProvidersData.find(p => p.cli === cli);
-    if (provider && selectedRepo) {
-      setSelectedProvider(provider);
-      // Default to auto
-      const defaultModel = 'auto';
-      setSelectedModel(defaultModel);
-
-      const newConfig = await updateRepoSettings(selectedRepo, {
-        agentProvider: provider.cli,
-        agentModel: defaultModel
-      });
-      setConfig(newConfig);
-    }
-  };
-
-  const handleModelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const model = e.target.value;
-    setSelectedModel(model);
-    if (selectedRepo) {
-      const newConfig = await updateRepoSettings(selectedRepo, { agentModel: model });
-      setConfig(newConfig);
     }
   };
 
@@ -1006,8 +919,7 @@ export default function GitRepoSelector({
   }, []);
 
   const ensureAgentCliReady = useCallback(async (): Promise<boolean> => {
-    const agentCli = toSupportedAgentCli(selectedProvider?.cli);
-    if (!agentCli) return true;
+    const agentCli: SupportedAgentCli = 'codex';
 
     const checkResult = await checkAgentCliInstalled(agentCli);
     if (!checkResult.success) {
@@ -1049,7 +961,7 @@ export default function GitRepoSelector({
     setLoginModalError(null);
     setIsLoginModalOpen(true);
     return false;
-  }, [hasConfiguredAgentApiCredential, selectedProvider?.cli, toSupportedAgentCli]);
+  }, [hasConfiguredAgentApiCredential]);
 
   const startSession = async (options: { skipAgentSetup?: boolean } = {}) => {
     if (!selectedRepo) return;
@@ -1092,8 +1004,8 @@ export default function GitRepoSelector({
       const baseBranch = currentBranchName || 'main'; // Fallback to main if empty, though shouldn't happen
 
       const wtResult = await createSession(selectedRepo, baseBranch, {
-        agent: selectedProvider?.cli || 'agent',
-        model: selectedModel || '',
+        agent: 'codex',
+        model: '',
         title: title,
         devServerScript: resolvedDevServerScript || undefined
       });
@@ -1152,8 +1064,8 @@ export default function GitRepoSelector({
           rawInitialMessage: trimmedInitialMessage || undefined,
           startupScript: startupScript || undefined,
           attachmentNames: allAttachmentNames,
-          agentProvider: selectedProvider?.cli || 'agent',
-          model: selectedModel || '',
+          agentProvider: 'codex',
+          model: '',
           sessionMode,
         });
 
@@ -1657,7 +1569,7 @@ export default function GitRepoSelector({
                             {session.title && <div className="font-semibold">{session.title}</div>}
                             <div className="text-xs opacity-60 font-mono">{session.sessionName}</div>
                             <div className="text-xs opacity-60 mt-1">
-                              Agent: {session.agent} • Model: {session.model}
+                              Agent: {session.agent}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1714,62 +1626,6 @@ export default function GitRepoSelector({
 
                     {showSessionAdvanced && (
                       <>
-                        {/* Agent Selection */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium opacity-70">Agent Provider</label>
-                            <div className="join w-full">
-                              <div className="join-item bg-base-300 flex items-center px-3 border border-base-content/20 border-r-0">
-                                <Bot className="w-4 h-4" />
-                              </div>
-                              <select
-                                className="select select-bordered join-item w-full focus:outline-none"
-                                value={selectedProvider?.cli || ''}
-                                onChange={handleProviderChange}
-                                disabled={loading}
-                              >
-                                {agentProvidersData.map(provider => (
-                                  <option key={provider.cli} value={provider.cli}>
-                                    {provider.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            {selectedProvider?.description && (
-                              <p className="text-[10px] opacity-60 mt-1 pl-1 italic leading-tight">
-                                {selectedProvider.description}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium opacity-70">Model</label>
-                            <div className="join w-full">
-                              <div className="join-item bg-base-300 flex items-center px-3 border border-base-content/20 border-r-0">
-                                <Cpu className="w-4 h-4" />
-                              </div>
-                              <select
-                                className="select select-bordered join-item w-full focus:outline-none"
-                                value={selectedModel}
-                                onChange={handleModelChange}
-                                disabled={loading || !selectedProvider}
-                              >
-                                <option value="auto">Auto</option>
-                                {selectedProvider?.models.map(model => (
-                                  <option key={model.id} value={model.id}>
-                                    {model.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            {selectedProvider?.models.find(m => m.id === selectedModel)?.description && (
-                              <p className="text-[10px] opacity-60 mt-1 pl-1 italic leading-tight">
-                                {selectedProvider.models.find(m => m.id === selectedModel)?.description}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
                         <div className="space-y-2">
                           <label className="text-sm font-medium opacity-70">Start up script (Optional)</label>
                           <input

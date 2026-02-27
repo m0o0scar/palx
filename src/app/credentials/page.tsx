@@ -26,20 +26,14 @@ const PROVIDER_ICON_URLS = {
 } as const;
 const AGENT_API_LABELS: Record<AgentApiCredentialAgent, string> = {
   codex: 'Codex CLI',
-  gemini: 'Gemini CLI',
-  agent: 'Cursor Agent CLI',
 };
 const AGENT_API_KEY_PLACEHOLDERS: Record<AgentApiCredentialAgent, string> = {
   codex: 'sk-...',
-  gemini: 'AIza...',
-  agent: 'ca_...',
 };
 const AGENT_API_PROXY_PLACEHOLDERS: Record<AgentApiCredentialAgent, string> = {
   codex: 'https://proxy.example.com/v1',
-  gemini: 'https://proxy.example.com',
-  agent: 'https://proxy.example.com',
 };
-const AGENT_API_ORDER: AgentApiCredentialAgent[] = ['codex', 'gemini', 'agent'];
+const AGENT_API_ORDER: AgentApiCredentialAgent[] = ['codex'];
 
 type FlashMessage = {
   tone: 'success' | 'error';
@@ -82,13 +76,9 @@ export default function CredentialsPage() {
   const [gitlabServerUrl, setGitLabServerUrl] = useState(DEFAULT_GITLAB_SERVER_URL);
   const [agentApiKeyInputs, setAgentApiKeyInputs] = useState<Record<AgentApiCredentialAgent, string>>({
     codex: '',
-    gemini: '',
-    agent: '',
   });
   const [agentApiProxyInputs, setAgentApiProxyInputs] = useState<Record<AgentApiCredentialAgent, string>>({
     codex: '',
-    gemini: '',
-    agent: '',
   });
 
   const [savingType, setSavingType] = useState<CredentialType | null>(null);
@@ -453,8 +443,8 @@ export default function CredentialsPage() {
             </section>
 
             <section className="space-y-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide opacity-70">Coding Agent API Credentials</h2>
-              <div className="grid grid-cols-1 gap-5 lg:grid-cols-3 items-start">
+              <h2 className="text-sm font-semibold uppercase tracking-wide opacity-70">Coding Agent API Credential</h2>
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-1 items-start">
                 {AGENT_API_ORDER.map((agent) => {
                   const configuredCredential = agentApiCredentialMap.get(agent);
                   const isSaving = savingAgent === agent;

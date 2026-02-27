@@ -181,7 +181,6 @@ export interface SessionViewProps {
     baseBranch?: string;
     sessionName: string;
     agent?: string;
-    model?: string;
     startupScript?: string;
     devServerScript?: string;
     initialMessage?: string;
@@ -203,7 +202,6 @@ export function SessionView({
     baseBranch,
     sessionName,
     agent,
-    model,
     startupScript,
     devServerScript,
     initialMessage,
@@ -1653,17 +1651,7 @@ export function SessionView({
                             let agentCmd = '';
 
                             if (isResume) {
-                                // Resume logic (keep startup runtime flags but do not override model)
-                                if (agent.toLowerCase().includes('gemini')) {
-                                    agentCmd = `gemini --resume latest --yolo`;
-                                } else if (agent.toLowerCase().includes('codex')) {
-                                    agentCmd = `codex resume --last --sandbox danger-full-access --ask-for-approval on-request --search`;
-                                } else if (agent.toLowerCase() === 'agent' || agent.toLowerCase().includes('cursor')) {
-                                    agentCmd = `agent resume`;
-                                } else {
-                                    // Generic fallback: <agent> resume
-                                    agentCmd = `${quoteShellArg(agent)} resume`;
-                                }
+                                agentCmd = `codex resume --last --sandbox danger-full-access --ask-for-approval on-request --search`;
                             } else {
                                 const safeTitle = title?.trim() || '';
                                 const trimmedInitialMessage = initialMessage?.trim() || '';
@@ -1729,27 +1717,13 @@ export function SessionView({
                                     }
                                 }
 
-                                const modelArg = (model && model.toLowerCase() !== 'auto') ? ` --model ${quoteShellArg(model)}` : '';
-
-                                if (agent.toLowerCase().includes('codex')) {
-                                    // Codex: codex --model gpt-5.3-codex --sandbox danger-full-access --ask-for-approval on-request --search
-                                    agentCmd = `codex${modelArg} --sandbox danger-full-access --ask-for-approval on-request --search${safeMessage}`;
-                                } else if (agent.toLowerCase().includes('gemini')) {
-                                    // Gemini: gemini --model gemini-3-pro-preview --yolo
-                                    agentCmd = `gemini${modelArg} --yolo${safeMessage}`;
-                                } else if (agent.toLowerCase() === 'agent' || agent.toLowerCase().includes('cursor')) {
-                                    // Cursor: agent --model opus-4.6-thinking
-                                    agentCmd = `agent${modelArg}${safeMessage}`;
-                                } else {
-                                    // Generic fallback: <agent> --model <model>
-                                    agentCmd = `${quoteShellArg(agent)}${modelArg}${safeMessage}`;
-                                }
+                                agentCmd = `codex --sandbox danger-full-access --ask-for-approval on-request --search${safeMessage}`;
                             }
 
                             if (agentCmd) {
                                 term.paste(agentCmd);
                                 pressEnter();
-                                setFeedback(isResume ? `Resumed session with ${agent}` : `Session started with ${agent}`);
+                                setFeedback(isResume ? 'Resumed session with codex' : 'Session started with codex');
 
                                 if (!isResume && onSessionStart) {
                                     onSessionStart();

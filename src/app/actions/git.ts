@@ -29,7 +29,7 @@ export type GitBranch = {
   current: boolean;
 };
 
-export type SupportedAgentCli = 'gemini' | 'codex' | 'agent';
+export type SupportedAgentCli = 'codex';
 
 type AgentCliConfig = {
   executable: string;
@@ -37,20 +37,12 @@ type AgentCliConfig = {
 };
 
 const AGENT_CLI_CONFIG: Record<SupportedAgentCli, AgentCliConfig> = {
-  gemini: {
-    executable: 'gemini',
-    installCommand: 'npm install -g google/gemini-cli',
-  },
   codex: {
     executable: 'codex',
     installCommand: 'npm i -g openai/codex',
   },
-  agent: {
-    executable: 'agent',
-    installCommand: 'curl https://cursor.com/install -fsS | bash',
-  },
 };
-const CODEX_SKILL_TARGET_AGENTS = ['codex', 'cursor', 'gemini-cli'] as const;
+const CODEX_SKILL_TARGET_AGENTS = ['codex'] as const;
 const CODEX_SKILL_DEFINITIONS = [
   {
     name: 'agent-browser',
@@ -65,7 +57,7 @@ const CODEX_SKILL_DEFINITIONS = [
 ] as const;
 
 function normalizeAgentCli(agentCli: string): SupportedAgentCli | null {
-  if (agentCli === 'gemini' || agentCli === 'codex' || agentCli === 'agent') {
+  if (agentCli === 'codex') {
     return agentCli;
   }
   return null;
@@ -448,8 +440,6 @@ function resolveAgentCliFromSession(agentCli: string | undefined): SupportedAgen
 
   const lower = agentCli.toLowerCase();
   if (lower.includes('codex')) return 'codex';
-  if (lower.includes('gemini')) return 'gemini';
-  if (lower === 'agent' || lower.includes('cursor')) return 'agent';
 
   return null;
 }
@@ -459,28 +449,10 @@ function toAgentTerminalSessionEnvironments(
   apiKey: string,
   apiProxy: string | undefined,
 ): TerminalSessionEnvironment[] {
-  if (agentCli === 'codex') {
-    return [
-      { name: 'OPENAI_API_KEY', value: apiKey },
-      ...(apiProxy ? [{ name: 'OPENAI_BASE_URL', value: apiProxy }] : []),
-    ];
-  }
-
-  if (agentCli === 'gemini') {
-    return [
-      { name: 'GEMINI_API_KEY', value: apiKey },
-      ...(apiProxy ? [{ name: 'GOOGLE_GEMINI_BASE_URL', value: apiProxy }] : []),
-    ];
-  }
-
+  if (agentCli !== 'codex') return [];
   return [
-    { name: 'CURSOR_API_KEY', value: apiKey },
-    ...(apiProxy
-      ? [
-          { name: 'CURSOR_API_ENDPOINT', value: apiProxy },
-          { name: 'CURSOR_API_BASE_URL', value: apiProxy },
-        ]
-      : []),
+    { name: 'OPENAI_API_KEY', value: apiKey },
+    ...(apiProxy ? [{ name: 'OPENAI_BASE_URL', value: apiProxy }] : []),
   ];
 }
 
