@@ -1224,10 +1224,7 @@ export default function GitRepoSelector({
     <>
       {mode === 'home' && (
         <div className="w-full max-w-7xl">
-          <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/80 shadow-[0_24px_80px_-36px_rgba(15,23,42,0.4)] backdrop-blur-xl">
-            <div className="pointer-events-none absolute inset-x-0 -top-20 h-64 bg-[radial-gradient(circle_at_top_left,_rgba(19,91,236,0.18),_transparent_62%)]" />
-            <div className="pointer-events-none absolute -right-16 top-24 h-52 w-52 rounded-full bg-[radial-gradient(circle,_rgba(99,102,241,0.18),_transparent_68%)]" />
-
+          <div className="overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-[0_24px_80px_-36px_rgba(15,23,42,0.4)]">
             <header className="relative z-10 flex flex-col gap-4 border-b border-slate-200/80 px-4 py-4 md:flex-row md:items-center md:justify-between md:px-7">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100/90 shadow-sm">
@@ -1257,14 +1254,6 @@ export default function GitRepoSelector({
                 >
                   <KeyRound className="h-4 w-4" />
                   Credentials
-                </button>
-                <button
-                  className="btn btn-ghost btn-sm gap-2 text-slate-700"
-                  onClick={() => setIsSelectingRoot(true)}
-                  title={config?.defaultRoot ? `Default: ${config.defaultRoot}` : "Set default browsing folder"}
-                >
-                  <FolderCog className="h-4 w-4" />
-                  {config?.defaultRoot ? "Change Root" : "Set Root"}
                 </button>
                 <button className="btn btn-primary btn-sm gap-2" onClick={openCloneRemoteDialog}>
                   <CloudDownload className="h-4 w-4" />
@@ -1321,18 +1310,20 @@ export default function GitRepoSelector({
                         <div className="absolute inset-0 bg-white/40" />
                         <div className="relative flex h-full flex-col justify-between p-5">
                           <div className="flex items-start justify-between gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 text-slate-700 shadow-sm">
-                              <FolderGit2 className="h-5 w-5" />
-                            </div>
-                            <div className="flex items-center gap-2">
+                            <div className="relative">
+                              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 text-slate-700 shadow-sm">
+                                <FolderGit2 className="h-5 w-5" />
+                              </div>
                               {runningSessionCount > 0 && (
                                 <span
-                                  className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-rose-500 px-2 text-xs font-bold text-white shadow-sm"
+                                  className="absolute -right-2 -top-2 inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[11px] font-bold text-white shadow-sm"
                                   title={`${runningSessionCount} running session${runningSessionCount === 1 ? '' : 's'}`}
                                 >
                                   {runningSessionCount}
                                 </span>
                               )}
+                            </div>
+                            <div className="flex items-center gap-2">
                               <button
                                 onClick={(event) => {
                                   void handleOpenRepoSettings(event, repo);
