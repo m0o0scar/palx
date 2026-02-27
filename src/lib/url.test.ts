@@ -12,6 +12,7 @@ describe('normalizePreviewUrl', () => {
         assert.strictEqual(normalizePreviewUrl('ftp://example.com'), null);
         assert.strictEqual(normalizePreviewUrl('mailto:user@example.com'), null);
         assert.strictEqual(normalizePreviewUrl('javascript:alert(1)'), null);
+        assert.strictEqual(normalizePreviewUrl('custom-scheme:abc'), null);
     });
 
     it('should return the original URL if it starts with http:// or https://', () => {
@@ -20,12 +21,13 @@ describe('normalizePreviewUrl', () => {
         assert.strictEqual(normalizePreviewUrl('  https://example.com  '), 'https://example.com');
     });
 
-    it('should prepend http:// if no protocol is provided', () => {
-        assert.strictEqual(normalizePreviewUrl('example.com'), 'http://example.com');
-        // localhost:3000 is currently detected as a scheme and returns null.
-        // This preserves existing behavior even if it seems counter-intuitive.
-        // assert.strictEqual(normalizePreviewUrl('localhost:3000'), 'http://localhost:3000');
+    it('should prepend https:// for non-local hosts when protocol is missing', () => {
+        assert.strictEqual(normalizePreviewUrl('example.com'), 'https://example.com');
+        assert.strictEqual(normalizePreviewUrl('example.com/docs'), 'https://example.com/docs');
+    });
 
-        assert.strictEqual(normalizePreviewUrl('  127.0.0.1:8080  '), 'http://127.0.0.1:8080');
+    it('should prepend http:// for localhost and loopback hosts when protocol is missing', () => {
+        assert.strictEqual(normalizePreviewUrl('localhost:3000'), 'http://localhost:3000');
+        assert.strictEqual(normalizePreviewUrl('127.0.0.1:8080'), 'http://127.0.0.1:8080');
     });
 });
