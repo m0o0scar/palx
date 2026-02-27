@@ -1649,9 +1649,13 @@ export function SessionView({
                     if (agent) {
                         const startAgentProcess = async () => {
                             let agentCmd = '';
+                            const withCodexApiKeyLogin = (command: string): string => {
+                                return `if [ -n "$OPENAI_API_KEY" ]; then printenv OPENAI_API_KEY | codex login --with-api-key || exit 1; fi; ${command}`;
+                            };
 
                             if (isResume) {
-                                agentCmd = `codex resume --last --sandbox danger-full-access --ask-for-approval on-request --search`;
+                                const resumeCmd = `codex resume --last --sandbox danger-full-access --ask-for-approval on-request --search`;
+                                agentCmd = withCodexApiKeyLogin(resumeCmd);
                             } else {
                                 const safeTitle = title?.trim() || '';
                                 const trimmedInitialMessage = initialMessage?.trim() || '';
@@ -1717,7 +1721,8 @@ export function SessionView({
                                     }
                                 }
 
-                                agentCmd = `codex --sandbox danger-full-access --ask-for-approval on-request --search${safeMessage}`;
+                                const startCmd = `codex --sandbox danger-full-access --ask-for-approval on-request --search${safeMessage}`;
+                                agentCmd = withCodexApiKeyLogin(startCmd);
                             }
 
                             if (agentCmd) {
