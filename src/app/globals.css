@@ -56,6 +56,10 @@ button {
     0 0 14px rgba(255, 255, 255, 0.32);
 }
 
+:root.dark .repo-card-tilt {
+  box-shadow: none;
+}
+
 .repo-card-tilt::before {
   content: "";
   position: absolute;
