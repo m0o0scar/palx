@@ -19,7 +19,7 @@ export default async function NewSessionPage({ searchParams }: NewSessionPagePro
   const repoPath = repoPathFromParam;
 
   return (
-    <main className="flex min-h-screen flex-col items-center bg-base-100 p-4 md:p-8">
+    <main className="flex min-h-screen flex-col items-center bg-[#f6f6f8] p-4 md:p-8">
       <GitRepoSelector
         mode="new"
         repoPath={repoPath ?? null}

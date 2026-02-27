@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FolderGit2, GitBranch as GitBranchIcon, Plus, X, ChevronRight, FolderCog, Bot, Trash2, Play, KeyRound, Settings, ExternalLink, CloudDownload, Search } from 'lucide-react';
+import { FolderGit2, Plus, X, ChevronRight, FolderCog, Bot, Trash2, KeyRound, Settings, ExternalLink, CloudDownload, Search } from 'lucide-react';
 import FileBrowser from './FileBrowser';
 import {
   checkIsGitRepo,
@@ -1634,327 +1634,353 @@ export default function GitRepoSelector({
       )}
 
       {mode === 'new' && selectedRepo && (
-        <div className="w-full max-w-6xl space-y-4">
-          {error && <div className="alert alert-error text-sm py-2 px-3">{error}</div>}
-          <div className="flex flex-col gap-4 w-full">
-            <div className="card w-full bg-base-200 shadow-xl">
-              <div className="card-body">
-                <h2 className="card-title flex justify-between items-center">
-                  <div className="flex items-center gap-2">
-                    <FolderGit2 className="w-6 h-6 text-primary" />
-                    Git Repository Selector
-                  </div>
-                  <button className="btn btn-sm btn-ghost" onClick={() => router.push('/')}>
-                    Change Repo
-                  </button>
-                </h2>
+        <div className="w-full max-w-[1240px]">
+          {error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>}
 
-                <div className="mt-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-base-100 p-4 rounded-lg border border-base-300 space-y-2">
-                      <label className="text-xs opacity-50 uppercase tracking-widest">Current Repository</label>
-                      <div className="join w-full">
-                        <div className="join-item bg-base-300 flex items-center px-3 border border-base-content/20 border-r-0">
-                          <FolderGit2 className="w-4 h-4 text-primary" />
-                        </div>
-                        <select
-                          className="select select-bordered join-item w-full font-mono focus:outline-none"
-                          value={selectedRepo}
-                          onChange={(e) => {
-                            void handleCurrentRepoChange(e);
-                          }}
-                          disabled={loading || selectableRepos.length === 0}
-                        >
-                          {selectableRepos.map(repo => (
-                            <option key={repo} value={repo}>
-                              {getBaseName(repo)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="text-[10px] opacity-50 font-mono truncate px-1" title={selectedRepo}>
-                        {selectedRepo}
-                      </div>
+          <div className="mb-8">
+            <div className="mb-2 flex items-center gap-4">
+              <button
+                type="button"
+                className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white hover:text-slate-900"
+                onClick={() => router.push('/')}
+                aria-label="Back to home"
+              >
+                <ChevronRight className="h-6 w-6 rotate-180" />
+              </button>
+              <h1 className="text-3xl font-black tracking-[-0.02em] text-slate-900 md:text-4xl">Assign New Task</h1>
+            </div>
+            <p className="ml-14 text-sm text-slate-500 md:text-base">
+              Configure the environment and describe the work required for your AI agent.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            <div className="space-y-6 lg:col-span-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="mb-5 flex items-center gap-2 text-lg font-bold text-slate-900">
+                  <FolderGit2 className="h-5 w-5 text-primary" />
+                  Context Setup
+                </h3>
+
+                <div className="space-y-4">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-medium text-slate-700">Select Repository</span>
+                    <select
+                      className="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      value={selectedRepo}
+                      onChange={(event) => {
+                        void handleCurrentRepoChange(event);
+                      }}
+                      disabled={loading || selectableRepos.length === 0}
+                    >
+                      {selectableRepos.map((repo) => (
+                        <option key={repo} value={repo}>
+                          {getBaseName(repo)}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="truncate font-mono text-[11px] text-slate-500" title={selectedRepo}>
+                      {selectedRepo}
+                    </span>
+                  </label>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-medium text-slate-700">Base Branch</span>
+                    <div className="relative">
+                      <select
+                        className="h-12 w-full rounded-lg border border-slate-300 bg-white px-3 pr-10 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                        value={currentBranchName}
+                        onChange={handleBranchChange}
+                        disabled={loading}
+                      >
+                        {branches.map((branch) => (
+                          <option key={branch.name} value={branch.name}>
+                            {branch.name}
+                            {branch.current ? ' (checked out)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {loading && <span className="loading loading-spinner loading-xs absolute right-3 top-1/2 -translate-y-1/2"></span>}
                     </div>
+                  </label>
 
-                    {/* Branch Selection */}
-                    <div className="bg-base-100 p-4 rounded-lg border border-base-300 space-y-2">
-                      <div className="flex justify-between items-center">
-                        <label className="text-sm font-medium opacity-70 uppercase tracking-widest">Current Branch</label>
-                        {loading && <span className="loading loading-spinner loading-xs"></span>}
-                      </div>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
+                    onClick={() => setShowSessionAdvanced((prev) => !prev)}
+                  >
+                    <ChevronRight className={`h-4 w-4 transition-transform ${showSessionAdvanced ? 'rotate-90' : ''}`} />
+                    {showSessionAdvanced ? 'Hide Advanced Setup' : collapsedSessionSetupLabel}
+                  </button>
 
-                      <div className="join w-full">
-                        <div className="join-item bg-base-300 flex items-center px-3 border border-base-content/20 border-r-0">
-                          <GitBranchIcon className="w-4 h-4" />
-                        </div>
+                  {showSessionAdvanced && (
+                    <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <label className="flex flex-col gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Start Up Command</span>
+                        <input
+                          type="text"
+                          className="h-10 rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                          placeholder="npm install"
+                          value={startupScript}
+                          onChange={handleStartupScriptChange}
+                          onBlur={saveStartupScript}
+                          onKeyDown={(event) => {
+                            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                              event.preventDefault();
+                              handleStartSession();
+                            }
+                          }}
+                          disabled={loading}
+                        />
+                      </label>
+
+                      <label className="flex flex-col gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Dev Server Command</span>
+                        <input
+                          type="text"
+                          className="h-10 rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                          placeholder="npm run dev"
+                          value={devServerScript}
+                          onChange={handleDevServerScriptChange}
+                          onBlur={saveDevServerScript}
+                          onKeyDown={(event) => {
+                            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                              event.preventDefault();
+                              handleStartSession();
+                            }
+                          }}
+                          disabled={loading}
+                        />
+                      </label>
+
+                      <label className="flex flex-col gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Session Mode</span>
                         <select
-                          className="select select-bordered join-item w-full font-mono focus:outline-none"
-                          value={currentBranchName}
-                          onChange={handleBranchChange}
+                          className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                          value={sessionMode}
+                          onChange={handleSessionModeChange}
                           disabled={loading}
                         >
-                          {branches.map(branch => (
-                            <option key={branch.name} value={branch.name}>
-                              {branch.name} {branch.current ? '(checked out)' : ''}
-                            </option>
-                          ))}
+                          <option value="fast">Fast Mode (default)</option>
+                          <option value="plan">Plan Mode</option>
                         </select>
+                      </label>
+
+                      <label className="flex flex-col gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Task Title</span>
+                        <input
+                          type="text"
+                          className="h-10 rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                          placeholder="Task Title"
+                          value={title}
+                          onChange={(event) => setTitle(event.target.value)}
+                          onKeyDown={(event) => {
+                            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                              event.preventDefault();
+                              handleStartSession();
+                            }
+                          }}
+                          disabled={loading}
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="mb-4 text-lg font-bold text-slate-900">Ongoing Tasks</h3>
+                <div className="space-y-2">
+                  {existingSessions.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                      No ongoing sessions for this repository.
+                    </div>
+                  )}
+
+                  {existingSessions.map((session) => (
+                    <div
+                      key={session.sessionName}
+                      className="group flex items-center gap-3 rounded-lg border border-transparent px-3 py-3 transition-colors hover:border-slate-100 hover:bg-slate-50"
+                    >
+                      <div
+                        className={`h-2 w-2 flex-shrink-0 rounded-full ${
+                          deletingSessionName === session.sessionName ? 'animate-pulse bg-amber-400' : 'bg-emerald-500'
+                        }`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-900">{session.title || session.sessionName}</p>
+                        <p className="truncate text-xs text-slate-500">
+                          {getBaseName(session.repoPath)} • {session.agent}
+                        </p>
                       </div>
-                      <div className="text-[10px] opacity-50 px-1 italic">
-                        Switching branches updates the working directory.
+                      <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                        <button
+                          type="button"
+                          className="rounded p-1 text-slate-400 transition-colors hover:text-primary"
+                          title="Open"
+                          onClick={() => handleResumeSession(session)}
+                          disabled={loading || deletingSessionName === session.sessionName}
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded p-1 text-slate-400 transition-colors hover:text-amber-500"
+                          title="New Attempt"
+                          onClick={() => handleNewAttemptFromSession(session)}
+                          disabled={loading || deletingSessionName === session.sessionName}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded p-1 text-slate-400 transition-colors hover:text-red-500"
+                          title={deletingSessionName === session.sessionName ? 'Deleting...' : 'Delete'}
+                          onClick={() => handleDeleteSession(session)}
+                          disabled={loading || deletingSessionName === session.sessionName}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       </div>
                     </div>
-                  </div>
+                  ))}
                 </div>
               </div>
             </div>
 
-            {/* Continue Existing Session Card */}
-            {existingSessions.length > 0 && (
-              <div className="card w-full bg-base-200 shadow-xl">
-                <div className="card-body">
-                  <h2 className="card-title flex items-center gap-2">
-                    <Play className="w-6 h-6 text-success" />
-                    Continue Existing Session
-                  </h2>
-                  <div className="flex flex-col gap-2 mt-4 max-h-64 overflow-y-auto">
-                    {existingSessions.map((session) => (
-                      <div key={session.sessionName} className="flex flex-col gap-2 p-3 bg-base-100 rounded-md border border-base-300">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            {session.title && <div className="font-semibold">{session.title}</div>}
-                            <div className="text-xs opacity-60 font-mono">{session.sessionName}</div>
-                            <div className="text-xs opacity-60 mt-1">
-                              Agent: {session.agent}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              className="btn btn-sm btn-success btn-outline gap-2"
-                              onClick={() => handleResumeSession(session)}
-                              disabled={loading || deletingSessionName === session.sessionName}
-                            >
-                              <ExternalLink className="w-3 h-3" /> Open
-                            </button>
-                            <button
-                              className="btn btn-sm btn-secondary btn-outline gap-2"
-                              onClick={() => handleNewAttemptFromSession(session)}
-                              disabled={loading || deletingSessionName === session.sessionName}
-                              title="Start a new attempt prefilled from this session"
-                            >
-                              <Plus className="w-3 h-3" /> New Attempt
-                            </button>
-                            <button
-                              className="btn btn-sm btn-error btn-outline gap-2"
-                              onClick={() => handleDeleteSession(session)}
-                              disabled={loading || deletingSessionName === session.sessionName}
-                            >
-                              <Trash2 className="w-3 h-3" />
-                              {deletingSessionName === session.sessionName ? 'Deleting...' : 'Delete'}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+            <div className="flex flex-col lg:col-span-8">
+              <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <label className="mb-4 flex items-center gap-2 text-lg font-bold text-slate-900" htmlFor="task-description">
+                  <Bot className="h-5 w-5 text-primary" />
+                  Task Description
+                </label>
+
+                <div className="group relative mb-4 flex h-[360px] flex-grow flex-col md:h-[420px]">
+                  <textarea
+                    id="task-description"
+                    className="h-full w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-5 font-mono text-sm leading-relaxed text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30"
+                    placeholder={`Describe the task for the AI agent...\nExample:\n1. Create a new component for the user profile card.\n2. Ensure it fetches data from the /api/user endpoint.\n3. Add error handling for failed requests.\n\nTip: Type @ to mention files.`}
+                    value={initialMessage}
+                    onChange={handleMessageChange}
+                    onKeyDown={handleKeyDown}
+                    onClick={(event) => {
+                      setCursorPosition(event.currentTarget.selectionStart);
+                      setShowSuggestions(false);
+                    }}
+                    onKeyUp={(event) => setCursorPosition(event.currentTarget.selectionStart)}
+                    disabled={loading}
+                  />
+
+                  {showSuggestions && suggestionList.length > 0 && (
+                    <div className="absolute left-3 right-3 top-[calc(100%-8rem)] z-50 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                      {suggestionList.map((suggestion, idx) => (
+                        <button
+                          key={suggestion}
+                          className={`w-full truncate border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 ${
+                            idx === selectedIndex ? 'bg-primary text-white' : 'text-slate-700 hover:bg-slate-50'
+                          }`}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            handleSelectSuggestion(suggestion);
+                          }}
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
 
-            {/* Start New Session Card */}
-            <div className="card w-full bg-base-200 shadow-xl">
-              <div className="card-body">
-                <h2 className="card-title flex items-center gap-2">
-                  <Bot className="w-6 h-6 text-secondary" />
-                  Start New Session
-                </h2>
-
-                <div className="mt-4 space-y-6">
-                  <div className="space-y-3">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm px-2 h-auto min-h-0 normal-case justify-start gap-2"
-                      onClick={() => setShowSessionAdvanced(prev => !prev)}
+                <div className="border-t border-slate-100 pt-4">
+                  <div className="mb-3 flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
+                    <h4 className="text-sm font-semibold text-slate-700">Attachments</h4>
+                    <label
+                      htmlFor="new-session-attachments-input"
+                      className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-primary transition-colors hover:text-blue-700"
                     >
-                      <ChevronRight className={`w-4 h-4 transition-transform ${showSessionAdvanced ? 'rotate-90' : ''}`} />
-                      {showSessionAdvanced ? 'Hide Session Setup' : collapsedSessionSetupLabel}
-                    </button>
-
-                    {showSessionAdvanced && (
-                      <>
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium opacity-70">Start up script (Optional)</label>
-                          <input
-                            type="text"
-                            className="input input-bordered w-full font-mono text-sm"
-                            placeholder="npm i"
-                            value={startupScript}
-                            onChange={handleStartupScriptChange}
-                            onBlur={saveStartupScript}
-                            onKeyDown={(e) => {
-                              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                                e.preventDefault();
-                                handleStartSession();
-                              }
-                            }}
-                            disabled={loading}
-                          />
-                          <div className="text-xs opacity-50 px-1">
-                            Script to run in the terminal agent iframe upon startup.
-                          </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium opacity-70">Dev server script (Optional)</label>
-                          <input
-                            type="text"
-                            className="input input-bordered w-full font-mono text-sm"
-                            placeholder="npm run dev"
-                            value={devServerScript}
-                            onChange={handleDevServerScriptChange}
-                            onBlur={saveDevServerScript}
-                            onKeyDown={(e) => {
-                              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                                e.preventDefault();
-                                handleStartSession();
-                              }
-                            }}
-                            disabled={loading}
-                          />
-                          <div className="text-xs opacity-50 px-1">
-                            Script for the Session View Start Dev Server button in the right terminal.
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="divider"></div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium opacity-70">Session Mode</label>
-                    <select
-                      className="select select-bordered w-full focus:outline-none"
-                      value={sessionMode}
-                      onChange={handleSessionModeChange}
-                      disabled={loading}
-                    >
-                      <option value="fast">Fast Mode (default)</option>
-                      <option value="plan">Plan Mode</option>
-                    </select>
-                    <div className="text-xs opacity-50 px-1">
-                      {sessionMode === 'plan'
-                        ? 'Plan mode asks the agent to study the repo, propose a plan, and wait for your approval before implementation.'
-                        : 'Fast mode starts the agent with current behavior.'}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium opacity-70">Title (Optional)</label>
+                      <CloudDownload className="h-4 w-4" />
+                      Select Attachments
+                    </label>
                     <input
-                      type="text"
-                      className="input input-bordered w-full font-mono text-sm"
-                      placeholder="Task Title"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      onKeyDown={(e) => {
-                        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                          e.preventDefault();
-                          handleStartSession();
-                        }
-                      }}
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium opacity-70">Initial Message (Optional)</label>
-                    <div className="relative">
-                      <textarea
-                        className="textarea textarea-bordered w-full h-64 font-mono text-sm leading-tight resize-none"
-                        placeholder="Describe what you want the agent to do... Type @ to mention files."
-                        value={initialMessage}
-                        onChange={handleMessageChange}
-                        onKeyDown={handleKeyDown}
-                        onClick={(e) => {
-                          setCursorPosition(e.currentTarget.selectionStart);
-                          setShowSuggestions(false); // Hide on click? Or re-val?
-                        }}
-                        onKeyUp={(e) => setCursorPosition(e.currentTarget.selectionStart)}
-                        disabled={loading}
-                      ></textarea>
-                      {showSuggestions && suggestionList.length > 0 && (
-                        <div className="absolute left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto bg-base-100 border border-base-300 rounded-md shadow-lg">
-                          {suggestionList.map((s, idx) => (
-                            <button
-                              key={s}
-                              className={`w-full text-left px-3 py-2 text-xs border-b border-base-200 last:border-0 truncate ${idx === selectedIndex ? 'bg-primary text-primary-content' : 'hover:bg-primary/10'
-                                }`}
-                              onMouseDown={(e) => {
-                                e.preventDefault(); // Prevent blur
-                                handleSelectSuggestion(s);
-                              }}
-                            >
-                              {s}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium opacity-70">Attachments (Optional)</label>
-                    <input
+                      id="new-session-attachments-input"
                       type="file"
                       multiple
-                      className="file-input file-input-bordered w-full"
+                      className="hidden"
                       onChange={handleFileSelect}
                       disabled={loading}
                     />
-                    <div className="text-xs opacity-50 px-1">
-                      Paste files from clipboard with Cmd/Ctrl+V anywhere on this page.
-                    </div>
-                    {attachments.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {attachments.map((file, idx) => (
-                          <span key={`upload-${idx}`} className="badge badge-neutral gap-2 p-3">
-                            {file.name}
-                            <button onClick={() => removeAttachment(idx)} className="btn btn-ghost btn-xs btn-circle text-error">
-                              <X className="w-3 h-3" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {prefilledAttachmentNames.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {prefilledAttachmentNames.map((name, idx) => (
-                          <span key={`prefill-${name}-${idx}`} className="badge badge-secondary gap-2 p-3">
-                            {name}
-                            <button
-                              onClick={() => removePrefilledAttachment(idx)}
-                              className="btn btn-ghost btn-xs btn-circle text-error"
-                              title="Remove carried attachment"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
                   </div>
 
-                  <div className="card-actions justify-end mt-4">
-                    <button
-                      className="btn btn-primary btn-wide shadow-lg"
-                      onClick={handleStartSession}
-                      disabled={loading}
-                    >
-                      {loading ? <span className="loading loading-spinner"></span> : "Start Session"}
-                    </button>
+                  <div className="min-h-[88px] rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/70 p-3">
+                    <div className="flex flex-wrap gap-3">
+                      {attachments.map((file, idx) => (
+                        <div key={`upload-${idx}`} className="group relative w-20">
+                          <div className="relative flex h-20 w-20 items-center justify-center rounded-lg border border-slate-200 bg-white">
+                            <span className="px-2 text-center text-[11px] font-medium text-slate-700">{file.name.split('.').pop()?.toUpperCase() || 'FILE'}</span>
+                            <button
+                              type="button"
+                              className="absolute right-1 top-1 rounded-full bg-slate-100 p-0.5 text-slate-500 opacity-0 transition hover:text-red-500 group-hover:opacity-100"
+                              onClick={() => removeAttachment(idx)}
+                              title="Remove attachment"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <span className="mt-1 block truncate text-center text-[10px] text-slate-600">{file.name}</span>
+                        </div>
+                      ))}
+
+                      {prefilledAttachmentNames.map((name, idx) => (
+                        <div key={`prefill-${name}-${idx}`} className="group relative w-20">
+                          <div className="relative flex h-20 w-20 items-center justify-center rounded-lg border border-slate-200 bg-white">
+                            <span className="px-2 text-center text-[11px] font-medium text-slate-700">
+                              {name.split('.').pop()?.toUpperCase() || 'FILE'}
+                            </span>
+                            <button
+                              type="button"
+                              className="absolute right-1 top-1 rounded-full bg-slate-100 p-0.5 text-slate-500 opacity-0 transition hover:text-red-500 group-hover:opacity-100"
+                              onClick={() => removePrefilledAttachment(idx)}
+                              title="Remove carried attachment"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <span className="mt-1 block truncate text-center text-[10px] text-slate-600">{name}</span>
+                        </div>
+                      ))}
+
+                      <label
+                        htmlFor="new-session-attachments-input"
+                        className="flex h-20 w-20 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 text-slate-400 transition hover:border-primary hover:bg-primary/5 hover:text-primary"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span className="text-[9px] font-semibold uppercase">Add File</span>
+                      </label>
+                    </div>
                   </div>
+
+                  <div className="mt-2 text-xs text-slate-500">Paste files from clipboard with Cmd/Ctrl+V anywhere on this page.</div>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-3 border-t border-slate-100 pt-5">
+                  <span className="mr-auto hidden text-xs text-slate-400 sm:block">
+                    Press <kbd className="rounded border border-slate-200 bg-slate-100 px-2 py-1 font-sans text-[11px]">Ctrl + Enter</kbd> to submit
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-lg px-5 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
+                    disabled={loading}
+                  >
+                    Save Draft
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-white shadow-md shadow-primary/20 transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-70"
+                    onClick={handleStartSession}
+                    disabled={loading}
+                  >
+                    {loading ? <span className="loading loading-spinner loading-xs"></span> : 'Create New Task'}
+                  </button>
                 </div>
               </div>
             </div>

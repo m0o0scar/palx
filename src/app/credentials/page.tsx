@@ -14,7 +14,7 @@ import type {
   AgentApiCredentialAgent,
 } from '@/lib/agent-api-credentials';
 import type { Credential, CredentialType, GitLabCredential } from '@/lib/credentials';
-import { ArrowLeft, KeyRound, Trash2 } from 'lucide-react';
+import { ChevronRight, KeyRound, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
@@ -277,19 +277,19 @@ export default function CredentialsPage() {
   return (
     <main className="min-h-screen bg-[#f6f6f8] px-4 py-8 md:px-8 md:py-12">
       <div className="mx-auto w-full max-w-4xl space-y-8">
-        <div className="flex items-center gap-2">
-          <button
-            className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-primary"
-            onClick={() => router.push('/')}
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Home
-          </button>
-        </div>
-
-        <div className="space-y-2">
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900">Credential Management</h1>
-          <p className="text-sm text-slate-500">
+        <div className="mb-8">
+          <div className="mb-2 flex items-center gap-4">
+            <button
+              type="button"
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white hover:text-slate-900"
+              onClick={() => router.push('/')}
+              aria-label="Back to home"
+            >
+              <ChevronRight className="h-6 w-6 rotate-180" />
+            </button>
+            <h1 className="text-3xl font-black tracking-[-0.02em] text-slate-900 md:text-4xl">Credential Management</h1>
+          </div>
+          <p className="ml-14 text-sm text-slate-500 md:text-base">
             Manage your API keys and access tokens for third-party services safely.
           </p>
         </div>
