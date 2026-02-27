@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Assign Task to Agent</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#2f81f7", 
+                        "background-dark": "#0D1117",
+                        "card-dark": "#161B22",
+                        "border-dark": "#30363d",
+                        "input-bg": "#0D1117",
+                    },
+                    fontFamily: {
+                        "display": ["Space Grotesk", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
+<style>:root {
+        color-scheme: dark;
+    }
+    body {
+        background-color: #0D1117;
+        color: #e6edf3;
+    }
+    .dark-card {
+        background-color: #161B22;
+        border-color: #30363d;
+    }
+    .dark-input {
+        background-color: #0D1117;
+        border-color: #30363d;
+        color: #e6edf3;
+    }
+    .dark-input:focus {
+        border-color: #2f81f7;
+        ring-color: rgba(47, 129, 247, 0.4);
+    }
+</style>
+</head>
+<body class="bg-background-dark font-display text-slate-100 min-h-screen flex flex-col antialiased">
+<main class="flex-grow w-full max-w-[1440px] mx-auto p-6 md:p-10">
+<div class="mb-8">
+<div class="flex items-center gap-4 mb-2">
+<button class="p-2 -ml-2 text-slate-400 hover:text-white rounded-lg transition-colors">
+<span class="material-symbols-outlined text-3xl">arrow_back</span>
+</button>
+<h1 class="text-white text-3xl md:text-4xl font-black leading-tight tracking-[-0.033em]">Assign New Task</h1>
+</div>
+<p class="text-slate-400 text-base font-normal ml-12">Configure the environment and describe the work required for your AI agent.</p>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+<div class="lg:col-span-4 space-y-8">
+<div class="dark-card rounded-xl p-6 shadow-sm border">
+<h3 class="text-white text-lg font-bold mb-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">folder_open</span>
+                        Context Setup
+                    </h3>
+<div class="space-y-5">
+<label class="flex flex-col gap-2">
+<span class="text-slate-300 text-sm font-medium">Select Repository</span>
+<div class="relative">
+<select class="w-full appearance-none rounded-lg border border-dark dark-input px-4 py-3 pr-10 focus:border-primary focus:ring-1 focus:ring-primary/20 outline-none transition-all">
+<option value="frontend-core">frontend-core</option>
+<option value="backend-api">backend-api</option>
+<option value="data-pipeline">data-pipeline</option>
+</select>
+<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+<span class="material-symbols-outlined">expand_more</span>
+</div>
+</div>
+</label>
+<label class="flex flex-col gap-2">
+<span class="text-slate-300 text-sm font-medium">Base Branch</span>
+<div class="relative">
+<select class="w-full appearance-none rounded-lg border border-dark dark-input px-4 py-3 pr-10 focus:border-primary focus:ring-1 focus:ring-primary/20 outline-none transition-all">
+<option selected="" value="dev">development</option>
+<option value="main">main</option>
+<option value="feature/auth-v2">feature/auth-v2</option>
+</select>
+<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+<span class="material-symbols-outlined">expand_more</span>
+</div>
+</div>
+</label>
+</div>
+</div>
+<div class="dark-card rounded-xl p-6 shadow-sm border">
+<div class="flex items-center justify-between mb-4">
+<h3 class="text-white text-lg font-bold">Ongoing Tasks</h3>
+</div>
+<div class="space-y-3">
+<div class="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-800/50 transition-colors border border-transparent hover:border-slate-800 cursor-pointer group">
+<div class="size-2 rounded-full bg-amber-400 flex-shrink-0 animate-pulse"></div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-medium text-white truncate">Refactor Auth Middleware</p>
+<p class="text-xs text-slate-500 truncate">backend-api • #342</p>
+</div>
+<div class="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+<button class="p-1 text-slate-400 hover:text-primary rounded" title="Open">
+<span class="material-symbols-outlined text-[18px]">open_in_new</span>
+</button>
+<button class="p-1 text-slate-400 hover:text-amber-500 rounded" title="Retry">
+<span class="material-symbols-outlined text-[18px]">replay</span>
+</button>
+<button class="p-1 text-slate-400 hover:text-red-500 rounded" title="Delete">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</div>
+</div>
+<div class="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-800/50 transition-colors border border-transparent hover:border-slate-800 cursor-pointer group">
+<div class="size-2 rounded-full bg-blue-500 flex-shrink-0"></div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-medium text-white truncate">Update Tailwind Config</p>
+<p class="text-xs text-slate-500 truncate">frontend-core • #341</p>
+</div>
+<div class="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+<button class="p-1 text-slate-400 hover:text-primary rounded" title="Open">
+<span class="material-symbols-outlined text-[18px]">open_in_new</span>
+</button>
+<button class="p-1 text-slate-400 hover:text-amber-500 rounded" title="Retry">
+<span class="material-symbols-outlined text-[18px]">replay</span>
+</button>
+<button class="p-1 text-slate-400 hover:text-red-500 rounded" title="Delete">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</div>
+</div>
+<div class="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-800/50 transition-colors border border-transparent hover:border-slate-800 cursor-pointer group">
+<div class="size-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-medium text-white truncate">Fix Login Race Condition</p>
+<p class="text-xs text-slate-500 truncate">frontend-core • #339</p>
+</div>
+<div class="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+<button class="p-1 text-slate-400 hover:text-primary rounded" title="Open">
+<span class="material-symbols-outlined text-[18px]">open_in_new</span>
+</button>
+<button class="p-1 text-slate-400 hover:text-amber-500 rounded" title="Retry">
+<span class="material-symbols-outlined text-[18px]">replay</span>
+</button>
+<button class="p-1 text-slate-400 hover:text-red-500 rounded" title="Delete">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="lg:col-span-8 flex flex-col h-full">
+<div class="dark-card rounded-xl p-6 shadow-sm border flex flex-col h-full">
+<div class="flex items-center justify-between mb-4">
+<label class="text-white text-lg font-bold flex items-center gap-2" for="task-description">
+<span class="material-symbols-outlined text-primary">edit_note</span>
+                            Task Description
+                        </label>
+</div>
+<div class="flex-grow flex flex-col relative mb-4 group h-[400px]">
+<textarea class="w-full h-full p-6 rounded-xl border border-dark dark-input resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all placeholder:text-slate-600 text-base leading-relaxed" id="task-description" placeholder="Describe the task for the AI agent... 
+Example: 
+1. Create a new component for the user profile card.
+2. Ensure it fetches data from the /api/user endpoint.
+3. Add error handling for failed requests."></textarea>
+<div class="absolute bottom-4 right-4 flex gap-2">
+<button class="flex items-center gap-2 px-3 py-1.5 bg-slate-800 text-slate-300 text-xs font-medium rounded-lg shadow-sm border border-slate-700 hover:text-primary hover:border-primary transition-colors">
+<span class="material-symbols-outlined text-sm">auto_awesome</span>
+                                Improve with AI
+                             </button>
+</div>
+</div>
+<div class="border-t border-slate-800 pt-4">
+<div class="flex flex-col sm:flex-row items-center justify-between mb-3 gap-2">
+<h4 class="text-sm font-semibold text-slate-300">Attachments</h4>
+<button class="flex items-center gap-2 text-primary hover:text-blue-400 font-medium text-sm transition-colors">
+<span class="material-symbols-outlined text-lg">attach_file</span>
+                                Select Attachments
+                            </button>
+</div>
+<div class="flex flex-wrap gap-4 min-h-[80px] p-3 rounded-xl border-2 border-dashed border-slate-700 bg-slate-900/30">
+<div class="relative group w-20 flex flex-col gap-1">
+<div class="w-20 h-20 rounded-lg bg-slate-800 overflow-hidden relative border border-slate-700">
+<img alt="Code snippet screenshot" class="w-full h-full object-cover opacity-80" data-alt="Screenshot of code editor" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAyNNHBJ0X1X8F89g9EyDknC2asKMj540jQP5AeIBVQf4inwYSywIWAmYzgX8-qDXrGHYXEEfLck2BtZFHxW5xI7RNFszWBle5hXv5a9bMuyf5it2tlHDKN6DUyv7i3w2X35iGbT3U9s06cIWkK_BDHmZUccxL6r_N555HLaMLokHs9Fvd8AAYq5QFdcc6Bz8tFvUUFMZGUs9xVaMEyVZENx3Ilb9wdARfJEzY5WO-PyL6z_Gs-9aPjUv5i7IK5VEHR4zijdamLTviS"/>
+<button class="absolute top-1 right-1 bg-black/70 text-red-500 hover:text-red-400 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-sm">close</span>
+</button>
+</div>
+<span class="text-[10px] text-slate-400 truncate w-full text-center">error_log.png</span>
+</div>
+<div class="relative group w-20 flex flex-col gap-1">
+<div class="w-20 h-20 rounded-lg bg-slate-800 flex items-center justify-center border border-slate-700 relative">
+<span class="material-symbols-outlined text-3xl text-blue-500">description</span>
+<button class="absolute top-1 right-1 bg-slate-800 text-slate-500 hover:text-red-500 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-sm">close</span>
+</button>
+</div>
+<span class="text-[10px] text-slate-400 truncate w-full text-center">specs_v2.pdf</span>
+</div>
+<button class="w-20 h-20 rounded-lg border-2 border-dashed border-slate-700 hover:border-primary hover:bg-primary/5 text-slate-500 hover:text-primary flex flex-col items-center justify-center gap-1 transition-all">
+<span class="material-symbols-outlined text-xl">add</span>
+<span class="text-[9px] font-medium uppercase">Add File</span>
+</button>
+</div>
+</div>
+<div class="flex items-center justify-end gap-4 mt-6 pt-6 border-t border-slate-800">
+<span class="text-slate-500 text-sm mr-auto hidden sm:block">Press <kbd class="px-2 py-1 rounded bg-slate-800 border border-slate-700 text-xs font-sans text-slate-400">Ctrl + Enter</kbd> to submit</span>
+<button class="px-6 py-2.5 rounded-lg text-slate-300 font-medium text-sm hover:bg-slate-800 transition-colors">
+                            Save Draft
+                        </button>
+<button class="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary hover:bg-blue-600 text-white font-medium text-sm shadow-md shadow-primary/20 transition-all transform active:scale-95">
+<span>Create New Task</span>
+<span class="material-symbols-outlined text-lg">send</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+
+</body></html>

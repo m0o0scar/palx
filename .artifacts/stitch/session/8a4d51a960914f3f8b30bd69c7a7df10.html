@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DevAgent Pro - Task Details (Dark)</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#3b82f6",
+                        "primary-hover": "#2563eb",
+                        "dark-base": "#0D1117",
+                        "dark-surface": "#161B22",
+                        "dark-border": "#30363d",
+                        "dark-text": "#c9d1d9",
+                        "dark-text-muted": "#8b949e",
+                        "terminal-bg": "#0D1117",
+                        "terminal-text": "#c9d1d9",
+                    },
+                    fontFamily: {
+                        "display": ["Space Grotesk", "sans-serif"],
+                        "mono": ["JetBrains Mono", "monospace"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
+</head>
+<body class="bg-dark-base text-dark-text font-display h-screen flex overflow-hidden">
+<main class="flex-1 flex flex-col h-full overflow-hidden bg-dark-base w-full">
+<header class="h-14 bg-dark-surface border-b border-dark-border flex items-center justify-between px-6 flex-shrink-0">
+<div class="flex items-center gap-2 text-sm text-dark-text-muted">
+<span class="hover:text-white cursor-pointer transition-colors">Tasks</span>
+<span class="material-symbols-outlined text-[16px] text-dark-text-muted">chevron_right</span>
+<span class="text-white font-semibold flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    Task #429: Refactor Auth Middleware
+                </span>
+</div>
+<div class="flex items-center gap-3">
+<span class="text-xs font-mono text-dark-text-muted bg-dark-border px-2 py-1 rounded">ID: 8a2f9c</span>
+<button class="flex items-center gap-1.5 px-3 py-1.5 rounded border border-dark-border bg-dark-base text-dark-text text-xs font-medium hover:bg-dark-border transition-colors">
+<span class="material-symbols-outlined text-[16px]">pause</span>
+                    Pause Agent
+                </button>
+<button class="flex items-center gap-1.5 px-3 py-1.5 rounded bg-red-900/20 text-red-400 border border-red-900/50 text-xs font-medium hover:bg-red-900/30 transition-colors">
+<span class="material-symbols-outlined text-[16px]">stop_circle</span>
+                    Stop
+                </button>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<div class="w-1/2 flex flex-col bg-dark-base border-r border-dark-border min-w-[320px] relative">
+<div class="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed text-dark-text custom-scrollbar-dark">
+<div class="mb-6 group">
+<div class="flex items-baseline gap-2 mb-1 text-dark-text-muted text-[10px] uppercase tracking-wider">
+<span class="font-bold text-green-400">User</span>
+<span>10:42:05 AM</span>
+</div>
+<div class="bg-dark-surface p-3 rounded-lg border-l-2 border-green-500 text-dark-text shadow-sm border border-dark-border border-l-green-500">
+                            &gt; Please refactor the authentication middleware to support JWT rotation. Ensure backward compatibility with existing tokens.
+                        </div>
+</div>
+<div class="mb-6 group">
+<div class="flex items-baseline gap-2 mb-1 text-dark-text-muted text-[10px] uppercase tracking-wider">
+<span class="font-bold text-blue-400">Agent</span>
+<span>10:42:08 AM</span>
+</div>
+<div class="text-dark-text pl-2 border-l border-dark-border ml-1 space-y-2">
+<p><span class="text-blue-400">ℹ</span> Analyzing codebase structure...</p>
+<p><span class="text-blue-400">ℹ</span> Found `src/middleware/auth.ts`. Reading current implementation.</p>
+<p class="text-dark-text-muted italic">// Current implementation uses static secret key validation.</p>
+</div>
+</div>
+<div class="mb-6 group">
+<div class="flex items-baseline gap-2 mb-1 text-dark-text-muted text-[10px] uppercase tracking-wider">
+<span class="font-bold text-purple-400">System</span>
+<span>10:42:15 AM</span>
+</div>
+<div class="bg-dark-surface p-3 rounded border border-dark-border shadow-sm">
+<div class="flex items-center gap-2 text-dark-text-muted mb-2 border-b border-dark-border pb-2">
+<span class="material-symbols-outlined text-[14px]">code</span>
+<span>Reading file: src/config/jwt.ts</span>
+</div>
+<pre class="overflow-x-auto text-dark-text"><code>export const JWT_CONFIG = {
+  secret: process.env.JWT_SECRET,
+  expiresIn: '1h'
+};</code></pre>
+</div>
+</div>
+<div class="mb-6 group">
+<div class="flex items-baseline gap-2 mb-1 text-dark-text-muted text-[10px] uppercase tracking-wider">
+<span class="font-bold text-blue-400">Agent</span>
+<span>10:42:20 AM</span>
+</div>
+<div class="bg-dark-surface p-3 rounded-lg border-l-2 border-blue-500 text-dark-text shadow-sm border border-dark-border border-l-blue-500">
+                           I will start by creating a new utility function to handle key rotation logic, then I'll update the middleware to use this utility.
+                           <ul class="list-disc list-inside mt-2 text-dark-text-muted space-y-1">
+<li>Create `src/utils/keyRotation.ts`</li>
+<li>Update `src/middleware/auth.ts`</li>
+<li>Add tests in `tests/auth.test.ts`</li>
+</ul>
+</div>
+</div>
+<div class="mb-2 group animate-pulse">
+<div class="flex items-baseline gap-2 mb-1 text-dark-text-muted text-[10px] uppercase tracking-wider">
+<span class="font-bold text-purple-400">System</span>
+<span>10:43:45 AM</span>
+</div>
+<div class="text-dark-text-muted pl-2 border-l border-purple-900/50 ml-1">
+<p>Writing to `src/utils/keyRotation.ts` <span class="inline-block w-2 h-4 bg-dark-text align-middle ml-1 animate-blink"></span></p>
+</div>
+</div>
+</div>
+</div>
+<div class="w-1 bg-dark-border hover:bg-primary cursor-col-resize flex items-center justify-center group z-10">
+<div class="h-8 w-1 bg-dark-text-muted rounded-full group-hover:bg-white transition-colors"></div>
+</div>
+<div class="w-1/2 flex flex-col bg-dark-base min-w-[320px]">
+<div class="flex-grow flex flex-col h-2/3 min-h-[400px]">
+<div class="flex-1 bg-black overflow-hidden relative flex flex-col">
+<div class="bg-dark-surface border-b border-dark-border p-2 flex items-center gap-3">
+<div class="flex gap-1.5">
+<div class="w-2.5 h-2.5 rounded-full bg-red-400/80"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-yellow-400/80"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-green-400/80"></div>
+</div>
+<div class="flex gap-2 text-dark-text-muted">
+<span class="material-symbols-outlined text-[16px] hover:text-white cursor-pointer">arrow_back</span>
+<span class="material-symbols-outlined text-[16px] hover:text-white cursor-pointer">arrow_forward</span>
+<span class="material-symbols-outlined text-[16px] hover:text-white cursor-pointer">refresh</span>
+</div>
+<div class="flex-1 bg-dark-base rounded flex items-center px-3 py-1 text-xs text-dark-text-muted font-mono border border-dark-border">
+<span class="material-symbols-outlined text-[12px] mr-2">lock</span>
+                                https://localhost:3000/app/dashboard
+                            </div>
+<div class="flex items-center gap-1 px-1">
+<button class="p-1 text-dark-text-muted hover:text-white transition-colors rounded hover:bg-dark-border" title="Select Element">
+<span class="material-symbols-outlined text-[18px]">ads_click</span>
+</button>
+<button class="p-1 text-dark-text-muted hover:text-white transition-colors rounded hover:bg-dark-border" title="Open in New Tab">
+<span class="material-symbols-outlined text-[18px]">open_in_new</span>
+</button>
+</div>
+</div>
+<div class="flex-1 bg-[#0d1117] overflow-y-auto p-8 relative">
+<div class="max-w-3xl mx-auto">
+<nav class="flex justify-between items-center mb-12">
+<div class="font-bold text-xl text-indigo-400">SaasApp</div>
+<div class="flex gap-4 text-sm text-gray-400">
+<span class="hover:text-white cursor-pointer">Features</span>
+<span class="hover:text-white cursor-pointer">Pricing</span>
+<span class="hover:text-white cursor-pointer">About</span>
+<span class="font-medium text-indigo-400 hover:text-indigo-300 cursor-pointer">Login</span>
+</div>
+</nav>
+<div class="text-center py-12">
+<span class="inline-block px-3 py-1 bg-indigo-900/30 border border-indigo-500/30 text-indigo-400 rounded-full text-xs font-semibold mb-4">New v2.0 Released</span>
+<h1 class="text-4xl font-bold text-white mb-4 leading-tight">Build faster with our<br/>AI-powered platform</h1>
+<p class="text-gray-400 mb-8 max-w-lg mx-auto">Deploy your applications in seconds, not hours. Our automated infrastructure handles scaling, security, and maintenance for you.</p>
+<div class="flex justify-center gap-4">
+<button class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-500 shadow-lg shadow-indigo-900/20">Get Started</button>
+<button class="px-6 py-2.5 bg-transparent border border-gray-700 text-gray-300 rounded-lg font-medium hover:bg-gray-800 hover:text-white">View Demo</button>
+</div>
+</div>
+<div class="grid grid-cols-3 gap-6 mt-12">
+<div class="p-6 rounded-xl border border-gray-800 bg-gray-900/50 hover:bg-gray-900 transition-colors">
+<div class="w-10 h-10 bg-blue-900/30 rounded-lg flex items-center justify-center text-blue-400 mb-3 border border-blue-900/50">
+<span class="material-symbols-outlined">speed</span>
+</div>
+<h3 class="font-semibold text-white mb-1">Lightning Fast</h3>
+<p class="text-xs text-gray-500">Optimized for speed with edge caching and global CDN distribution.</p>
+</div>
+<div class="p-6 rounded-xl border border-gray-800 bg-gray-900/50 hover:bg-gray-900 transition-colors">
+<div class="w-10 h-10 bg-green-900/30 rounded-lg flex items-center justify-center text-green-400 mb-3 border border-green-900/50">
+<span class="material-symbols-outlined">security</span>
+</div>
+<h3 class="font-semibold text-white mb-1">Secure by Design</h3>
+<p class="text-xs text-gray-500">Enterprise-grade security with automated compliance checks.</p>
+</div>
+<div class="p-6 rounded-xl border border-gray-800 bg-gray-900/50 hover:bg-gray-900 transition-colors">
+<div class="w-10 h-10 bg-purple-900/30 rounded-lg flex items-center justify-center text-purple-400 mb-3 border border-purple-900/50">
+<span class="material-symbols-outlined">auto_awesome</span>
+</div>
+<h3 class="font-semibold text-white mb-1">AI Assistant</h3>
+<p class="text-xs text-gray-500">Smart coding companion to help you debug and optimize code.</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="h-1 bg-dark-base border-t border-b border-dark-border cursor-row-resize flex items-center justify-center hover:bg-primary/20 group">
+<div class="w-10 h-1 bg-dark-border rounded-full group-hover:bg-primary transition-colors"></div>
+</div>
+<div class="h-1/3 min-h-[150px] bg-dark-surface flex flex-col text-dark-text text-xs font-mono border-t border-dark-border">
+<div class="h-8 bg-dark-surface flex items-center justify-between px-3 border-b border-dark-border">
+<span class="font-semibold text-dark-text flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-yellow-500"></span>
+                            Build Output
+                        </span>
+<div class="flex items-center gap-2">
+<button class="hover:text-white text-dark-text-muted"><span class="material-symbols-outlined text-[16px]">expand_more</span></button>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-3 space-y-1 bg-dark-base custom-scrollbar-dark">
+<div class="text-dark-text-muted">[10:42:01] <span class="text-dark-text">Starting compilation in watch mode...</span></div>
+<div class="text-dark-text-muted">[10:42:02] <span class="text-green-400">Found 0 errors. Watching for file changes.</span></div>
+<div class="text-dark-text-muted">[10:43:45] <span class="text-dark-text">File change detected. Starting incremental compilation...</span></div>
+<div class="text-dark-text-muted">[10:43:46] <span class="text-dark-text">src/utils/keyRotation.ts(5,22): <span class="text-amber-400 bg-amber-900/30 border border-amber-900/50 px-1 rounded">warning TS6133: 'SignOptions' is declared but its value is never read.</span></span></div>
+<div class="text-dark-text-muted">[10:43:46] <span class="text-green-400">Found 0 errors. Watching for file changes.</span></div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<style>
+        .custom-scrollbar-dark::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        .custom-scrollbar-dark::-webkit-scrollbar-track {
+            background: #0d1117; 
+        }
+        .custom-scrollbar-dark::-webkit-scrollbar-thumb {
+            background: #30363d; 
+            border-radius: 4px;
+        }
+        .custom-scrollbar-dark::-webkit-scrollbar-thumb:hover {
+            background: #484f58; 
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .animate-blink {
+            animation: blink 1s step-end infinite;
+        }
+    </style>
+
+</body></html>

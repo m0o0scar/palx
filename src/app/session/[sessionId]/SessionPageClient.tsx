@@ -260,10 +260,10 @@ export default function SessionPage() {
 
     if (loading) {
         return (
-            <div className="flex h-screen w-full items-center justify-center bg-base-100">
+            <div className="flex h-screen w-full items-center justify-center bg-[#f6f6f8] dark:bg-[#0d1117]">
                 <div className="flex flex-col items-center gap-4">
                     <span className="loading loading-spinner loading-lg text-primary"></span>
-                    <p className="opacity-60">Loading session...</p>
+                    <p className="opacity-60 dark:text-slate-400">Loading session...</p>
                 </div>
             </div>
         );
@@ -271,11 +271,11 @@ export default function SessionPage() {
 
     if (error || !metadata) {
         return (
-            <div className="flex h-screen w-full items-center justify-center bg-base-100">
-                <div className="card w-96 bg-base-200 shadow-xl">
+            <div className="flex h-screen w-full items-center justify-center bg-[#f6f6f8] dark:bg-[#0d1117]">
+                <div className="card w-96 border border-slate-200 bg-white shadow-xl dark:border-[#30363d] dark:bg-[#161b22]">
                     <div className="card-body items-center text-center">
-                        <h2 className="card-title text-error">Error</h2>
-                        <p>{error || 'Session not found'}</p>
+                        <h2 className="card-title text-error dark:text-red-300">Error</h2>
+                        <p className="text-slate-700 dark:text-slate-300">{error || 'Session not found'}</p>
                         <div className="card-actions justify-end">
                             <button className="btn btn-primary" onClick={() => handleExit()}>Back to Home</button>
                         </div>
@@ -287,10 +287,10 @@ export default function SessionPage() {
 
     if (!terminalSources) {
         return (
-            <div className="flex h-screen w-full items-center justify-center bg-base-100">
+            <div className="flex h-screen w-full items-center justify-center bg-[#f6f6f8] dark:bg-[#0d1117]">
                 <div className="flex flex-col items-center gap-4">
                     <span className="loading loading-spinner loading-lg text-primary"></span>
-                    <p className="opacity-60">Initializing terminals...</p>
+                    <p className="opacity-60 dark:text-slate-400">Initializing terminals...</p>
                 </div>
             </div>
         );

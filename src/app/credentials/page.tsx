@@ -267,29 +267,29 @@ export default function CredentialsPage() {
     setDeletingAgent(null);
   };
 
-  const panelClass = 'overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm';
-  const sectionHeaderClass = 'flex flex-col gap-3 border-b border-slate-200 px-6 py-5 md:flex-row md:items-center md:justify-between';
-  const inputClass = 'block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60';
-  const primaryButtonClass = 'inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60';
-  const secondaryButtonClass = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60';
-  const rowActionButtonClass = 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-all hover:bg-red-50 hover:text-red-500';
+  const panelClass = 'overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700/50 dark:bg-slate-800 dark:shadow-[0_12px_30px_-18px_rgba(2,6,23,0.9)]';
+  const sectionHeaderClass = 'flex flex-col gap-3 border-b border-slate-200 bg-white px-6 py-5 md:flex-row md:items-center md:justify-between dark:border-slate-700/50 dark:bg-slate-800';
+  const inputClass = 'block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-all focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900/50 dark:text-white dark:placeholder-slate-500 dark:focus:border-primary/50 dark:focus:bg-slate-900';
+  const primaryButtonClass = 'inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white shadow-lg shadow-blue-900/20 transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60';
+  const secondaryButtonClass = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700';
+  const rowActionButtonClass = 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-all hover:bg-red-50 hover:text-red-500 dark:text-slate-400 dark:hover:bg-red-900/30 dark:hover:text-red-400';
 
   return (
-    <main className="min-h-screen bg-[#f6f6f8] px-4 py-8 md:px-8 md:py-12">
+    <main className="min-h-screen bg-[#f6f6f8] px-4 py-8 md:px-8 md:py-12 dark:bg-[#0f1117]">
       <div className="mx-auto w-full max-w-4xl space-y-8">
         <div className="mb-8">
           <div className="mb-2 flex items-center gap-4">
             <button
               type="button"
-              className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white hover:text-slate-900"
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
               onClick={() => router.push('/')}
               aria-label="Back to home"
             >
               <ChevronRight className="h-6 w-6 rotate-180" />
             </button>
-            <h1 className="text-3xl font-black tracking-[-0.02em] text-slate-900 md:text-4xl">Credential Management</h1>
+            <h1 className="text-3xl font-black tracking-[-0.02em] text-slate-900 md:text-4xl dark:text-white">Credential Management</h1>
           </div>
-          <p className="ml-14 text-sm text-slate-500 md:text-base">
+          <p className="ml-14 text-sm text-slate-500 md:text-base dark:text-slate-400">
             Manage your API keys and access tokens for third-party services safely.
           </p>
         </div>
@@ -298,8 +298,8 @@ export default function CredentialsPage() {
           <div
             className={`rounded-lg border px-4 py-3 text-sm ${
               flashMessage.tone === 'error'
-                ? 'border-red-200 bg-red-50 text-red-700'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/40 dark:bg-red-900/30 dark:text-red-200'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-900/30 dark:text-emerald-200'
             }`}
           >
             {flashMessage.text}
@@ -310,7 +310,7 @@ export default function CredentialsPage() {
           <div className={`${panelClass} p-10`}>
             <div className="flex flex-col items-center gap-3">
               <span className="loading loading-spinner loading-md text-primary"></span>
-              <p className="text-sm text-slate-500">Loading credentials...</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Loading credentials...</p>
             </div>
           </div>
         ) : (
@@ -318,8 +318,8 @@ export default function CredentialsPage() {
             <section className={panelClass}>
               <div className={sectionHeaderClass}>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">GitHub Credentials</h2>
-                  <p className="mt-1 text-sm text-slate-500">Access private repositories and Gists.</p>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">GitHub Credentials</h2>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Access private repositories and Gists.</p>
                 </div>
                 <button
                   className={primaryButtonClass}
@@ -331,8 +331,8 @@ export default function CredentialsPage() {
                 </button>
               </div>
 
-              <div className="border-b border-slate-100 bg-slate-50/40 px-6 py-4">
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <div className="border-b border-slate-100 bg-slate-50/40 px-6 py-4 dark:border-slate-700/50 dark:bg-slate-900/35">
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                   Personal Access Token
                 </label>
                 <input
@@ -346,21 +346,21 @@ export default function CredentialsPage() {
               </div>
 
               {githubCredentials.length === 0 ? (
-                <div className="px-6 py-6 text-sm text-slate-500">No GitHub credentials saved.</div>
+                <div className="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No GitHub credentials saved.</div>
               ) : (
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
                   {githubCredentials.map((credential) => (
                     <div
                       key={credential.id}
-                      className="group flex items-center justify-between gap-4 px-6 py-5 transition-colors hover:bg-slate-50"
+                      className="group flex items-center justify-between gap-4 px-6 py-5 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50"
                     >
                       <div className="flex min-w-0 items-center gap-4">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700/60">
                           <ProviderIcon type="github" />
                         </div>
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-900">{credential.username}</div>
-                          <div className="mt-0.5 text-xs text-slate-500">
+                          <div className="truncate text-sm font-semibold text-slate-900 dark:text-white">{credential.username}</div>
+                          <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                             Updated {new Date(credential.updatedAt).toLocaleString()}
                           </div>
                         </div>
@@ -382,8 +382,8 @@ export default function CredentialsPage() {
             <section className={panelClass}>
               <div className={sectionHeaderClass}>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">GitLab Credentials</h2>
-                  <p className="mt-1 text-sm text-slate-500">Connect to self-hosted or cloud GitLab instances.</p>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">GitLab Credentials</h2>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Connect to self-hosted or cloud GitLab instances.</p>
                 </div>
                 <button
                   className={secondaryButtonClass}
@@ -395,9 +395,9 @@ export default function CredentialsPage() {
                 </button>
               </div>
 
-              <div className="space-y-4 border-b border-slate-100 bg-slate-50/40 px-6 py-4">
+              <div className="space-y-4 border-b border-slate-100 bg-slate-50/40 px-6 py-4 dark:border-slate-700/50 dark:bg-slate-900/35">
                 <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                     Server URL
                   </label>
                   <input
@@ -410,7 +410,7 @@ export default function CredentialsPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                     Personal Access Token
                   </label>
                   <input
@@ -425,22 +425,22 @@ export default function CredentialsPage() {
               </div>
 
               {gitlabCredentials.length === 0 ? (
-                <div className="px-6 py-6 text-sm text-slate-500">No GitLab credentials saved.</div>
+                <div className="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No GitLab credentials saved.</div>
               ) : (
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
                   {gitlabCredentials.map((credential) => (
                     <div
                       key={credential.id}
-                      className="group flex items-center justify-between gap-4 px-6 py-5 transition-colors hover:bg-slate-50"
+                      className="group flex items-center justify-between gap-4 px-6 py-5 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50"
                     >
                       <div className="flex min-w-0 items-center gap-4">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-50">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-50 dark:border dark:border-orange-500/20 dark:bg-orange-500/10">
                           <ProviderIcon type="gitlab" />
                         </div>
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-900">{credential.username}</div>
-                          <div className="truncate text-xs text-slate-500">{credential.serverUrl}</div>
-                          <div className="mt-0.5 text-xs text-slate-500">
+                          <div className="truncate text-sm font-semibold text-slate-900 dark:text-white">{credential.username}</div>
+                          <div className="truncate text-xs text-slate-500 dark:text-slate-400">{credential.serverUrl}</div>
+                          <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                             Updated {new Date(credential.updatedAt).toLocaleString()}
                           </div>
                         </div>
@@ -468,12 +468,12 @@ export default function CredentialsPage() {
                 <section key={agent} className={panelClass}>
                   <div className={sectionHeaderClass}>
                     <div className="flex items-center gap-3">
-                      <div className="rounded-lg bg-emerald-100 p-1.5 text-emerald-600">
+                      <div className="rounded-lg bg-emerald-100 p-1.5 text-emerald-600 dark:border dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-400">
                         <KeyRound className="h-5 w-5" />
                       </div>
                       <div>
-                        <h2 className="text-lg font-bold text-slate-900">{AGENT_API_LABELS[agent]} Configuration</h2>
-                        <p className="text-sm text-slate-500">Configure access for LLM capabilities.</p>
+                        <h2 className="text-lg font-bold text-slate-900 dark:text-white">{AGENT_API_LABELS[agent]} Configuration</h2>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Configure access for LLM capabilities.</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -501,7 +501,7 @@ export default function CredentialsPage() {
                   <div className="space-y-6 p-6">
                     <div className="max-w-2xl space-y-4">
                       <div>
-                        <label className="mb-2 block text-sm font-medium text-slate-700">API Key</label>
+                        <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">API Key</label>
                         <input
                           type="password"
                           className={inputClass}
@@ -512,14 +512,14 @@ export default function CredentialsPage() {
                           }
                           disabled={isSaving || isDeleting}
                         />
-                        <p className="mt-1 text-xs text-slate-500">
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                           Your API key is stored locally and never shared.
                         </p>
                       </div>
 
                       <div>
-                        <label className="mb-2 block text-sm font-medium text-slate-700">
-                          API Proxy <span className="font-normal text-slate-400">(Optional)</span>
+                        <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                          API Proxy <span className="font-normal text-slate-400 dark:text-slate-500">(Optional)</span>
                         </label>
                         <input
                           type="url"
@@ -531,13 +531,13 @@ export default function CredentialsPage() {
                           }
                           disabled={isSaving || isDeleting}
                         />
-                        <p className="mt-1 text-xs text-slate-500">
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                           Override this when using a proxy or a compatible endpoint.
                         </p>
                       </div>
                     </div>
 
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
                       {configuredCredential ? (
                         <div className="space-y-1">
                           <div>API key configured.</div>
@@ -553,7 +553,7 @@ export default function CredentialsPage() {
               );
             })}
 
-            <div className="pb-2 pt-4 text-center text-xs text-slate-400">
+            <div className="pb-2 pt-4 text-center text-xs text-slate-400 dark:text-slate-500">
               Credentials are encrypted at rest using your system keychain.
             </div>
           </div>

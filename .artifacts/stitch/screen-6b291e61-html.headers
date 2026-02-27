@@ -1,0 +1,13 @@
+HTTP/2 429 
+x-guploader-uploadid: AGQBYWyam_EmIpY-HI3A7IQDkqTXfQ4JodFa-vnPtJcsr1kbibmwowpqZrieO2WbyIicWXxGpH63J6o
+vary: Origin
+content-security-policy: default-src 'none'; img-src 'self'; report-uri https://csp.withgoogle.com/csp/scotty/2;
+content-security-policy: sandbox allow-scripts
+date: Fri, 27 Feb 2026 09:38:08 GMT
+expires: Fri, 27 Feb 2026 09:38:08 GMT
+cache-control: private, max-age=0
+content-length: 0
+server: UploadServer
+content-type: text/html; charset=UTF-8
+alt-svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+
