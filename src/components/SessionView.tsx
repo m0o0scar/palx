@@ -63,7 +63,7 @@ const SYSTEMATIC_DEBUGGING_SKILL_INSTRUCTION =
 const VISUAL_EVIDENCE_INSTRUCTION =
     'When working on a visual-related feature or bugfix in a web project, after coding is complete, use `agent-browser` or equivalent Chrome MCP tooling to load the relevant page, take screenshot(s), and include them as evidence in the pull/merge request.';
 const NOTIFICATION_INSTRUCTION =
-    'When your task is completed or you need user attention (for plan approval, permissions, or blockers), send a notification to the matching Viba session.';
+    'When your task is completed or you need user attention (for plan approval, permissions, or blockers), send a notification to the matching Viba session. Important: Only send the notification AFTER the plan or any details requiring user review have been fully outputted.';
 
 const clampAgentPaneRatio = (value: number): number => Math.max(0.2, Math.min(0.8, value));
 
