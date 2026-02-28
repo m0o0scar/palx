@@ -11,9 +11,9 @@ import {
     updateSessionBaseBranch,
     writeSessionPromptFile
 } from '@/app/actions/session';
-import { setTmuxSessionMouseMode, setTmuxSessionStatusVisibility } from '@/app/actions/git';
+import { setTmuxSessionStatusVisibility } from '@/app/actions/git';
 import { getConfig, updateConfig } from '@/app/actions/config';
-import { Trash2, ExternalLink, Play, GitMerge, GitPullRequestArrow, GitBranch, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, ChevronRight, Grip, ChevronDown, Plus, MousePointer2, ArrowLeft, ArrowRight, RotateCw, ScrollText, TextCursorInput, X } from 'lucide-react';
+import { Trash2, ExternalLink, Play, GitMerge, GitPullRequestArrow, GitBranch, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, ChevronRight, Grip, ChevronDown, Plus, MousePointer2, ArrowLeft, ArrowRight, RotateCw, X } from 'lucide-react';
 import SessionFileBrowser from './SessionFileBrowser';
 import { getBaseName, isWindowsAbsolutePath } from '@/lib/path';
 import { notifySessionsUpdated } from '@/lib/session-updates';
@@ -36,7 +36,6 @@ type PreviewNavigationAction = 'back' | 'forward' | 'reload';
 type TerminalBootstrapSlot = 'agent' | 'terminal';
 type TerminalBootstrapState = 'idle' | 'in_progress' | 'done';
 type TerminalBootstrapRegistry = Record<string, TerminalBootstrapState>;
-type TerminalInteractionMode = 'scroll' | 'select';
 type TerminalOnWriteParsedDisposable = { dispose?: () => void };
 type TerminalWithOnWriteParsed = NonNullable<TerminalWindow['term']> & {
     onWriteParsed?: (callback: () => void) => TerminalOnWriteParsedDisposable | void;
@@ -637,9 +636,6 @@ export function SessionView({
     const [isResizing, setIsResizing] = useState(false);
     const [isLoaded, setIsLoaded] = useState(false);
     const resizeRef = useRef({ startX: 0, startY: 0, startWidth: 0, startHeight: 0 });
-    const [terminalInteractionMode, setTerminalInteractionMode] = useState<TerminalInteractionMode>('scroll');
-    const [isUpdatingTerminalInteractionMode, setIsUpdatingTerminalInteractionMode] = useState(false);
-    const terminalInteractionRequestIdRef = useRef(0);
 
     useEffect(() => {
         setLastFileBrowserPath(worktree || repo);
@@ -847,12 +843,6 @@ export function SessionView({
         setBaseBranchOptions([]);
     }, [baseBranch, sessionName]);
 
-    useEffect(() => {
-        setTerminalInteractionMode('scroll');
-        setIsUpdatingTerminalInteractionMode(false);
-        terminalInteractionRequestIdRef.current += 1;
-    }, [sessionName]);
-
     const handleIdeChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const value = e.target.value;
         setSelectedIde(value);
@@ -868,45 +858,6 @@ export function SessionView({
         window.open(uri, '_blank');
     };
 
-    const applyTerminalInteractionMode = useCallback(async (
-        mode: TerminalInteractionMode,
-        options?: { silent?: boolean }
-    ): Promise<boolean> => {
-        if (terminalPersistenceMode !== 'tmux') return true;
-
-        const requestId = ++terminalInteractionRequestIdRef.current;
-        if (!options?.silent) {
-            setIsUpdatingTerminalInteractionMode(true);
-        }
-
-        const mouseEnabled = mode === 'scroll';
-        const [agentResult, terminalResult] = await Promise.all([
-            setTmuxSessionMouseMode(sessionName, 'agent', mouseEnabled),
-            setTmuxSessionMouseMode(sessionName, 'terminal', mouseEnabled),
-        ]);
-
-        if (requestId !== terminalInteractionRequestIdRef.current) {
-            return false;
-        }
-
-        if (!options?.silent) {
-            setIsUpdatingTerminalInteractionMode(false);
-        }
-
-        const failed = [agentResult, terminalResult].find((result) => !result.success);
-        if (failed) {
-            if (!options?.silent) {
-                setFeedback(`Failed to switch to ${mode === 'scroll' ? 'scroll mode' : 'text select mode'}`);
-            }
-            return false;
-        }
-
-        if (!options?.silent) {
-            setFeedback(mode === 'scroll' ? 'Terminal mode: Scroll' : 'Terminal mode: Text Select');
-        }
-        return true;
-    }, [sessionName, terminalPersistenceMode]);
-
     const ensureTmuxStatusBarHidden = useCallback((slot: TerminalBootstrapSlot) => {
         if (terminalPersistenceMode !== 'tmux') return;
         if (tmuxStatusAppliedRef.current[slot]) return;
@@ -920,26 +871,6 @@ export function SessionView({
             }
         })();
     }, [sessionName, terminalPersistenceMode]);
-
-    useEffect(() => {
-        if (terminalPersistenceMode !== 'tmux') return;
-        void applyTerminalInteractionMode('scroll', { silent: true });
-    }, [applyTerminalInteractionMode, terminalPersistenceMode]);
-
-    const handleToggleTerminalInteractionMode = useCallback(() => {
-        if (terminalPersistenceMode !== 'tmux' || isUpdatingTerminalInteractionMode) return;
-
-        const previousMode = terminalInteractionMode;
-        const nextMode: TerminalInteractionMode = previousMode === 'scroll' ? 'select' : 'scroll';
-        setTerminalInteractionMode(nextMode);
-
-        void (async () => {
-            const success = await applyTerminalInteractionMode(nextMode);
-            if (!success) {
-                setTerminalInteractionMode(previousMode);
-            }
-        })();
-    }, [applyTerminalInteractionMode, isUpdatingTerminalInteractionMode, terminalInteractionMode, terminalPersistenceMode]);
 
     const handleShowDiffWithTrident = () => {
         if (!worktree || !branch) return;
@@ -1613,6 +1544,15 @@ export function SessionView({
             iframe.contentWindow.addEventListener('beforeunload', (event) => {
                 event.stopImmediatePropagation();
             }, true);
+            // Force xterm.js to treat mouse drag/click as shift-clicks, which bypasses application mouse reporting
+            // and allows for native text selection without holding Shift, while still allowing wheel scroll.
+            const overrideShift = (e: Event) => {
+                Object.defineProperty(e, 'shiftKey', { get: () => true, configurable: true });
+            };
+            iframe.contentWindow.document.addEventListener('mousedown', overrideShift, true);
+            iframe.contentWindow.document.addEventListener('mousemove', overrideShift, true);
+            iframe.contentWindow.document.addEventListener('mouseup', overrideShift, true);
+            iframe.contentWindow.document.addEventListener('click', overrideShift, true);
         }
 
         setFeedback('Connecting to terminal...');
@@ -1906,6 +1846,15 @@ export function SessionView({
             iframe.contentWindow.addEventListener('beforeunload', (event) => {
                 event.stopImmediatePropagation();
             }, true);
+            // Force xterm.js to treat mouse drag/click as shift-clicks, which bypasses application mouse reporting
+            // and allows for native text selection without holding Shift, while still allowing wheel scroll.
+            const overrideShift = (e: Event) => {
+                Object.defineProperty(e, 'shiftKey', { get: () => true, configurable: true });
+            };
+            iframe.contentWindow.document.addEventListener('mousedown', overrideShift, true);
+            iframe.contentWindow.document.addEventListener('mousemove', overrideShift, true);
+            iframe.contentWindow.document.addEventListener('mouseup', overrideShift, true);
+            iframe.contentWindow.document.addEventListener('click', overrideShift, true);
         }
 
         const checkAndInject = (attempts = 0) => {
@@ -2246,27 +2195,6 @@ export function SessionView({
                                 >
                                     {isInsertingFilePaths ? <span className="loading loading-spinner loading-xs"></span> : <FolderOpen className="h-3 w-3" />}
                                     <span className="hidden min-[1700px]:inline">Add Files</span>
-                                </button>
-                            </div>
-                            <div className="flex shrink-0 items-center overflow-hidden rounded border border-slate-200 bg-white dark:border-[#30363d] dark:bg-[#0d1117]">
-                                <button
-                                    className={`btn btn-ghost btn-xs h-6 min-h-6 w-7 rounded-none border-none p-0 text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-[#30363d]/60 ${terminalInteractionMode === 'select' ? 'text-warning' : ''}`}
-                                    onClick={handleToggleTerminalInteractionMode}
-                                    disabled={terminalPersistenceMode !== 'tmux' || isUpdatingTerminalInteractionMode}
-                                    title={terminalPersistenceMode === 'tmux'
-                                        ? (terminalInteractionMode === 'scroll'
-                                            ? 'Switch to text select mode for easier copy'
-                                            : 'Switch to scroll mode for wheel scrollback')
-                                        : 'Mode toggle is available only in tmux persistence mode'}
-                                    aria-label={terminalInteractionMode === 'scroll' ? 'Switch to text mode' : 'Switch to scroll mode'}
-                                >
-                                    {isUpdatingTerminalInteractionMode ? (
-                                        <span className="loading loading-spinner loading-xs"></span>
-                                    ) : (
-                                        terminalInteractionMode === 'scroll'
-                                            ? <ScrollText className="h-3.5 w-3.5" />
-                                            : <TextCursorInput className="h-3.5 w-3.5" />
-                                    )}
                                 </button>
                             </div>
                         </div>

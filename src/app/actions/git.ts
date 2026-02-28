@@ -596,6 +596,10 @@ export async function startTtydProcess(): Promise<{ success: boolean; persistenc
         stdio: 'ignore',
         env: process.env,
       });
+      spawnSync('tmux', ['set-option', '-s', 'set-clipboard', 'on'], {
+        stdio: 'ignore',
+        env: process.env,
+      });
       spawnSync('tmux', ['set-option', '-g', 'history-limit', '200000'], {
         stdio: 'ignore',
         env: process.env,
