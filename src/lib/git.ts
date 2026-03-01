@@ -202,10 +202,11 @@ export class GitService {
 
   async getLog(limit: number = 100, options: { includeAll?: boolean } = {}): Promise<GitLog> {
     const { includeAll = true } = options;
-    const logOptions: Parameters<SimpleGit['log']>[0] = {
+    const logOptions = {
       // Keep refs stable regardless of user-level git config (e.g. log.decorate=full).
-      '--decorate': 'short',
-      '--max-count': limit,
+      decorate: 'short',
+      maxCount: limit,
+      ...(includeAll ? { all: null } : {}),
       format: {
         hash: '%h',
         parents: '%p',
@@ -217,8 +218,6 @@ export class GitService {
         body: '%b'
       }
     };
-
-    if (includeAll) logOptions['--all'] = null;
 
     // Custom format to ensure we get parents and refs correctly.
     const log = await this.git.log(logOptions);
