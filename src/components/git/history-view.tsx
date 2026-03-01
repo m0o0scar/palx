@@ -3295,7 +3295,8 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
   if (!log) return <div className="flex items-center justify-center p-8 h-full opacity-70">No history data available</div>;
 
   const headerActionButtonClass =
-    "flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100";
+    "flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 max-[1199px]:w-8 max-[1199px]:justify-center max-[1199px]:px-0 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100";
+  const headerActionLabelClass = "max-[1199px]:hidden";
   const branchSelectButtonClass =
     "flex h-8 max-w-[24rem] items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-mono font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800";
 
@@ -4435,7 +4436,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                 ) : (
                   <i className="iconoir-refresh text-[16px]" aria-hidden="true" />
                 )}
-                Fetch
+                <span className={headerActionLabelClass}>Fetch</span>
               </button>
               <button
                 className={headerActionButtonClass}
@@ -4448,7 +4449,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                 ) : (
                   <i className="iconoir-arrow-down text-[16px]" aria-hidden="true" />
                 )}
-                Pull
+                <span className={headerActionLabelClass}>Pull</span>
               </button>
               <button
                 className={headerActionButtonClass}
@@ -4461,7 +4462,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                 ) : (
                   <i className="iconoir-arrow-down text-[16px]" aria-hidden="true" />
                 )}
-                Pull All
+                <span className={headerActionLabelClass}>Pull All</span>
               </button>
               <button
                 className={headerActionButtonClass}
@@ -4474,7 +4475,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                 ) : (
                   <i className="iconoir-arrow-up text-[16px]" aria-hidden="true" />
                 )}
-                Push
+                <span className={headerActionLabelClass}>Push</span>
               </button>
             </div>
           </div>
@@ -4490,7 +4491,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
               ) : (
                 <i className="iconoir-terminal text-[16px]" aria-hidden="true" />
               )}
-              Open Terminal
+              <span className={headerActionLabelClass}>Open Terminal</span>
             </button>
             <button
               className={headerActionButtonClass}
@@ -4503,7 +4504,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
               ) : (
                 <i className="iconoir-folder text-[16px]" aria-hidden="true" />
               )}
-              Open Repo Folder
+              <span className={headerActionLabelClass}>Open Repo Folder</span>
             </button>
           </div>
         </div>
