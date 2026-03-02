@@ -583,7 +583,7 @@ export async function getSessionDivergence(
 
 export async function listSessionBaseBranches(
   sessionName: string
-): Promise<{ success: boolean; baseBranch?: string; branches?: string[]; error?: string }> {
+): Promise<{ success: boolean; baseBranch?: string; branches?: string[]; mainWorktreeBranch?: string; error?: string }> {
   try {
     const metadata = await getSessionMetadata(sessionName);
     if (!metadata) {
@@ -594,10 +594,61 @@ export async function listSessionBaseBranches(
     const branchSummary = await git.branchLocal();
     const branches = [...branchSummary.all].sort((a, b) => a.localeCompare(b));
     const baseBranch = metadata.baseBranch?.trim();
+    const mainWorktreeBranch = branchSummary.current?.trim() || undefined;
 
-    return { success: true, baseBranch, branches };
+    return { success: true, baseBranch, branches, mainWorktreeBranch };
   } catch (e: unknown) {
     console.error('Failed to list session base branches:', e);
+    return { success: false, error: getErrorMessage(e) };
+  }
+}
+
+export async function createSessionBaseBranch(
+  sessionName: string,
+  branchName: string,
+  fromBranch: string
+): Promise<{ success: boolean; branchName?: string; fromBranch?: string; error?: string }> {
+  try {
+    const metadata = await getSessionMetadata(sessionName);
+    if (!metadata) {
+      return { success: false, error: 'Session metadata not found' };
+    }
+
+    const nextBranchName = branchName.trim();
+    if (!nextBranchName) {
+      return { success: false, error: 'Branch name cannot be empty.' };
+    }
+
+    const nextFromBranch = fromBranch.trim();
+    if (!nextFromBranch) {
+      return { success: false, error: 'Base branch cannot be empty.' };
+    }
+
+    const git = simpleGit(metadata.repoPath);
+
+    try {
+      await git.raw(['check-ref-format', '--branch', nextBranchName]);
+    } catch {
+      return { success: false, error: `Invalid branch name: "${nextBranchName}".` };
+    }
+
+    const branchSummary = await git.branchLocal();
+    if (!branchSummary.all.includes(nextFromBranch)) {
+      return { success: false, error: `Base branch "${nextFromBranch}" not found in repository.` };
+    }
+    if (branchSummary.all.includes(nextBranchName)) {
+      return { success: false, error: `Branch "${nextBranchName}" already exists.` };
+    }
+
+    await git.raw(['branch', nextBranchName, nextFromBranch]);
+
+    return {
+      success: true,
+      branchName: nextBranchName,
+      fromBranch: nextFromBranch,
+    };
+  } catch (e: unknown) {
+    console.error('Failed to create session base branch:', e);
     return { success: false, error: getErrorMessage(e) };
   }
 }
