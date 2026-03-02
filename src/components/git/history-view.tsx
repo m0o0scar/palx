@@ -19,6 +19,8 @@ import { BranchMenuOptions, BranchOperation, buildBranchContextMenuItems } from 
 import { BranchRowSelectModifiers, BranchTreeItem } from './branch-tree-item';
 import { CommitRowSelectModifiers } from './commit-row-select-modifiers';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { listSessions, SessionMetadata } from '@/app/actions/session';
+import { SESSIONS_UPDATED_EVENT, SESSIONS_UPDATED_STORAGE_KEY } from '@/lib/session-updates';
 
 
 const MIN_HISTORY_PANEL_HEIGHT = 100;
@@ -381,6 +383,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
   const [pendingScrollCommit, setPendingScrollCommit] = useState<string | null>(null);
   const [selectedBranchRefs, setSelectedBranchRefs] = useState<string[]>([]);
   const [branchSelectionAnchor, setBranchSelectionAnchor] = useState<string | null>(null);
+  const [sessionsForRepo, setSessionsForRepo] = useState<SessionMetadata[]>([]);
   const [isBranchPopoverOpen, setIsBranchPopoverOpen] = useState(false);
   const branchPopoverRef = useRef<HTMLDivElement>(null);
   const [scriptExecution, setScriptExecution] = useState<ScriptExecutionState>(DEFAULT_SCRIPT_EXECUTION);
@@ -896,6 +899,16 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
   }, [branchData?.branches, branchData?.remotes]);
 
   const selectedBranchSet = useMemo(() => new Set(selectedBranchRefs), [selectedBranchRefs]);
+  const sessionByBranchName = useMemo(() => {
+    const map = new Map<string, SessionMetadata>();
+    for (const session of sessionsForRepo) {
+      const branchName = session.branchName.trim();
+      // listSessions() is sorted by timestamp desc, so keep the first match.
+      if (!branchName || map.has(branchName)) continue;
+      map.set(branchName, session);
+    }
+    return map;
+  }, [sessionsForRepo]);
 
   const repository = useRepository(repoPath);
   const updateRepository = useUpdateRepository();
@@ -956,6 +969,49 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
       if (repository.visibilityMap) setVisibilityMap(repository.visibilityMap as VisibilityMap);
     }
   }, [repository]);
+
+  useEffect(() => {
+    let isDisposed = false;
+
+    const loadSessionsForRepo = async () => {
+      try {
+        const sessions = await listSessions();
+        if (isDisposed) return;
+
+        setSessionsForRepo(
+          sessions.filter((session) => (
+            session.repoPath === repoPath || session.worktreePath === repoPath
+          )),
+        );
+      } catch (error) {
+        console.error('Failed to load sessions for branch menu:', error);
+        if (!isDisposed) {
+          setSessionsForRepo([]);
+        }
+      }
+    };
+
+    const handleSessionsUpdated = () => {
+      void loadSessionsForRepo();
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === SESSIONS_UPDATED_STORAGE_KEY) {
+        void loadSessionsForRepo();
+      }
+    };
+
+    void loadSessionsForRepo();
+
+    window.addEventListener(SESSIONS_UPDATED_EVENT, handleSessionsUpdated);
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      isDisposed = true;
+      window.removeEventListener(SESSIONS_UPDATED_EVENT, handleSessionsUpdated);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [repoPath]);
 
   // Helper to save settings to the backend
   const saveSettings = useCallback((updates: Partial<Repository>) => {
@@ -2537,6 +2593,10 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
   }, []);
 
+  const handleOpenSession = useCallback((sessionName: string) => {
+    router.push(`/session/${encodeURIComponent(sessionName)}`);
+  }, [router]);
+
   const handleFetchFromRemote = async (remote: string) => {
     try {
       await runGitAction({
@@ -2946,6 +3006,15 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
       onPushToRemote: confirmPushToRemote,
       onPullFromRemote: confirmPullFromRemote,
     });
+    const associatedSession = options.isRemote ? null : sessionByBranchName.get(options.branchRef) ?? null;
+
+    if (associatedSession) {
+      menuItems.push({
+        label: 'Open Session',
+        icon: <i className="iconoir-arrow-right text-[14px]" aria-hidden="true" />,
+        onClick: () => handleOpenSession(associatedSession.sessionName),
+      });
+    }
 
     if (customBranchScripts.length > 0) {
       menuItems.push({
