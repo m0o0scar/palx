@@ -579,17 +579,17 @@ export async function startTtydProcess(): Promise<{ success: boolean; persistenc
   try {
     const { spawn, spawnSync } = await import('child_process');
 
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    // Clean up environment variables to prevent conflicts
-    // Specifically remove TURBOPACK which causes "Multiple bundler flags set" error
-    // when running next dev inside the terminal if the parent process has it set.
-    delete env.TURBOPACK;
-    delete env.PORT;
-    delete env.NODE_ENV;
-    delete env.COLORTERM;
-    delete env.FORCE_COLOR;
-    delete env.CLICOLOR;
-    delete env.CLICOLOR_FORCE;
+    // Omit variables that can cause conflicts for nested Next.js/terminal processes.
+    const {
+      TURBOPACK: _turbopack,
+      PORT: _port,
+      NODE_ENV: _nodeEnv,
+      COLORTERM: _colorTerm,
+      FORCE_COLOR: _forceColor,
+      CLICOLOR: _cliColor,
+      CLICOLOR_FORCE: _cliColorForce,
+      ...env
+    } = process.env;
 
     const workingDir = os.homedir();
     const isWindows = os.platform() === 'win32';
@@ -643,6 +643,7 @@ export async function startTtydProcess(): Promise<{ success: boolean; persistenc
       cwd: workingDir,
       env: {
         ...env,
+        NODE_ENV: 'development',
         TERM: 'xterm',
         NO_COLOR: '1',
         CLICOLOR: '0',

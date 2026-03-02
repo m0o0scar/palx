@@ -548,7 +548,7 @@ export function applyThemeToTerminalWindow(
 ): boolean {
   const ttydWindow = terminalWindow as TtydWindow | null | undefined;
   const term = ttydWindow?.term;
-  if (!term?.options) return false;
+  if (!ttydWindow || !term?.options) return false;
 
   term.options.theme = {
     ...(term.options.theme || {}),
