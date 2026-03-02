@@ -6,7 +6,7 @@ Palx is a local session manager for AI coding agents. It lets you pick a Git rep
 
 ## Major Features
 
-- **Isolated Sessions**: Uses `git worktree` to create clean, isolated environments for every task, with automatic per-session branch naming (`viba/<session>`).
+- **Isolated Sessions**: Uses `git worktree` to create clean, isolated environments for every task, with automatic per-session branch naming (`palx/<session>`).
 - **New Attempt Flow**: Start new sessions pre-filled with context (title, model, prompt, attachments) from any previous session to iterate quickly.
 - **Enhanced File Browser**:
     - **Grid & List Views**: Browse files with rich thumbnails or a compact list.

@@ -1073,7 +1073,7 @@ export async function prepareSessionWorktree(
     const timestamp = date.toISOString().replace(/[-:]/g, '').slice(0, 8) + '-' + date.getHours().toString().padStart(2, '0') + date.getMinutes().toString().padStart(2, '0');
     const sessionName = `${timestamp}-${shortUuid}`;
 
-    const branchName = `viba/${sessionName}`;
+    const branchName = `palx/${sessionName}`;
 
     const repoName = path.basename(repoPath);
     const parentDir = path.dirname(repoPath);
