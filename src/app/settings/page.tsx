@@ -10,7 +10,7 @@ type SessionInfo = {
   email: string | null;
 };
 
-export default function WhitelistPage() {
+export default function SettingsPage() {
   const router = useRouter();
   const [patterns, setPatterns] = useState<string[]>([]);
   const [newPattern, setNewPattern] = useState('');
@@ -131,9 +131,9 @@ export default function WhitelistPage() {
       <div className="mx-auto w-full max-w-3xl space-y-5">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">Email whitelist</h1>
+            <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">Settings</h1>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-              Manage allowed email patterns for Auth0 magic-link login.
+              Manage global application settings.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -149,6 +149,12 @@ export default function WhitelistPage() {
         </header>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Email whitelist</h2>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Manage allowed email patterns for Auth0 magic-link login.
+            </p>
+          </div>
           <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
             <p><strong>Examples:</strong> <code>*</code> allows all emails, <code>*@sea.com</code> allows sea.com mailboxes, and <code>alice@example.com</code> allows one address.</p>
             {!sessionInfo?.enabled ? (

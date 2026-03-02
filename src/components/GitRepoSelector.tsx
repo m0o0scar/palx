@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FolderGit2, Plus, X, ChevronRight, ChevronDown, FolderCog, Bot, Trash2, KeyRound, Settings, ExternalLink, CloudDownload, Search, Monitor, Sun, Moon, ListFilter, GitBranch as GitBranchIcon } from 'lucide-react';
+import { FolderGit2, Plus, X, ChevronRight, ChevronDown, FolderCog, Bot, Trash2, KeyRound, Settings, ExternalLink, CloudDownload, Search, Monitor, Sun, Moon, GitBranch as GitBranchIcon } from 'lucide-react';
 import FileBrowser from './FileBrowser';
 import {
   checkIsGitRepo,
@@ -1442,11 +1442,11 @@ export default function GitRepoSelector({
               </button>
               <button
                 className="btn btn-ghost btn-sm gap-2 text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
-                onClick={() => router.push('/whitelist')}
-                title="Manage Auth0 email whitelist"
+                onClick={() => router.push('/settings')}
+                title="Manage app settings"
               >
-                <ListFilter className="h-4 w-4" />
-                Whitelist
+                <Settings className="h-4 w-4" />
+                Settings
               </button>
               <button className="btn btn-primary btn-sm gap-2" onClick={openCloneRemoteDialog}>
                 <CloudDownload className="h-4 w-4" />
