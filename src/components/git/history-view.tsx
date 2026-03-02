@@ -21,6 +21,7 @@ import { CommitRowSelectModifiers } from './commit-row-select-modifiers';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { listSessions, SessionMetadata } from '@/app/actions/session';
 import { SESSIONS_UPDATED_EVENT, SESSIONS_UPDATED_STORAGE_KEY } from '@/lib/session-updates';
+import { buildPullAllPlan, buildPullAllToastPayload, parseTrackingUpstream } from './pull-all-utils';
 
 
 const MIN_HISTORY_PANEL_HEIGHT = 100;
@@ -60,15 +61,6 @@ function formatCommitMessageForDisplay(message: string): string {
     .replace(/\r\n/g, '\n')
     .replace(/\\r\\n/g, '\n')
     .replace(/\\n/g, '\n');
-}
-
-function parseTrackingUpstream(upstream: string): { remote: string; branch: string } | null {
-  const slashIndex = upstream.indexOf('/');
-  if (slashIndex <= 0 || slashIndex >= upstream.length - 1) return null;
-  return {
-    remote: upstream.slice(0, slashIndex),
-    branch: upstream.slice(slashIndex + 1),
-  };
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -2903,21 +2895,12 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
 
     return { upstream: tracking.upstream, ...parsed };
   }, [currentBranch, trackingInfoByBranch]);
-  const pullAllTargets = useMemo(() => {
-    const targets: Array<{ localBranch: string; remote: string; remoteBranch: string }> = [];
-    for (const localBranch of branchData?.branches ?? []) {
-      const upstream = trackingInfoByBranch?.[localBranch]?.upstream;
-      if (!upstream) continue;
-      const parsed = parseTrackingUpstream(upstream);
-      if (!parsed) continue;
-      targets.push({
-        localBranch,
-        remote: parsed.remote,
-        remoteBranch: parsed.branch,
-      });
-    }
-    return targets;
-  }, [branchData?.branches, trackingInfoByBranch]);
+  const pullAllPlan = useMemo(
+    () => buildPullAllPlan(branchData?.branches, trackingInfoByBranch),
+    [branchData?.branches, trackingInfoByBranch],
+  );
+  const pullAllTargets = pullAllPlan.targets;
+  const pullAllSkippedBranches = pullAllPlan.skippedBranches;
   const pullActionDisabledReason = useMemo(() => {
     if (isBranchesLoading) return 'Loading branches...';
     if (!currentBranch) return 'Not on a local branch';
@@ -2950,6 +2933,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
 
     setIsPullingAllBranches(true);
     const pulledBranches: string[] = [];
+    const failedBranches: Array<{ localBranch: string; message: string }> = [];
 
     try {
       for (const target of pullAllTargets) {
@@ -2967,26 +2951,18 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
           });
           pulledBranches.push(target.localBranch);
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-          const pulledSummary = pulledBranches.length > 0
-            ? `Pulled ${pulledBranches.length} branch${pulledBranches.length === 1 ? '' : 'es'} before failure.`
-            : 'No branches were updated.';
-
-          toast({
-            type: 'error',
-            title: `Pull All Failed on "${target.localBranch}"`,
-            description: `${errorMessage} ${pulledSummary}`,
-            duration: 12000,
+          failedBranches.push({
+            localBranch: target.localBranch,
+            message: error instanceof Error ? error.message : 'Unknown error',
           });
-          return;
         }
       }
 
-      toast({
-        type: 'success',
-        title: pulledBranches.length === 1 ? 'Pulled 1 Branch' : `Pulled ${pulledBranches.length} Branches`,
-        description: 'Updated all local branches that have tracking remote branches.',
-      });
+      toast(buildPullAllToastPayload({
+        pulledBranches,
+        failedBranches,
+        skippedBranches: pullAllSkippedBranches,
+      }));
     } finally {
       setIsPullingAllBranches(false);
     }
