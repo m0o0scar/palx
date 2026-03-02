@@ -562,8 +562,15 @@ export function SessionView({
     const [agentPaneRatio, setAgentPaneRatio] = useState(DEFAULT_AGENT_PANE_RATIO);
     const [isSplitResizing, setIsSplitResizing] = useState(false);
     const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(true);
+    const [isAgentTerminalThemeReady, setIsAgentTerminalThemeReady] = useState(false);
+    const [isFloatingTerminalThemeReady, setIsFloatingTerminalThemeReady] = useState(false);
 
     const [isTerminalMinimized, setIsTerminalMinimized] = useState(false);
+
+    useEffect(() => {
+        setIsAgentTerminalThemeReady(false);
+        setIsFloatingTerminalThemeReady(false);
+    }, [agentTerminalSrc, floatingTerminalSrc, sessionName]);
 
     const focusTerminalInputForSlot = useCallback((slot: TerminalBootstrapSlot): boolean => {
         const iframe = slot === 'agent' ? iframeRef.current : terminalRef.current;
@@ -600,8 +607,16 @@ export function SessionView({
     }, [focusTerminalInputForSlot]);
 
     const applyThemeToTerminalFrames = useCallback(() => {
-        applyThemeToTerminalIframe(iframeRef.current);
-        applyThemeToTerminalIframe(terminalRef.current);
+        const agentThemeApplied = applyThemeToTerminalIframe(iframeRef.current);
+        if (agentThemeApplied) {
+            setIsAgentTerminalThemeReady(true);
+        }
+
+        const terminalThemeApplied = applyThemeToTerminalIframe(terminalRef.current);
+        if (terminalThemeApplied) {
+            setIsFloatingTerminalThemeReady(true);
+        }
+
         maybeRestoreRecentTerminalFocusAfterThemeChange();
     }, [maybeRestoreRecentTerminalFocusAfterThemeChange]);
 
@@ -1639,6 +1654,7 @@ export function SessionView({
     const handleIframeLoad = () => {
         if (!iframeRef.current) return;
         const iframe = iframeRef.current;
+        setIsAgentTerminalThemeReady(false);
 
         // Safety check for Same-Origin to avoid errors if proxy isn't working
         try {
@@ -1717,7 +1733,10 @@ export function SessionView({
                     }
 
                     // Ensure terminal palette stays in sync with app/OS theme.
-                    applyThemeToTerminalWindow(win);
+                    const themeApplied = applyThemeToTerminalWindow(win);
+                    if (themeApplied) {
+                        setIsAgentTerminalThemeReady(true);
+                    }
 
                     const alreadyBootstrapped = hasTerminalBootstrapped('agent');
                     const shouldSkipResumeInjection = Boolean(isResume) && terminalPersistenceMode === 'tmux';
@@ -1904,6 +1923,10 @@ export function SessionView({
     const handleTerminalLoad = (iframeFromEvent?: HTMLIFrameElement | null) => {
         const iframe = iframeFromEvent || terminalRef.current || terminalBootstrapRef.current;
         if (!iframe) return;
+        const isVisibleTerminalFrame = iframe === terminalRef.current;
+        if (isVisibleTerminalFrame) {
+            setIsFloatingTerminalThemeReady(false);
+        }
         stopTerminalProcessMonitor();
         setIsTerminalForegroundProcessRunning(false);
 
@@ -1942,7 +1965,10 @@ export function SessionView({
                     });
 
                     // Ensure terminal palette stays in sync with app/OS theme.
-                    applyThemeToTerminalWindow(win);
+                    const themeApplied = applyThemeToTerminalWindow(win);
+                    if (themeApplied && isVisibleTerminalFrame) {
+                        setIsFloatingTerminalThemeReady(true);
+                    }
 
                     startTerminalProcessMonitor(iframe, term);
 
@@ -2374,7 +2400,7 @@ export function SessionView({
                     <iframe
                         ref={iframeRef}
                         src={agentTerminalSrc}
-                        className={`h-full w-full border-none ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
+                        className={`h-full w-full border-none transition-opacity duration-200 ${isAgentTerminalThemeReady ? 'opacity-100' : 'opacity-0 pointer-events-none'} ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
                         allow="clipboard-read; clipboard-write"
                         onFocus={() => {
                             recentTerminalBlurRef.current = null;
@@ -2585,7 +2611,7 @@ export function SessionView({
                                             <iframe
                                                 ref={terminalRef}
                                                 src={floatingTerminalSrc}
-                                                className={`h-full w-full border-none ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
+                                                className={`h-full w-full border-none transition-opacity duration-200 ${isFloatingTerminalThemeReady ? 'opacity-100' : 'opacity-0 pointer-events-none'} ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
                                                 allow="clipboard-read; clipboard-write"
                                                 onFocus={() => {
                                                     recentTerminalBlurRef.current = null;
