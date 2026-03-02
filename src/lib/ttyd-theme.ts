@@ -61,6 +61,9 @@ type StyleTarget = {
 type TerminalDocumentLike = {
   documentElement?: StyleTarget | null;
   body?: StyleTarget | null;
+  activeElement?: unknown;
+  hasFocus?: () => boolean;
+  querySelector?: (selector: string) => unknown;
   querySelectorAll?: (selector: string) => ArrayLike<StyleTarget>;
 };
 type TtydWindow = Window & {
@@ -92,6 +95,11 @@ const TERMINAL_BACKGROUND_SELECTORS = [
   '.xterm-rows',
 ];
 const TERMINAL_FOCUS_GAINED_SEQUENCE = '\x1b[I';
+
+type FocusableTerminalElement = {
+  blur?: () => void;
+  focus?: ((options?: { preventScroll?: boolean }) => void) | (() => void);
+};
 
 function applyElementBackgroundColor(
   element: StyleTarget | null | undefined,
@@ -181,6 +189,40 @@ function notifyFocusReportingTerminalProcess(
   }
 }
 
+function nudgeFocusedTerminalInput(
+  terminalDocument: TerminalDocumentLike | null | undefined,
+): boolean {
+  if (!terminalDocument || typeof terminalDocument.querySelector !== 'function') return false;
+
+  const inputElement = terminalDocument.querySelector('textarea.xterm-helper-textarea') as FocusableTerminalElement | null;
+  if (!inputElement || typeof inputElement.focus !== 'function') return false;
+
+  const activeElement = terminalDocument.activeElement;
+  const isInputFocused = activeElement === inputElement;
+  const documentHasFocus = typeof terminalDocument.hasFocus === 'function'
+    ? terminalDocument.hasFocus()
+    : isInputFocused;
+  if (!documentHasFocus || !isInputFocused) return false;
+
+  try {
+    inputElement.blur?.();
+  } catch {
+    // Ignore focus lifecycle edge-cases from embedded browsers.
+  }
+
+  try {
+    inputElement.focus({ preventScroll: true });
+  } catch {
+    try {
+      inputElement.focus();
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function normalizeThemeMode(value: string | null | undefined): ThemeMode {
   if (value === 'light' || value === 'dark' || value === 'auto') {
     return value;
@@ -229,7 +271,10 @@ export function applyThemeToTerminalWindow(
 
   applyThemeToTerminalDocument(ttydWindow.document, theme);
   scheduleTerminalRefresh(term, ttydWindow.requestAnimationFrame?.bind(ttydWindow));
-  notifyFocusReportingTerminalProcess(term);
+  const nudgedWithRealFocusEvent = nudgeFocusedTerminalInput(ttydWindow.document);
+  if (!nudgedWithRealFocusEvent) {
+    notifyFocusReportingTerminalProcess(term);
+  }
 
   return true;
 }

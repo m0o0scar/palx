@@ -209,4 +209,50 @@ describe('applyThemeToTerminalWindow', () => {
     assert.strictEqual(applyThemeToTerminalWindow(terminalWindow, TERMINAL_THEME_LIGHT), true);
     assert.deepStrictEqual(triggerCalls, []);
   });
+
+  it('nudges focused xterm input to force a real focus lifecycle refresh', () => {
+    let blurCalls = 0;
+    let focusCalls = 0;
+    const triggerCalls: Array<[string, boolean | undefined]> = [];
+
+    const textarea = {
+      blur: () => {
+        blurCalls += 1;
+      },
+      focus: () => {
+        focusCalls += 1;
+      },
+    };
+
+    const terminalWindow = {
+      document: {
+        activeElement: textarea,
+        hasFocus: () => true,
+        querySelector: (selector: string) => {
+          if (selector === 'textarea.xterm-helper-textarea') return textarea;
+          return null;
+        },
+      },
+      term: {
+        options: {
+          theme: {},
+        },
+        _core: {
+          coreService: {
+            decPrivateModes: {
+              sendFocus: true,
+            },
+            triggerDataEvent: (data: string, wasUserInput?: boolean) => {
+              triggerCalls.push([data, wasUserInput]);
+            },
+          },
+        },
+      },
+    } as unknown as Window;
+
+    assert.strictEqual(applyThemeToTerminalWindow(terminalWindow, TERMINAL_THEME_DARK), true);
+    assert.strictEqual(blurCalls, 1);
+    assert.strictEqual(focusCalls, 1);
+    assert.deepStrictEqual(triggerCalls, []);
+  });
 });

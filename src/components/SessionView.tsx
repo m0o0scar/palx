@@ -237,6 +237,7 @@ export function SessionView({
     const previewAddressInputRef = useRef<HTMLInputElement>(null);
     const splitContainerRef = useRef<HTMLDivElement>(null);
     const splitResizeRef = useRef({ startX: 0, startRatio: DEFAULT_AGENT_PANE_RATIO });
+    const recentTerminalBlurRef = useRef<{ slot: TerminalBootstrapSlot; at: number } | null>(null);
     const agentFrameLinkCleanupRef = useRef<(() => void) | null>(null);
     const terminalFrameLinkCleanupRef = useRef<(() => void) | null>(null);
     const terminalProcessMonitorCleanupRef = useRef<(() => void) | null>(null);
@@ -562,10 +563,45 @@ export function SessionView({
 
     const [isTerminalMinimized, setIsTerminalMinimized] = useState(false);
 
+    const focusTerminalInputForSlot = useCallback((slot: TerminalBootstrapSlot): boolean => {
+        const iframe = slot === 'agent' ? iframeRef.current : terminalRef.current;
+        if (!iframe) return false;
+        try {
+            const frameWindow = iframe.contentWindow;
+            const textarea = iframe.contentDocument?.querySelector('textarea.xterm-helper-textarea') as HTMLElement | null;
+            frameWindow?.focus();
+            if (!textarea || typeof textarea.focus !== 'function') return false;
+            try {
+                textarea.focus({ preventScroll: true });
+            } catch {
+                textarea.focus();
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    }, []);
+
+    const maybeRestoreRecentTerminalFocusAfterThemeChange = useCallback(() => {
+        const recentBlur = recentTerminalBlurRef.current;
+        if (!recentBlur) return;
+        if (Date.now() - recentBlur.at > 1500) return;
+
+        const preferredSlot = recentBlur.slot;
+        window.setTimeout(() => {
+            const restored = focusTerminalInputForSlot(preferredSlot);
+            if (!restored) {
+                focusTerminalInputForSlot(preferredSlot === 'agent' ? 'terminal' : 'agent');
+            }
+            recentTerminalBlurRef.current = null;
+        }, 0);
+    }, [focusTerminalInputForSlot]);
+
     const applyThemeToTerminalFrames = useCallback(() => {
         applyThemeToTerminalIframe(iframeRef.current);
         applyThemeToTerminalIframe(terminalRef.current);
-    }, []);
+        maybeRestoreRecentTerminalFocusAfterThemeChange();
+    }, [maybeRestoreRecentTerminalFocusAfterThemeChange]);
 
     useEffect(() => {
         const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -2335,6 +2371,12 @@ export function SessionView({
                         src={agentTerminalSrc}
                         className={`h-full w-full border-none ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
                         allow="clipboard-read; clipboard-write"
+                        onFocus={() => {
+                            recentTerminalBlurRef.current = null;
+                        }}
+                        onBlur={() => {
+                            recentTerminalBlurRef.current = { slot: 'agent', at: Date.now() };
+                        }}
                         onLoad={handleIframeLoad}
                     />
                 </div>
@@ -2540,6 +2582,12 @@ export function SessionView({
                                                 src={floatingTerminalSrc}
                                                 className={`h-full w-full border-none ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
                                                 allow="clipboard-read; clipboard-write"
+                                                onFocus={() => {
+                                                    recentTerminalBlurRef.current = null;
+                                                }}
+                                                onBlur={() => {
+                                                    recentTerminalBlurRef.current = { slot: 'terminal', at: Date.now() };
+                                                }}
                                                 onLoad={(event) => handleTerminalLoad(event.currentTarget)}
                                             />
                                         </div>
