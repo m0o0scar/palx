@@ -133,9 +133,7 @@ describe('applyThemeToTerminalWindow', () => {
     assert.strictEqual(applyThemeToTerminalWindow(terminalWindow, TERMINAL_THEME_LIGHT), true);
   });
 
-  it('installs monochrome ANSI handlers once to suppress runtime color sequences', () => {
-    const csiHandlers: Array<{ final: string; callback: (params: unknown[], collect?: string) => boolean }> = [];
-    const oscHandlers: Array<{ id: number; callback: (data: string) => boolean }> = [];
+  it('installs a one-time ANSI write filter that strips only background styles', () => {
     const writes: string[] = [];
     const resizeCalls: Array<[number, number]> = [];
 
@@ -152,39 +150,27 @@ describe('applyThemeToTerminalWindow', () => {
         write: (data: string) => {
           writes.push(data);
         },
-        parser: {
-          registerCsiHandler: (
-            id: { final: string },
-            callback: (params: unknown[], collect?: string) => boolean,
-          ) => {
-            csiHandlers.push({ final: id.final, callback });
-            return { dispose: () => undefined };
-          },
-          registerOscHandler: (
-            id: number,
-            callback: (data: string) => boolean,
-          ) => {
-            oscHandlers.push({ id, callback });
-            return { dispose: () => undefined };
-          },
-        },
       },
     } as unknown as Window;
 
     assert.strictEqual(applyThemeToTerminalWindow(terminalWindow, TERMINAL_THEME_DARK), true);
     assert.strictEqual(applyThemeToTerminalWindow(terminalWindow, TERMINAL_THEME_LIGHT), true);
-
     assert.deepStrictEqual(writes, ['\x1b[0m']);
     assert.deepStrictEqual(resizeCalls, [[120, 29], [120, 30]]);
-    assert.strictEqual(csiHandlers.length, 1);
-    assert.strictEqual(csiHandlers[0].final, 'm');
-    assert.strictEqual(csiHandlers[0].callback([]), true);
-    assert.strictEqual(oscHandlers.length, 12);
-    assert.deepStrictEqual(
-      oscHandlers.map((entry) => entry.id),
-      [4, 10, 11, 12, 17, 19, 104, 110, 111, 112, 117, 119],
-    );
-    assert.strictEqual(oscHandlers[0].callback('ignored'), true);
+
+    const term = (terminalWindow as unknown as { term: { write: (data: string) => void } }).term;
+    term.write('\x1b[31;47mhello\x1b[0m');
+    assert.strictEqual(writes[1], '\x1b[31mhello\x1b[0m');
+
+    term.write('\x1b[48;2;10;20;30mBG\x1b[38;2;1;2;3mFG');
+    assert.strictEqual(writes[2], 'BG\x1b[38;2;1;2;3mFG');
+
+    term.write('\x1b]11;#ffffff\x07plain');
+    assert.strictEqual(writes[3], 'plain');
+
+    term.write('\x1b[31;47');
+    term.write('mX');
+    assert.strictEqual(writes[4], '\x1b[31mX');
   });
 
   it('defers repaint until rows are ready to avoid blank initial render', () => {

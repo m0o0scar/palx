@@ -61,24 +61,11 @@ type TerminalDocumentLike = {
   querySelector?: (selector: string) => unknown;
   querySelectorAll?: (selector: string) => ArrayLike<StyleTarget>;
 };
-type TerminalDisposable = {
-  dispose?: () => void;
-};
-type TerminalParserLike = {
-  registerCsiHandler?: (
-    id: { final: string; intermediates?: string },
-    callback: (params: unknown[], collect?: string) => boolean,
-  ) => TerminalDisposable | void;
-  registerOscHandler?: (
-    ident: number,
-    callback: (data: string) => boolean,
-  ) => TerminalDisposable | void;
-};
 type TerminalWithMonochromeFilterState = {
-  parser?: TerminalParserLike;
   write?: (data: string, callback?: () => void) => void;
   __vibaMonochromeFilterInstalled?: boolean;
-  __vibaMonochromeFilterDisposables?: TerminalDisposable[];
+  __vibaMonochromeFilterCarry?: string;
+  __vibaMonochromeFilterOriginalWrite?: (data: string, callback?: () => void) => void;
 };
 type TtydWindow = Window & {
   document?: TerminalDocumentLike;
@@ -101,10 +88,10 @@ type TtydWindow = Window & {
     resize?: (cols: number, rows: number) => void;
     refresh?: (start: number, end: number) => void;
     clearTextureAtlas?: () => void;
-    parser?: TerminalParserLike;
     write?: (data: string, callback?: () => void) => void;
     __vibaMonochromeFilterInstalled?: boolean;
-    __vibaMonochromeFilterDisposables?: TerminalDisposable[];
+    __vibaMonochromeFilterCarry?: string;
+    __vibaMonochromeFilterOriginalWrite?: (data: string, callback?: () => void) => void;
   };
 };
 
@@ -115,7 +102,7 @@ const TERMINAL_BACKGROUND_SELECTORS = [
   '.xterm-rows',
 ];
 const TERMINAL_FOCUS_GAINED_SEQUENCE = '\x1b[I';
-const MONOCHROME_OSC_STYLE_IDS = [4, 10, 11, 12, 17, 19, 104, 110, 111, 112, 117, 119];
+const BACKGROUND_OSC_STYLE_IDS = new Set([11, 17, 111, 117]);
 
 type FocusableTerminalElement = {
   blur?: () => void;
@@ -196,65 +183,238 @@ function scheduleTerminalRefresh(
   });
 }
 
+function isCsiFinalByte(character: string): boolean {
+  const charCode = character.charCodeAt(0);
+  return charCode >= 0x40 && charCode <= 0x7e;
+}
+
+function findCsiFinalByteIndex(input: string, startIndex: number): number {
+  for (let index = startIndex; index < input.length; index += 1) {
+    if (isCsiFinalByte(input[index])) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+type OscTerminator = {
+  contentEndIndex: number;
+  sequenceEndIndex: number;
+};
+
+function findOscTerminator(
+  input: string,
+  startIndex: number,
+): OscTerminator | null {
+  for (let index = startIndex; index < input.length; index += 1) {
+    if (input[index] === '\x07') {
+      return {
+        contentEndIndex: index,
+        sequenceEndIndex: index + 1,
+      };
+    }
+    if (input[index] === '\x1b' && input[index + 1] === '\\') {
+      return {
+        contentEndIndex: index,
+        sequenceEndIndex: index + 2,
+      };
+    }
+  }
+  return null;
+}
+
+function parseOscIdentifier(oscContent: string): number | null {
+  const separatorIndex = oscContent.indexOf(';');
+  const identifierText = (separatorIndex >= 0 ? oscContent.slice(0, separatorIndex) : oscContent).trim();
+  if (!identifierText || !/^\d+$/.test(identifierText)) return null;
+  const identifier = Number.parseInt(identifierText, 10);
+  return Number.isNaN(identifier) ? null : identifier;
+}
+
+type SanitizedSgrParameters = {
+  changed: boolean;
+  parameters: string;
+};
+
+function sanitizeSgrParameters(parameterText: string): SanitizedSgrParameters {
+  if (parameterText.length === 0) {
+    return { changed: false, parameters: parameterText };
+  }
+
+  const sourceParameters = parameterText.split(';');
+  const sanitizedParameters: string[] = [];
+  let changed = false;
+
+  for (let index = 0; index < sourceParameters.length; index += 1) {
+    const token = sourceParameters[index];
+    const parsed = token.length === 0 ? 0 : Number.parseInt(token, 10);
+    if (token.length !== 0 && Number.isNaN(parsed)) {
+      sanitizedParameters.push(token);
+      continue;
+    }
+
+    // Strip reverse-video toggles to avoid foreground/background swapping.
+    if (parsed === 7) {
+      changed = true;
+      continue;
+    }
+
+    // Strip 8/16-color and default background controls.
+    if (
+      parsed === 49
+      || (parsed >= 40 && parsed <= 47)
+      || (parsed >= 100 && parsed <= 107)
+    ) {
+      changed = true;
+      continue;
+    }
+
+    // Strip extended background color controls.
+    if (parsed === 48) {
+      changed = true;
+      const modeToken = sourceParameters[index + 1];
+      const mode = modeToken === undefined || modeToken.length === 0
+        ? Number.NaN
+        : Number.parseInt(modeToken, 10);
+      if (mode === 5) {
+        index += 2;
+      } else if (mode === 2) {
+        index += 4;
+      } else if (modeToken !== undefined) {
+        index += 1;
+      }
+      continue;
+    }
+
+    sanitizedParameters.push(token);
+  }
+
+  if (!changed) {
+    return { changed: false, parameters: parameterText };
+  }
+
+  return {
+    changed: true,
+    parameters: sanitizedParameters.join(';'),
+  };
+}
+
+type SanitizedAnsiChunk = {
+  output: string;
+  carry: string;
+};
+
+function sanitizeAnsiBackgroundSequences(chunk: string): SanitizedAnsiChunk {
+  if (chunk.length === 0) {
+    return { output: '', carry: '' };
+  }
+
+  let output = '';
+  let index = 0;
+
+  while (index < chunk.length) {
+    const character = chunk[index];
+    if (character !== '\x1b') {
+      output += character;
+      index += 1;
+      continue;
+    }
+
+    const nextCharacter = chunk[index + 1];
+    if (!nextCharacter) {
+      return { output, carry: chunk.slice(index) };
+    }
+
+    if (nextCharacter === '[') {
+      const finalIndex = findCsiFinalByteIndex(chunk, index + 2);
+      if (finalIndex < 0) {
+        return { output, carry: chunk.slice(index) };
+      }
+
+      const finalCharacter = chunk[finalIndex];
+      if (finalCharacter === 'm') {
+        const rawParameters = chunk.slice(index + 2, finalIndex);
+        const sanitizedParameters = sanitizeSgrParameters(rawParameters);
+        if (!sanitizedParameters.changed) {
+          output += chunk.slice(index, finalIndex + 1);
+        } else if (sanitizedParameters.parameters.length > 0) {
+          output += `\x1b[${sanitizedParameters.parameters}m`;
+        }
+      } else {
+        output += chunk.slice(index, finalIndex + 1);
+      }
+
+      index = finalIndex + 1;
+      continue;
+    }
+
+    if (nextCharacter === ']') {
+      const terminator = findOscTerminator(chunk, index + 2);
+      if (!terminator) {
+        return { output, carry: chunk.slice(index) };
+      }
+
+      const oscContent = chunk.slice(index + 2, terminator.contentEndIndex);
+      const oscIdentifier = parseOscIdentifier(oscContent);
+      if (oscIdentifier === null || !BACKGROUND_OSC_STYLE_IDS.has(oscIdentifier)) {
+        output += chunk.slice(index, terminator.sequenceEndIndex);
+      }
+
+      index = terminator.sequenceEndIndex;
+      continue;
+    }
+
+    output += character;
+    index += 1;
+  }
+
+  return { output, carry: '' };
+}
+
 function installMonochromeAnsiFilter(
   term: NonNullable<TtydWindow['term']>,
 ): void {
   const terminal = term as NonNullable<TtydWindow['term']> & TerminalWithMonochromeFilterState;
   if (terminal.__vibaMonochromeFilterInstalled) return;
+  if (typeof terminal.write !== 'function') return;
   terminal.__vibaMonochromeFilterInstalled = true;
+  const originalWrite = terminal.write.bind(terminal);
+  terminal.__vibaMonochromeFilterOriginalWrite = originalWrite;
+  terminal.__vibaMonochromeFilterCarry = '';
 
   // Clear any active style state so subsequent plain text starts from defaults.
   try {
-    terminal.write?.('\x1b[0m');
+    originalWrite('\x1b[0m');
   } catch {
     // Ignore write failures from renderer/setup races.
   }
 
-  const parser = terminal.parser;
-  if (!parser) return;
-
-  const disposables: TerminalDisposable[] = [];
-
-  if (typeof parser.registerCsiHandler === 'function') {
-    try {
-      const disposable = parser.registerCsiHandler({ final: 'm' }, () => true);
-      if (disposable) {
-        disposables.push(disposable);
-      }
-    } catch {
-      // Ignore parser API differences across xterm versions.
+  terminal.write = (chunk: string, callback?: () => void): void => {
+    const normalizedChunk = typeof chunk === 'string' ? chunk : String(chunk ?? '');
+    const nextChunk = terminal.__vibaMonochromeFilterCarry
+      ? `${terminal.__vibaMonochromeFilterCarry}${normalizedChunk}`
+      : normalizedChunk;
+    const sanitized = sanitizeAnsiBackgroundSequences(nextChunk);
+    terminal.__vibaMonochromeFilterCarry = sanitized.carry;
+    if (sanitized.output.length > 0) {
+      originalWrite(sanitized.output, callback);
+      return;
     }
-  }
+    callback?.();
+  };
 
-  if (typeof parser.registerOscHandler === 'function') {
-    for (const oscId of MONOCHROME_OSC_STYLE_IDS) {
-      try {
-        const disposable = parser.registerOscHandler(oscId, () => true);
-        if (disposable) {
-          disposables.push(disposable);
-        }
-      } catch {
-        // Ignore parser API differences across xterm versions.
-      }
-    }
-  }
-
-  if (disposables.length > 0) {
-    terminal.__vibaMonochromeFilterDisposables = disposables;
-
-    // Trigger a repaint from the running TUI so existing colored blocks are redrawn as plain text.
-    if (typeof terminal.resize === 'function') {
-      const cols = typeof terminal.cols === 'number' ? terminal.cols : 0;
-      const rows = typeof terminal.rows === 'number' ? terminal.rows : 0;
-      if (cols > 0 && rows > 0) {
-        const nudgedRows = rows > 2 ? rows - 1 : rows + 1;
-        if (nudgedRows > 0 && nudgedRows !== rows) {
-          try {
-            terminal.resize(cols, nudgedRows);
-            terminal.resize(cols, rows);
-          } catch {
-            // Ignore resize races while ttyd is still syncing dimensions.
-          }
+  // Trigger a repaint from the running TUI so existing colored blocks are redrawn without backgrounds.
+  if (typeof terminal.resize === 'function') {
+    const cols = typeof terminal.cols === 'number' ? terminal.cols : 0;
+    const rows = typeof terminal.rows === 'number' ? terminal.rows : 0;
+    if (cols > 0 && rows > 0) {
+      const nudgedRows = rows > 2 ? rows - 1 : rows + 1;
+      if (nudgedRows > 0 && nudgedRows !== rows) {
+        try {
+          terminal.resize(cols, nudgedRows);
+          terminal.resize(cols, rows);
+        } catch {
+          // Ignore resize races while ttyd is still syncing dimensions.
         }
       }
     }
