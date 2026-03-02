@@ -3,6 +3,7 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 // import { useRouter } from 'next/navigation';
 import {
+    createSessionBaseBranch,
     deleteSessionInBackground,
     getSessionDivergence,
     listSessionBaseBranches,
@@ -20,6 +21,7 @@ import { getBaseName, isWindowsAbsolutePath } from '@/lib/path';
 import { notifySessionsUpdated } from '@/lib/session-updates';
 import { buildTtydTerminalSrc } from '@/lib/terminal-session';
 import { normalizePreviewUrl } from '@/lib/url';
+import { sanitizeBranchName } from '@/lib/utils';
 import { useTerminalLink, type TerminalWindow } from '@/hooks/useTerminalLink';
 import { quoteShellArg } from '@/lib/shell';
 
@@ -576,10 +578,15 @@ export function SessionView({
     const [lastFileBrowserPath, setLastFileBrowserPath] = useState(worktree || repo);
     const [isInsertingFilePaths, setIsInsertingFilePaths] = useState(false);
     const [currentBaseBranch, setCurrentBaseBranch] = useState(baseBranch?.trim() || '');
+    const [mainWorktreeBranch, setMainWorktreeBranch] = useState('');
     const [baseBranchOptions, setBaseBranchOptions] = useState<string[]>([]);
     const [isLoadingBaseBranches, setIsLoadingBaseBranches] = useState(false);
     const isLoadingBaseBranchesRef = useRef(false);
     const [isUpdatingBaseBranch, setIsUpdatingBaseBranch] = useState(false);
+    const [isCreateBaseBranchDialogOpen, setIsCreateBaseBranchDialogOpen] = useState(false);
+    const [newBaseBranchName, setNewBaseBranchName] = useState('');
+    const [newBaseBranchFrom, setNewBaseBranchFrom] = useState('');
+    const [isCreatingBaseBranch, setIsCreatingBaseBranch] = useState(false);
     const [divergence, setDivergence] = useState({ ahead: 0, behind: 0 });
     const [isPreviewVisible, setIsPreviewVisible] = useState(true);
     const [previewInputUrl, setPreviewInputUrl] = useState('');
@@ -1077,6 +1084,7 @@ export function SessionView({
             if (result.success) {
                 setBaseBranchOptions(result.branches ?? []);
                 setCurrentBaseBranch(result.baseBranch?.trim() || '');
+                setMainWorktreeBranch(result.mainWorktreeBranch?.trim() || '');
             } else if (result.error) {
                 setFeedback(`Failed to load branches: ${result.error}`);
             }
@@ -1229,6 +1237,65 @@ export function SessionView({
     const handleRebase = () => {
         setIsRebaseDropdownOpen(!isRebaseDropdownOpen);
     };
+
+    const createBranchFromOptions = useMemo(() => {
+        const candidates = [
+            mainWorktreeBranch,
+            currentBaseBranch,
+            ...baseBranchOptions,
+        ]
+            .map((value) => value.trim())
+            .filter(Boolean);
+
+        return Array.from(new Set(candidates)).sort((a, b) => a.localeCompare(b));
+    }, [baseBranchOptions, currentBaseBranch, mainWorktreeBranch]);
+
+    const closeCreateBaseBranchDialog = useCallback(() => {
+        if (isCreatingBaseBranch) return;
+        setIsCreateBaseBranchDialogOpen(false);
+        setNewBaseBranchName('');
+        setNewBaseBranchFrom('');
+    }, [isCreatingBaseBranch]);
+
+    const openCreateBaseBranchDialog = useCallback(() => {
+        const defaultFromBranch = mainWorktreeBranch.trim()
+            || currentBaseBranch.trim()
+            || createBranchFromOptions[0]
+            || '';
+        setIsRebaseDropdownOpen(false);
+        setNewBaseBranchName('');
+        setNewBaseBranchFrom(defaultFromBranch);
+        setIsCreateBaseBranchDialogOpen(true);
+    }, [createBranchFromOptions, currentBaseBranch, mainWorktreeBranch]);
+
+    const handleCreateBaseBranch = useCallback(async () => {
+        if (!sessionName) return;
+
+        const targetBranchName = newBaseBranchName.trim();
+        const sourceBranchName = newBaseBranchFrom.trim();
+        if (!targetBranchName || !sourceBranchName) return;
+
+        setIsCreatingBaseBranch(true);
+        setFeedback(`Creating branch ${targetBranchName} from ${sourceBranchName}...`);
+
+        try {
+            const result = await createSessionBaseBranch(sessionName, targetBranchName, sourceBranchName);
+            if (result.success && result.branchName && result.fromBranch) {
+                setFeedback(`Created branch ${result.branchName} from ${result.fromBranch}`);
+                setIsCreateBaseBranchDialogOpen(false);
+                setNewBaseBranchName('');
+                setNewBaseBranchFrom('');
+                await loadBaseBranchOptions();
+            } else {
+                setFeedback(`Failed to create branch: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Failed to create base branch:', error);
+            setFeedback('Failed to create branch');
+        } finally {
+            setIsCreatingBaseBranch(false);
+        }
+    }, [loadBaseBranchOptions, newBaseBranchFrom, newBaseBranchName, sessionName]);
 
     const loadPreviewViaProxy = useCallback(async (rawUrl: string, openPreview: boolean): Promise<boolean> => {
         const normalized = normalizePreviewUrl(rawUrl);
@@ -2097,6 +2164,11 @@ export function SessionView({
                                         )}
                                         <div className="divider my-1 opacity-50 dark:before:bg-[#30363d] dark:after:bg-[#30363d]"></div>
                                         <li>
+                                            <button onClick={openCreateBaseBranchDialog} className="text-[10px] justify-center opacity-70 hover:opacity-100">
+                                                Create New Branch...
+                                            </button>
+                                        </li>
+                                        <li>
                                             <button onClick={() => void loadBaseBranchOptions()} className="text-[10px] justify-center opacity-70 hover:opacity-100">
                                                 Refresh Branches
                                             </button>
@@ -2162,6 +2234,74 @@ export function SessionView({
 
                 </div>
             </div>
+
+            {isCreateBaseBranchDialogOpen && (
+                <dialog className="modal modal-open">
+                    <div className="modal-box max-w-lg">
+                        <h3 className="font-bold text-lg">Create New Branch</h3>
+                        <p className="py-2 text-sm opacity-70">
+                            Create a new branch and refresh the branch list for merge/rebase actions.
+                        </p>
+
+                        <div className="space-y-4 pt-2">
+                            <div className="form-control">
+                                <label className="label">
+                                    <span className="label-text">Branch Name</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    className="input input-bordered w-full"
+                                    value={newBaseBranchName}
+                                    onChange={(e) => setNewBaseBranchName(sanitizeBranchName(e.target.value))}
+                                    placeholder="feature/my-new-branch"
+                                    disabled={isCreatingBaseBranch}
+                                    autoFocus
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && newBaseBranchName.trim() && newBaseBranchFrom.trim() && !isCreatingBaseBranch) {
+                                            e.preventDefault();
+                                            void handleCreateBaseBranch();
+                                        }
+                                    }}
+                                />
+                            </div>
+
+                            <div className="form-control">
+                                <label className="label">
+                                    <span className="label-text">Base Branch</span>
+                                </label>
+                                <select
+                                    className="select select-bordered w-full"
+                                    value={newBaseBranchFrom}
+                                    onChange={(e) => setNewBaseBranchFrom(e.target.value)}
+                                    disabled={isCreatingBaseBranch || createBranchFromOptions.length === 0}
+                                >
+                                    {createBranchFromOptions.map((branchOption) => (
+                                        <option key={branchOption} value={branchOption}>
+                                            {branchOption}
+                                            {branchOption === mainWorktreeBranch ? ' (Checked Out)' : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="modal-action">
+                            <button className="btn" onClick={closeCreateBaseBranchDialog} disabled={isCreatingBaseBranch}>Cancel</button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => void handleCreateBaseBranch()}
+                                disabled={!newBaseBranchName.trim() || !newBaseBranchFrom.trim() || isCreatingBaseBranch}
+                            >
+                                {isCreatingBaseBranch && <span className="loading loading-spinner loading-xs"></span>}
+                                Create Branch
+                            </button>
+                        </div>
+                    </div>
+                    <form method="dialog" className="modal-backdrop">
+                        <button onClick={closeCreateBaseBranchDialog}>close</button>
+                    </form>
+                </dialog>
+            )}
 
             <div
                 ref={splitContainerRef}
