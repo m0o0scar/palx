@@ -75,7 +75,11 @@ export function getBrowserOpenCommand(url, platform = process.platform) {
   return null;
 }
 
-export function shouldAutoOpenBrowser(env = process.env) {
+export function shouldAutoOpenBrowser(env = process.env, mode = "start") {
+  if (mode === "dev") {
+    return false;
+  }
+
   const browserSetting = env.BROWSER?.trim().toLowerCase();
   if (browserSetting === "none" || browserSetting === "false" || browserSetting === "0") {
     return false;
@@ -402,8 +406,8 @@ function openInDefaultBrowser(url) {
   }
 }
 
-async function autoOpenBrowserWhenReady(url, port) {
-  if (!shouldAutoOpenBrowser()) {
+async function autoOpenBrowserWhenReady(url, port, mode = "start") {
+  if (!shouldAutoOpenBrowser(process.env, mode)) {
     return;
   }
 
@@ -449,7 +453,7 @@ async function main() {
       const url = `http://localhost:${port}`;
       console.log(`Starting viba in development mode on ${url}`);
       const nextPromise = runNext(["dev", "--webpack", "-p", String(port)]);
-      void autoOpenBrowserWhenReady(url, port);
+      void autoOpenBrowserWhenReady(url, port, options.mode);
       process.exit(await nextPromise);
     }
 
@@ -457,7 +461,7 @@ async function main() {
     const url = `http://localhost:${port}`;
     console.log(`Starting viba on ${url}`);
     const nextPromise = runNext(["start", "-p", String(port)]);
-    void autoOpenBrowserWhenReady(url, port);
+    void autoOpenBrowserWhenReady(url, port, options.mode);
     process.exit(await nextPromise);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

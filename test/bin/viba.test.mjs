@@ -137,6 +137,10 @@ describe('shouldAutoOpenBrowser', () => {
     assert.strictEqual(shouldAutoOpenBrowser({}), true);
   });
 
+  it('disables in dev mode by default', () => {
+    assert.strictEqual(shouldAutoOpenBrowser({}, 'dev'), false);
+  });
+
   it('disables when BROWSER is none', () => {
     assert.strictEqual(shouldAutoOpenBrowser({ BROWSER: 'none' }), false);
   });

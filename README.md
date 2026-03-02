@@ -48,6 +48,7 @@ npm run dev
 ```
 
 The app picks an available port starting at `3200` in development.
+Development mode does not auto-open a browser tab; open the printed local URL manually.
 
 Open the local URL printed in your terminal, then:
 
@@ -62,7 +63,7 @@ npx viba-cli
 ```
 
 This starts Viba on an available local port (default `3200`).  
-By default, the launcher opens `http://localhost:<port>` in your default browser once the server is ready.  
+By default, the non-dev launcher opens `http://localhost:<port>` in your default browser once the server is ready.  
 Set `BROWSER=none` to disable auto-open.
 
 You can also pass options:
