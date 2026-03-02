@@ -36,6 +36,12 @@ type AgentCliConfig = {
   installCommand: string;
 };
 
+type ResolveRepoCardIconResult = {
+  success: boolean;
+  iconPath: string | null;
+  error?: string;
+};
+
 const AGENT_CLI_CONFIG: Record<SupportedAgentCli, AgentCliConfig> = {
   codex: {
     executable: 'codex',
@@ -79,10 +85,286 @@ const TTYD_MONOCHROME_THEME = {
   brightWhite: '#dce3ea',
 } as const;
 
+const REPO_CARD_ICON_EXTENSIONS = new Set([
+  '.avif',
+  '.bmp',
+  '.gif',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.svg',
+  '.webp',
+]);
+
+const REPO_CARD_ICON_CANDIDATE_RELATIVE_PATHS = [
+  'src/app/icon.png',
+  'src/app/icon.jpg',
+  'src/app/icon.jpeg',
+  'src/app/icon.ico',
+  'src/app/icon.svg',
+  'src/app/favicon.ico',
+  'app/icon.png',
+  'app/icon.jpg',
+  'app/icon.jpeg',
+  'app/icon.ico',
+  'app/icon.svg',
+  'app/favicon.ico',
+  'public/favicon.ico',
+  'public/icon.png',
+  'public/icon.jpg',
+  'public/icon.jpeg',
+  'public/icon.ico',
+  'public/icon.svg',
+  'public/logo.png',
+  'public/logo.jpg',
+  'public/logo.jpeg',
+  'public/logo.svg',
+  'public/apple-touch-icon.png',
+  'favicon.ico',
+  'icon.png',
+  'icon.svg',
+  'logo.png',
+  'logo.svg',
+] as const;
+
+const REPO_CARD_MANIFEST_CANDIDATE_RELATIVE_PATHS = [
+  'public/manifest.json',
+  'public/manifest.webmanifest',
+  'manifest.json',
+  'manifest.webmanifest',
+] as const;
+
+const REPO_CARD_ICON_FALLBACK_DIRS = [
+  '.',
+  'public',
+  'src',
+  'src/app',
+  'src/assets',
+  'app',
+  'assets',
+  'static',
+] as const;
+
+const REPO_CARD_ICON_FILENAME_PATTERNS = [
+  /^favicon(?:[-_.].+)?\.[a-z0-9]+$/i,
+  /^icon(?:[-_.].+)?\.[a-z0-9]+$/i,
+  /^logo(?:[-_.].+)?\.[a-z0-9]+$/i,
+  /^apple-touch-icon(?:[-_.].+)?\.[a-z0-9]+$/i,
+];
+
+type ManifestIconEntry = {
+  src?: string;
+  sizes?: string;
+};
+
+type ResolvedManifestIconEntry = {
+  src: string;
+  size: number;
+  index: number;
+};
+
 function normalizeAgentCli(agentCli: string): SupportedAgentCli | null {
   if (agentCli === 'codex') {
     return agentCli;
   }
+  return null;
+}
+
+function isSupportedRepoCardIconPath(filePath: string): boolean {
+  const extension = path.extname(filePath).toLowerCase();
+  return REPO_CARD_ICON_EXTENSIONS.has(extension);
+}
+
+async function fileExistsAsRepoCardIcon(filePath: string): Promise<boolean> {
+  if (!isSupportedRepoCardIconPath(filePath)) return false;
+
+  try {
+    const stats = await fs.stat(filePath);
+    return stats.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function pickFirstExistingRepoCardIcon(repoPath: string, relativePaths: readonly string[]): Promise<string | null> {
+  for (const relativePath of relativePaths) {
+    const absolutePath = path.join(repoPath, relativePath);
+    if (await fileExistsAsRepoCardIcon(absolutePath)) {
+      return absolutePath;
+    }
+  }
+  return null;
+}
+
+function parseLargestManifestIconSize(icon: ManifestIconEntry): number {
+  if (!icon.sizes || typeof icon.sizes !== 'string') return 0;
+
+  return icon.sizes
+    .split(/\s+/)
+    .map((size) => size.trim().toLowerCase())
+    .reduce((largest, size) => {
+      if (!size || size === 'any') return Math.max(largest, Number.MAX_SAFE_INTEGER);
+      const match = size.match(/^(\d+)x(\d+)$/);
+      if (!match) return largest;
+
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      if (!Number.isFinite(width) || !Number.isFinite(height)) return largest;
+      return Math.max(largest, width * height);
+    }, 0);
+}
+
+function parseManifestIconObjectSize(sizeKey: string): number {
+  const normalizedSizeKey = sizeKey.trim().toLowerCase();
+  if (!normalizedSizeKey) return 0;
+
+  const squareMatch = normalizedSizeKey.match(/^(\d+)$/);
+  if (squareMatch) {
+    const edge = Number(squareMatch[1]);
+    return Number.isFinite(edge) ? edge * edge : 0;
+  }
+
+  const rectMatch = normalizedSizeKey.match(/^(\d+)x(\d+)$/);
+  if (!rectMatch) return 0;
+
+  const width = Number(rectMatch[1]);
+  const height = Number(rectMatch[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return 0;
+  return width * height;
+}
+
+function extractManifestIconEntries(parsed: unknown): ResolvedManifestIconEntry[] {
+  if (!parsed || typeof parsed !== 'object' || !('icons' in parsed)) {
+    return [];
+  }
+
+  const rawIcons = (parsed as { icons?: unknown }).icons;
+  if (!rawIcons) return [];
+
+  const entries: ResolvedManifestIconEntry[] = [];
+  let index = 0;
+
+  if (Array.isArray(rawIcons)) {
+    for (const rawEntry of rawIcons) {
+      if (
+        rawEntry
+        && typeof rawEntry === 'object'
+        && 'src' in rawEntry
+        && typeof (rawEntry as { src?: unknown }).src === 'string'
+      ) {
+        const iconEntry = rawEntry as ManifestIconEntry;
+        const iconSource = iconEntry.src;
+        if (typeof iconSource !== 'string') {
+          index += 1;
+          continue;
+        }
+        entries.push({
+          src: iconSource,
+          size: parseLargestManifestIconSize(iconEntry),
+          index,
+        });
+      }
+      index += 1;
+    }
+    return entries;
+  }
+
+  if (typeof rawIcons === 'object') {
+    for (const [sizeKey, sourcePath] of Object.entries(rawIcons as Record<string, unknown>)) {
+      if (typeof sourcePath !== 'string') {
+        index += 1;
+        continue;
+      }
+
+      entries.push({
+        src: sourcePath,
+        size: parseManifestIconObjectSize(sizeKey),
+        index,
+      });
+      index += 1;
+    }
+  }
+
+  return entries;
+}
+
+function normalizeManifestIconSourcePath(sourcePath: string): string {
+  return sourcePath.trim().replace(/[?#].*$/, '');
+}
+
+function toManifestIconCandidatePaths(repoPath: string, manifestPath: string, sourcePath: string): string[] {
+  const normalizedSourcePath = normalizeManifestIconSourcePath(sourcePath);
+  if (!normalizedSourcePath) return [];
+  if (/^(?:https?:)?\/\//i.test(normalizedSourcePath)) return [];
+  if (/^data:/i.test(normalizedSourcePath)) return [];
+
+  const candidates: string[] = [];
+  if (normalizedSourcePath.startsWith('/')) {
+    const withoutLeadingSlash = normalizedSourcePath.replace(/^\/+/, '');
+    candidates.push(path.join(repoPath, 'public', withoutLeadingSlash));
+    candidates.push(path.join(repoPath, withoutLeadingSlash));
+  } else {
+    candidates.push(path.resolve(path.dirname(manifestPath), normalizedSourcePath));
+    candidates.push(path.resolve(repoPath, normalizedSourcePath));
+    candidates.push(path.resolve(repoPath, 'public', normalizedSourcePath));
+  }
+
+  return Array.from(new Set(candidates));
+}
+
+async function resolveManifestRepoCardIcon(repoPath: string): Promise<string | null> {
+  for (const manifestRelativePath of REPO_CARD_MANIFEST_CANDIDATE_RELATIVE_PATHS) {
+    const manifestPath = path.join(repoPath, manifestRelativePath);
+
+    let parsed: unknown;
+    try {
+      const manifestContent = await fs.readFile(manifestPath, 'utf-8');
+      parsed = JSON.parse(manifestContent);
+    } catch {
+      continue;
+    }
+
+    const icons = extractManifestIconEntries(parsed);
+
+    if (icons.length === 0) continue;
+
+    const orderedIcons = icons
+      .sort((a, b) => b.size - a.size || a.index - b.index);
+
+    for (const icon of orderedIcons) {
+      for (const candidatePath of toManifestIconCandidatePaths(repoPath, manifestPath, icon.src)) {
+        if (await fileExistsAsRepoCardIcon(candidatePath)) {
+          return candidatePath;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+async function resolveFallbackRepoCardIcon(repoPath: string): Promise<string | null> {
+  for (const relativeDir of REPO_CARD_ICON_FALLBACK_DIRS) {
+    const dirPath = path.resolve(repoPath, relativeDir);
+    let entries: Array<import('fs').Dirent>;
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!REPO_CARD_ICON_FILENAME_PATTERNS.some((pattern) => pattern.test(entry.name))) continue;
+
+      const candidatePath = path.join(dirPath, entry.name);
+      if (await fileExistsAsRepoCardIcon(candidatePath)) {
+        return candidatePath;
+      }
+    }
+  }
+
   return null;
 }
 
@@ -903,6 +1185,43 @@ export async function getDefaultDevServerScript(repoPath: string): Promise<strin
       console.error('Error determining default dev server script:', error);
     }
     return '';
+  }
+}
+
+export async function resolveRepoCardIcon(repoPath: string): Promise<ResolveRepoCardIconResult> {
+  if (!repoPath || !path.isAbsolute(repoPath)) {
+    return { success: false, iconPath: null, error: 'Invalid repository path.' };
+  }
+
+  try {
+    const repoStats = await fs.stat(repoPath);
+    if (!repoStats.isDirectory()) {
+      return { success: false, iconPath: null, error: 'Repository path must be a directory.' };
+    }
+  } catch {
+    return { success: false, iconPath: null, error: 'Repository path does not exist.' };
+  }
+
+  try {
+    const commonIconPath = await pickFirstExistingRepoCardIcon(repoPath, REPO_CARD_ICON_CANDIDATE_RELATIVE_PATHS);
+    if (commonIconPath) {
+      return { success: true, iconPath: commonIconPath };
+    }
+
+    const manifestIconPath = await resolveManifestRepoCardIcon(repoPath);
+    if (manifestIconPath) {
+      return { success: true, iconPath: manifestIconPath };
+    }
+
+    const fallbackIconPath = await resolveFallbackRepoCardIcon(repoPath);
+    if (fallbackIconPath) {
+      return { success: true, iconPath: fallbackIconPath };
+    }
+
+    return { success: true, iconPath: null };
+  } catch (error) {
+    console.error('Failed to resolve repository card icon:', error);
+    return { success: false, iconPath: null, error: 'Failed to resolve repository icon.' };
   }
 }
 
