@@ -406,17 +406,21 @@ export function StatusView({ repoPath }: { repoPath: string }) {
 
     const handleCommit = async () => {
         const trimmedSubject = subject.trim();
-        if (!trimmedSubject) return;
+        const trimmedBody = body.trim();
 
         if (isFirstCommit) {
             setFirstCommitDialogOpen(true);
             return;
         }
 
+        const commitData = trimmedSubject
+            ? { message: buildCommitMessage(trimmedSubject, body) }
+            : { prompt: trimmedBody || undefined };
+
         await action.mutateAsync({
             repoPath,
             action: 'commit',
-            data: { message: buildCommitMessage(trimmedSubject, body) },
+            data: commitData,
         });
         setSubject('');
         setBody('');
@@ -425,16 +429,18 @@ export function StatusView({ repoPath }: { repoPath: string }) {
 
     const handleFirstCommitConfirm = async () => {
         const trimmedSubject = subject.trim();
+        const trimmedBody = body.trim();
         const trimmedBranchName = initialBranchName.trim();
-        if (!trimmedSubject || !trimmedBranchName) return;
+        if (!trimmedBranchName) return;
+
+        const commitData = trimmedSubject
+            ? { message: buildCommitMessage(trimmedSubject, body), initialBranch: trimmedBranchName }
+            : { prompt: trimmedBody || undefined, initialBranch: trimmedBranchName };
 
         await action.mutateAsync({
             repoPath,
             action: 'commit',
-            data: {
-                message: buildCommitMessage(trimmedSubject, body),
-                initialBranch: trimmedBranchName,
-            },
+            data: commitData,
         });
 
         setSubject('');
@@ -465,7 +471,7 @@ export function StatusView({ repoPath }: { repoPath: string }) {
     const handleCommitShortcut = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
             e.preventDefault();
-            if (staged.length > 0 && subject.trim() && !action.isPending) {
+            if (staged.length > 0 && !action.isPending) {
                 handleCommit();
             }
         }
@@ -607,7 +613,7 @@ export function StatusView({ repoPath }: { repoPath: string }) {
                             <div className="flex-1 p-4 overflow-y-auto">
                                 <input
                                     type="text"
-                                    placeholder="Commit subject..."
+                                    placeholder="Commit subject (optional)..."
                                     value={subject}
                                     onChange={e => setSubject(e.target.value)}
                                     onKeyDown={handleCommitShortcut}
@@ -621,7 +627,7 @@ export function StatusView({ repoPath }: { repoPath: string }) {
                                     className="textarea textarea-bordered w-full text-sm resize-none mb-3 font-sans flex-1"
                                     style={{ minHeight: '80px', height: 'calc(100% - 90px)' }}
                                 />
-                                <button className="btn btn-primary w-full btn-sm" onClick={handleCommit} disabled={staged.length === 0 || !subject.trim() || action.isPending}>
+                                <button className="btn btn-primary w-full btn-sm" onClick={handleCommit} disabled={staged.length === 0 || action.isPending}>
                                     {action.isPending ? <span className="loading loading-spinner loading-xs mr-2"></span> : <span className="mr-2">✅</span>}
                                     Commit Changes
                                 </button>

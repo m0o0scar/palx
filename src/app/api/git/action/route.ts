@@ -4,6 +4,7 @@ import { getRepositories } from '@/lib/store';
 import { getCredentialById, getCredentialToken, findCredentialForRemote } from '@/lib/credentials';
 import { getImageMimeType, isImageFile } from '@/lib/utils';
 import { handleGitError } from '@/lib/api-utils';
+import { runCodexCliNonInteractive } from '@/lib/codex-cli';
 import { z } from 'zod';
 import fs from 'node:fs';
 
@@ -50,6 +51,43 @@ function toImageSide(buffer: Buffer | null, mimeType: string) {
   };
 }
 
+const AUTO_COMMIT_MESSAGE_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    message: { type: 'string', minLength: 1 },
+  },
+  required: ['message'],
+  additionalProperties: false,
+} as const;
+
+function buildAutoCommitMessagePrompt(userHint?: string): string {
+  const hint = userHint?.trim();
+  const lines = [
+    'Generate a git commit message for the currently staged changes in this repository.',
+    'Inspect staged changes only (for example: git status --short and git diff --cached).',
+    'Write a concise, imperative subject line (<= 72 chars).',
+    'Include a body only when needed to clarify context.',
+    'Return only JSON matching the provided schema.',
+  ];
+
+  if (hint) {
+    lines.push('Additional context from user:');
+    lines.push(hint);
+  }
+
+  return lines.join('\n');
+}
+
+function parseGeneratedCommitMessage(rawOutput: string): string {
+  try {
+    const parsed = JSON.parse(rawOutput) as { message?: unknown };
+    if (typeof parsed.message !== 'string') return '';
+    return parsed.message.trim();
+  } catch {
+    return '';
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -63,10 +101,33 @@ export async function POST(request: Request) {
     const git = new GitService(repoPath);
 
     switch (action) {
-      case 'commit':
-        if (!data?.message) throw new Error('Commit message is required');
-        await git.commit(data.message, data.files, { initialBranch: data?.initialBranch });
+      case 'commit': {
+        const providedMessage = typeof data?.message === 'string' ? data.message.trim() : '';
+        let commitMessage = providedMessage;
+
+        if (!commitMessage) {
+          const codexResult = await runCodexCliNonInteractive({
+            cwd: repoPath,
+            prompt: buildAutoCommitMessagePrompt(typeof data?.prompt === 'string' ? data.prompt : undefined),
+            outputSchema: AUTO_COMMIT_MESSAGE_OUTPUT_SCHEMA,
+          });
+
+          const generatedMessage = parseGeneratedCommitMessage(codexResult.lastMessage)
+            || parseGeneratedCommitMessage(codexResult.output);
+
+          if (codexResult.exitCode !== 0 || !generatedMessage) {
+            const reason = codexResult.timedOut
+              ? 'Codex timed out while generating a commit message.'
+              : (codexResult.output || `Codex exited with status ${codexResult.exitCode}.`);
+            throw new Error(`Failed to auto-generate commit message. ${reason}`);
+          }
+
+          commitMessage = generatedMessage;
+        }
+
+        await git.commit(commitMessage, data?.files, { initialBranch: data?.initialBranch });
         break;
+      }
       case 'push':
         // Try to resolve credentials
         let pushCredentials = await resolveCredentials(repoPath, git, undefined);
