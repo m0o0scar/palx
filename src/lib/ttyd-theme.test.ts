@@ -118,6 +118,7 @@ describe('applyThemeToTerminalWindow', () => {
     assert.strictEqual(body.style.backgroundColor, TERMINAL_THEME_DARK.background);
     assert.strictEqual(xterm.style.backgroundColor, TERMINAL_THEME_DARK.background);
     assert.strictEqual(viewport.style.backgroundColor, TERMINAL_THEME_DARK.background);
+    assert.strictEqual(viewport.style.overflow, 'hidden');
     assert.strictEqual(xterm.style.color, TERMINAL_THEME_DARK.foreground);
   });
 

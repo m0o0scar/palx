@@ -145,6 +145,9 @@ function applyThemeToTerminalDocument(
     const elements = terminalDocument.querySelectorAll(selector);
     for (const element of Array.from(elements)) {
       applyElementBackgroundColor(element, theme);
+      if (selector === '.xterm-viewport' && element?.style) {
+        element.style.overflow = 'hidden';
+      }
       if (selector === '.xterm' || selector === '.xterm-screen') {
         applyElementForegroundColor(element, theme);
       }
