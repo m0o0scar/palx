@@ -65,6 +65,7 @@ type TerminalDocumentLike = {
 };
 type TtydWindow = Window & {
   document?: TerminalDocumentLike;
+  requestAnimationFrame?: (callback: FrameRequestCallback) => number;
   term?: {
     options?: {
       theme?: TerminalTheme;
@@ -76,16 +77,14 @@ type TtydWindow = Window & {
   };
 };
 
-const TERMINAL_SURFACE_SELECTORS = [
+const TERMINAL_BACKGROUND_SELECTORS = [
   '.xterm',
   '.xterm-screen',
   '.xterm-viewport',
   '.xterm-rows',
-  '.xterm-helper-textarea',
-  'canvas',
 ];
 
-function applyElementThemeColors(
+function applyElementBackgroundColor(
   element: StyleTarget | null | undefined,
   theme: TerminalTheme,
 ): void {
@@ -93,6 +92,13 @@ function applyElementThemeColors(
   if (theme.background) {
     element.style.backgroundColor = theme.background;
   }
+}
+
+function applyElementForegroundColor(
+  element: StyleTarget | null | undefined,
+  theme: TerminalTheme,
+): void {
+  if (!element?.style) return;
   if (theme.foreground) {
     element.style.color = theme.foreground;
   }
@@ -104,16 +110,52 @@ function applyThemeToTerminalDocument(
 ): void {
   if (!terminalDocument) return;
 
-  applyElementThemeColors(terminalDocument.documentElement, theme);
-  applyElementThemeColors(terminalDocument.body, theme);
+  applyElementBackgroundColor(terminalDocument.documentElement, theme);
+  applyElementForegroundColor(terminalDocument.documentElement, theme);
+  applyElementBackgroundColor(terminalDocument.body, theme);
+  applyElementForegroundColor(terminalDocument.body, theme);
 
   if (typeof terminalDocument.querySelectorAll !== 'function') return;
-  for (const selector of TERMINAL_SURFACE_SELECTORS) {
+  for (const selector of TERMINAL_BACKGROUND_SELECTORS) {
     const elements = terminalDocument.querySelectorAll(selector);
     for (const element of Array.from(elements)) {
-      applyElementThemeColors(element, theme);
+      applyElementBackgroundColor(element, theme);
+      if (selector === '.xterm' || selector === '.xterm-screen') {
+        applyElementForegroundColor(element, theme);
+      }
     }
   }
+}
+
+function refreshTerminalSafely(
+  term: NonNullable<TtydWindow['term']>,
+): boolean {
+  const rowCount = typeof term.rows === 'number' ? term.rows : 0;
+  if (rowCount <= 0) return false;
+
+  try {
+    term.clearTextureAtlas?.();
+  } catch {
+    // Ignore renderer-specific refresh failures.
+  }
+  try {
+    term.refresh?.(0, rowCount - 1);
+  } catch {
+    // Ignore renderer-specific refresh failures.
+  }
+  return true;
+}
+
+function scheduleTerminalRefresh(
+  term: NonNullable<TtydWindow['term']>,
+  requestAnimationFrame: TtydWindow['requestAnimationFrame'],
+  attempts = 0,
+): void {
+  if (refreshTerminalSafely(term)) return;
+  if (attempts >= 8 || typeof requestAnimationFrame !== 'function') return;
+  requestAnimationFrame(() => {
+    scheduleTerminalRefresh(term, requestAnimationFrame, attempts + 1);
+  });
 }
 
 export function normalizeThemeMode(value: string | null | undefined): ThemeMode {
@@ -163,17 +205,7 @@ export function applyThemeToTerminalWindow(
   };
 
   applyThemeToTerminalDocument(ttydWindow.document, theme);
-  try {
-    term.clearTextureAtlas?.();
-  } catch {
-    // Ignore renderer-specific refresh failures.
-  }
-  try {
-    const rowCount = typeof term.rows === 'number' && term.rows > 0 ? term.rows : 1;
-    term.refresh?.(0, rowCount - 1);
-  } catch {
-    // Ignore renderer-specific refresh failures.
-  }
+  scheduleTerminalRefresh(term, ttydWindow.requestAnimationFrame?.bind(ttydWindow));
 
   return true;
 }

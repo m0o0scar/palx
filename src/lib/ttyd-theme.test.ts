@@ -122,4 +122,43 @@ describe('applyThemeToTerminalWindow', () => {
 
     assert.strictEqual(applyThemeToTerminalWindow(terminalWindow, TERMINAL_THEME_LIGHT), true);
   });
+
+  it('defers repaint until rows are ready to avoid blank initial render', () => {
+    let cleared = 0;
+    const refreshCalls: Array<[number, number]> = [];
+    const frameCallbacks: Array<() => void> = [];
+
+    const term = {
+      options: {
+        theme: {},
+      },
+      rows: 0,
+      clearTextureAtlas: () => {
+        cleared += 1;
+      },
+      refresh: (start: number, end: number) => {
+        refreshCalls.push([start, end]);
+      },
+    };
+
+    const terminalWindow = {
+      term,
+      requestAnimationFrame: (callback: () => void) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+    } as unknown as Window;
+
+    assert.strictEqual(applyThemeToTerminalWindow(terminalWindow, TERMINAL_THEME_DARK), true);
+    assert.strictEqual(cleared, 0);
+    assert.deepStrictEqual(refreshCalls, []);
+    assert.strictEqual(frameCallbacks.length, 1);
+
+    term.rows = 3;
+    const callback = frameCallbacks.shift();
+    callback?.();
+
+    assert.strictEqual(cleared, 1);
+    assert.deepStrictEqual(refreshCalls, [[0, 2]]);
+  });
 });
