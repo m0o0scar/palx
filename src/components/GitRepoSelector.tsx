@@ -15,6 +15,7 @@ import {
   checkAgentCliInstalled,
   installAgentCli,
   SupportedAgentCli,
+  resolveRepoCardIcon,
 } from '@/app/actions/git';
 import { cloneRemoteRepository, resolveRepositoryByName } from '@/app/actions/repository';
 import { createSession, deleteSession, getSessionPrefillContext, listSessions, saveSessionLaunchContext, SessionMetadata } from '@/app/actions/session';
@@ -164,6 +165,9 @@ export default function GitRepoSelector({
   const [repoSettingsError, setRepoSettingsError] = useState<string | null>(null);
   const [isLoadingCredentialOptions, setIsLoadingCredentialOptions] = useState(false);
   const [isSavingRepoSettings, setIsSavingRepoSettings] = useState(false);
+  const [repoCardIconByRepo, setRepoCardIconByRepo] = useState<Record<string, string | null>>({});
+  const [brokenRepoCardIcons, setBrokenRepoCardIcons] = useState<Record<string, boolean>>({});
+  const repoCardIconResolutionsInFlightRef = useRef<Set<string>>(new Set());
   const loginTerminalRef = useRef<HTMLIFrameElement>(null);
 
   const [isSavingDraft, setIsSavingDraft] = useState(false);
@@ -1361,6 +1365,55 @@ export default function GitRepoSelector({
   const selectableRepos = selectedRepo
     ? (recentRepos.includes(selectedRepo) ? recentRepos : [selectedRepo, ...recentRepos])
     : recentRepos;
+
+  useEffect(() => {
+    const inFlightResolutions = repoCardIconResolutionsInFlightRef.current;
+    const reposToResolve = recentRepos.filter((repo) => (
+      !(repo in repoCardIconByRepo)
+      && !inFlightResolutions.has(repo)
+    ));
+
+    if (reposToResolve.length === 0) return;
+
+    let cancelled = false;
+    reposToResolve.forEach((repo) => {
+      inFlightResolutions.add(repo);
+    });
+
+    void (async () => {
+      const resolutionEntries = await Promise.all(reposToResolve.map(async (repo) => {
+        try {
+          const result = await resolveRepoCardIcon(repo);
+          return [repo, result.success ? result.iconPath : null] as const;
+        } catch (error) {
+          console.error('Failed to resolve repository icon:', error);
+          return [repo, null] as const;
+        }
+      }));
+
+      if (!cancelled) {
+        setRepoCardIconByRepo((previous) => {
+          const next = { ...previous };
+          for (const [repo, iconPath] of resolutionEntries) {
+            next[repo] = iconPath;
+          }
+          return next;
+        });
+      }
+
+      reposToResolve.forEach((repo) => {
+        inFlightResolutions.delete(repo);
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      reposToResolve.forEach((repo) => {
+        inFlightResolutions.delete(repo);
+      });
+    };
+  }, [recentRepos, repoCardIconByRepo]);
+
   const currentThemeModeIndex = THEME_MODE_SEQUENCE.indexOf(themeMode);
   const nextThemeMode = THEME_MODE_SEQUENCE[(currentThemeModeIndex + 1) % THEME_MODE_SEQUENCE.length];
   const themeModeLabel = themeMode === 'auto' ? 'Auto' : (themeMode === 'light' ? 'Bright' : 'Dark');
@@ -1493,6 +1546,11 @@ export default function GitRepoSelector({
                   const runningSessionCount = runningSessionCountByRepo.get(repo) ?? 0;
                   const draftCount = draftCountByRepo.get(repo) ?? 0;
                   const cardGradient = getStableRepoCardGradient(getBaseName(repo));
+                  const repoIconPath = repoCardIconByRepo[repo] ?? null;
+                  const repoIconUrl = repoIconPath
+                    ? `/api/file-thumbnail?path=${encodeURIComponent(repoIconPath)}`
+                    : null;
+                  const showRepoIcon = !!repoIconUrl && !brokenRepoCardIcons[repo];
 
                   return (
                     <div
@@ -1519,7 +1577,24 @@ export default function GitRepoSelector({
                           <div className="flex items-start justify-between gap-3">
                             <div className="relative flex items-center">
                               <div className="repo-card-tilt-icon flex h-10 w-10 items-center justify-center rounded-xl bg-white/90 text-slate-700 shadow-sm dark:border dark:border-white/10 dark:bg-[#1e2532] dark:text-slate-200">
-                                <FolderGit2 className="h-5 w-5" />
+                                {showRepoIcon ? (
+                                  <Image
+                                    src={repoIconUrl}
+                                    alt={`${getBaseName(repo)} icon`}
+                                    width={24}
+                                    height={24}
+                                    className="h-6 w-6 rounded-md object-cover"
+                                    unoptimized
+                                    onError={() => {
+                                      setBrokenRepoCardIcons((previous) => {
+                                        if (previous[repo]) return previous;
+                                        return { ...previous, [repo]: true };
+                                      });
+                                    }}
+                                  />
+                                ) : (
+                                  <FolderGit2 className="h-5 w-5" />
+                                )}
                               </div>
                               <div className="absolute -top-2 -right-4 flex gap-1 z-10">
                                 {draftCount > 0 && (
