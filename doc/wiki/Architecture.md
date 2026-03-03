@@ -34,12 +34,12 @@ flowchart LR
   SA --> Keytar[(OS keychain\nkeytar)]
   API --> Keytar
 
-  NextUI --> PreviewAPI[/api/preview-proxy/start]
+  NextUI --> PreviewAPI["/api/preview-proxy/start"]
   PreviewAPI --> PreviewProxy[Preview Proxy server\n127.0.0.1:ephemeral]
   NextUI -->|iframe| PreviewProxy
 
-  NextUI --> NotifySocket[/api/notifications/socket]
-  API --> NotifyIngress[/api/notifications POST]
+  NextUI --> NotifySocket["/api/notifications/socket"]
+  API --> NotifyIngress["/api/notifications (POST)"]
   NotifySocket --> NotifyServer[Notification WS server\n127.0.0.1:ephemeral]
   NotifyIngress --> NotifyServer
 ```
@@ -77,7 +77,7 @@ flowchart TD
   C --> D[prepareSessionWorktree\ncreate worktree + palx branch]
   C --> E[saveSessionMetadata ~/.viba/sessions]
   A --> F[saveSessionLaunchContext ~/.viba/session-contexts]
-  A --> G[/session/:id]
+  A --> G["/session/:id"]
 
   G --> H[SessionPageClient load]
   H --> I[getSessionMetadata + consume launch context]

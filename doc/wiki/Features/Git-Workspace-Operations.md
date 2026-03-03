@@ -65,7 +65,7 @@ sequenceDiagram
   actor User
   participant UI as history/status view
   participant Hook as useGitAction
-  participant API as /api/git/action
+  participant API as api_git_action
   participant Svc as GitService
 
   User->>UI: Click git operation

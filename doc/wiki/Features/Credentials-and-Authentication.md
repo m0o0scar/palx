@@ -63,7 +63,7 @@ Implementation: [src/lib/credentials.ts](../../../src/lib/credentials.ts), [src/
 sequenceDiagram
   actor User
   participant UI as credentials page
-  participant API as /api/credentials
+  participant API as api_credentials
   participant Cred as lib/credentials
   participant Keytar as OS keychain
   participant Provider as GitHub/GitLab API
