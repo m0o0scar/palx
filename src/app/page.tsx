@@ -1,9 +1,12 @@
-'use client';
-
 import Image from "next/image";
 import GitRepoSelector from "@/components/GitRepoSelector";
+import { isAuth0Configured, missingAuth0EnvVars } from '@/lib/auth0';
 
 export default function Home() {
+  const authWarning = !isAuth0Configured
+    ? `Authentication is disabled because required Auth0 credentials are missing (${missingAuth0EnvVars.join(', ')}). This app is not protected and anybody with local/network access to this URL can use it.`
+    : null;
+
   return (
     <>
       <a
@@ -19,6 +22,14 @@ export default function Home() {
         </span>
       </a>
       <main className="flex min-h-screen flex-col items-center justify-start p-4 transition-colors md:p-6">
+        {authWarning && (
+          <div
+            className="mb-4 w-full max-w-5xl rounded-xl border border-amber-300 bg-amber-100/90 px-4 py-3 text-sm text-amber-900 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/15 dark:text-amber-100"
+            role="alert"
+          >
+            {authWarning}
+          </div>
+        )}
         <GitRepoSelector mode="home" />
       </main>
     </>

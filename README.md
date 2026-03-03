@@ -47,6 +47,26 @@ npm install
 npm run dev
 ```
 
+### Auth0 Authentication
+
+Palx now requires login before accessing the app.
+
+Add these variables to your `.env`:
+
+```bash
+AUTH0_DOMAIN=your-tenant.us.auth0.com
+AUTH0_CLIENT_ID=your_client_id
+AUTH0_CLIENT_SECRET=your_client_secret
+AUTH0_SECRET=hex_32_byte_secret
+APP_BASE_URL=http://localhost:3200
+```
+
+- Generate `AUTH0_SECRET` with: `openssl rand -hex 32`
+- In Auth0 Application settings, add:
+  - Allowed Callback URLs: `http://localhost:3200/auth/callback`
+  - Allowed Logout URLs: `http://localhost:3200/auth/logout`
+- If any required Auth0 variable is missing, Palx runs in unprotected mode and shows a warning banner on the home page.
+
 The app picks an available port starting at `3200` in development.
 Development mode does not auto-open a browser tab; open the printed local URL manually.
 
