@@ -94,12 +94,12 @@ Secret value (api key) is stored in keychain service `viba-agent-api-credentials
 
 ```mermaid
 erDiagram
-  REPOSITORY ||--o{ SESSION : "source repoPath"
-  SESSION ||--|| SESSION_CONTEXT : "sessionName"
-  SESSION ||--o{ DRAFT : "can seed new drafts"
-  REPOSITORY ||--o| REPO_SETTINGS : "config.repoSettings[path]"
-  REPOSITORY }o--o| CREDENTIAL : "credentialId"
-  AGENT_API_CREDENTIAL ||--o{ SESSION_CONTEXT : "agentProvider/model hints"
+  REPOSITORY ||--o{ SESSION : source_repoPath
+  SESSION ||--|| SESSION_CONTEXT : sessionName
+  SESSION ||--o{ DRAFT : seeds_new_drafts
+  REPOSITORY ||--o| REPO_SETTINGS : config_repoSettings_path
+  REPOSITORY }o--o| CREDENTIAL : credentialId
+  AGENT_API_CREDENTIAL ||--o{ SESSION_CONTEXT : agentProvider_model_hints
 
   REPOSITORY {
     string path
@@ -114,7 +114,7 @@ erDiagram
     string branchName
     string baseBranch
     string agent
-    bool initialized
+    boolean initialized
     string timestamp
   }
   SESSION_CONTEXT {

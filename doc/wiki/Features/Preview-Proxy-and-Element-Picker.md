@@ -61,10 +61,10 @@ All protocol handling is in [src/lib/previewProxyServer.ts](../../../src/lib/pre
 sequenceDiagram
   actor User
   participant Session as SessionView
-  participant API as /api/preview-proxy/start
+  participant API as api_preview_proxy_start
   participant Proxy as previewProxyServer
   participant Frame as Preview iframe content
-  participant ResolveAPI as /api/component-source/resolve
+  participant ResolveAPI as api_component_source_resolve
 
   User->>Session: Enter preview URL
   Session->>API: POST {target}

@@ -47,7 +47,7 @@ System-facing behavior:
 ```mermaid
 sequenceDiagram
   participant Agent as Local agent process
-  participant API as /api/notifications
+  participant API as api_notifications
   participant Notify as sessionNotificationServer
   participant SessionPage as SessionPageClient
   participant Browser as Notification API
