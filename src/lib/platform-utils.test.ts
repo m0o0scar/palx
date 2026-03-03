@@ -2,7 +2,7 @@ import { describe, it, after, mock } from 'node:test';
 import assert from 'node:assert';
 import os from 'node:os';
 import path from 'node:path';
-import { getAppDataDir } from './platform-utils';
+import { getAppDataDir } from './platform-utils.ts';
 
 describe('getAppDataDir', () => {
   const originalPlatform = process.platform;
