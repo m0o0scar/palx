@@ -2286,7 +2286,7 @@ export function SessionView({
                             title={isRepoViewActive ? 'Show preview and terminal panel' : 'Show repository viewer'}
                         >
                             <GitBranch className="h-3 w-3" />
-                            <span className={headerButtonLabelClass}>Repo</span>
+                            <span className={headerButtonLabelClass}>Changes</span>
                         </button>
                     </div>
 
