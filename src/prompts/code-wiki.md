@@ -1,3 +1,5 @@
+# Code Wiki
+
 You are a senior software engineer and technical writer. Your job is to scan the entire codebase and generate a comprehensive “code wiki” that helps both humans and coding agents understand the project end-to-end. Write the documentation as Markdown files under doc/wiki/.
 
 ACCESS & SCOPE
