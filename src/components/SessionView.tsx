@@ -2131,6 +2131,7 @@ export function SessionView({
             ? 'A process is already running in the terminal'
             : 'Run dev server script in terminal';
     const isMobileRightPanelOverlay = isMobileViewport;
+    const isMobileOverlayExpanded = isMobileRightPanelOverlay && !isRightPanelCollapsed;
     const showDesktopSplitHandle = !isRightPanelCollapsed && !isMobileRightPanelOverlay;
     const showInlineRightPanelToggle = !isMobileRightPanelOverlay || !isRightPanelCollapsed;
     const rightPanelWrapperClass = isMobileRightPanelOverlay
@@ -2140,6 +2141,12 @@ export function SessionView({
         : `relative h-full transition-[width,min-width,flex-basis] duration-300 ease-in-out ${isRightPanelCollapsed
             ? 'w-0 min-w-0 flex-none'
             : 'min-w-[360px] flex-1'}`;
+    const agentPanelClass = isMobileViewport
+        ? 'agent-activity-panel flex h-full min-w-0 flex-col overflow-hidden bg-white transition-[width] duration-300 ease-in-out dark:bg-[#161b22]'
+        : 'agent-activity-panel flex h-full min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-[width] duration-300 ease-in-out dark:border-[#30363d] dark:bg-[#161b22]';
+    const rightPanelShellClass = isMobileRightPanelOverlay
+        ? 'absolute inset-y-0 left-0 flex h-full w-full flex-col overflow-hidden bg-white dark:bg-[#161b22]'
+        : 'absolute inset-y-0 left-0 flex h-full w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]';
 
     return (
         <div className={`flex h-screen w-full flex-col overflow-hidden bg-[#f6f6f8] dark:bg-[#0d1117] ${(isResizing || isSplitResizing) ? 'select-none' : ''}`}>
@@ -2370,10 +2377,10 @@ export function SessionView({
 
             <div
                 ref={splitContainerRef}
-                className={`relative flex min-h-0 flex-1 overflow-x-hidden bg-[#f6f6f8] p-3 dark:bg-[#0d1117] ${isRightPanelCollapsed || isMobileRightPanelOverlay ? 'gap-0' : 'gap-3'}`}
+                className={`relative flex min-h-0 flex-1 overflow-x-hidden bg-[#f6f6f8] dark:bg-[#0d1117] ${isMobileViewport || isMobileOverlayExpanded ? 'p-0' : 'p-3'} ${isRightPanelCollapsed || isMobileRightPanelOverlay || isMobileViewport ? 'gap-0' : 'gap-3'}`}
             >
                 <div
-                    className="agent-activity-panel flex h-full min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-[width] duration-300 ease-in-out dark:border-[#30363d] dark:bg-[#161b22]"
+                    className={agentPanelClass}
                     style={{ width: isRightPanelCollapsed || isMobileRightPanelOverlay ? '100%' : `${agentPaneRatio * 100}%` }}
                 >
                     <div className="flex h-9 items-center justify-between gap-3 border-b border-slate-200 px-3 text-[11px] font-semibold text-slate-600 dark:border-[#30363d] dark:bg-[#161b22] dark:text-slate-400">
@@ -2507,7 +2514,7 @@ export function SessionView({
                     )}
 
                     {!isRightPanelCollapsed && (
-                        <div className="absolute inset-y-0 left-0 flex h-full w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-[#30363d] dark:bg-[#161b22]">
+                        <div className={rightPanelShellClass}>
                             {isRepoViewActive ? (
                                 <SessionRepoViewer
                                     repoPath={worktree || repo}
