@@ -8,6 +8,13 @@ ACCESS & SCOPE
 - Your output is a set of Markdown documents in docs/wiki/ plus Mermaid diagrams where helpful.
 - Prefer clarity, navigability, and correctness over verbosity.
 
+EXISTING WIKI FILES (IMPORTANT)
+
+- Before creating any new documentation, you MUST check if existing wiki files are already present in the project (e.g., inside `docs/wiki/` or similar documentation directories).
+- If existing markdown files exist for a topic, feature, or architecture, read them first.
+- Your goal is to **update**, **append**, and **refine** existing wiki markdowns to reflect the latest project architecture and features, rather than blindly overwriting them or creating duplicate files.
+- Preserve manual notes, specific operational quirks, or historical context that might be present in the existing documentation, updating only what is outdated or missing.
+
 GOALS
 
 - Explain the project from high-level architecture and major features down to detailed feature and module behavior.
