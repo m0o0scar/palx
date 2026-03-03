@@ -26,7 +26,7 @@ import type { Credential } from '@/lib/credentials';
 import { useRouter } from 'next/navigation';
 import { getBaseName } from '@/lib/path';
 import { getStableRepoCardGradient } from '@/lib/repo-card-gradient';
-import { notifySessionsUpdated, SESSIONS_UPDATED_EVENT, SESSIONS_UPDATED_STORAGE_KEY } from '@/lib/session-updates';
+import { notifySessionsUpdated, subscribeToSessionsUpdated } from '@/lib/session-updates';
 import { consumePendingSessionNavigationRetry, recordPendingSessionNavigation } from '@/lib/session-navigation';
 import {
   applyThemeToTerminalIframe,
@@ -384,28 +384,16 @@ export default function GitRepoSelector({
       void refreshSessionData(repoForList);
     };
 
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === SESSIONS_UPDATED_STORAGE_KEY) {
-        refresh();
-      }
-    };
-
     const handleFocus = () => {
       refresh();
     };
 
-    const handleSessionsUpdated = () => {
-      refresh();
-    };
-
-    window.addEventListener('storage', handleStorage);
+    const unsubscribeSessionsUpdated = subscribeToSessionsUpdated(refresh);
     window.addEventListener('focus', handleFocus);
-    window.addEventListener(SESSIONS_UPDATED_EVENT, handleSessionsUpdated);
 
     return () => {
-      window.removeEventListener('storage', handleStorage);
       window.removeEventListener('focus', handleFocus);
-      window.removeEventListener(SESSIONS_UPDATED_EVENT, handleSessionsUpdated);
+      unsubscribeSessionsUpdated();
     };
   }, [mode, refreshSessionData, selectedRepo]);
 

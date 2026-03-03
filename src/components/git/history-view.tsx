@@ -20,7 +20,7 @@ import { BranchRowSelectModifiers, BranchTreeItem } from './branch-tree-item';
 import { CommitRowSelectModifiers } from './commit-row-select-modifiers';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { listSessions, SessionMetadata } from '@/app/actions/session';
-import { SESSIONS_UPDATED_EVENT, SESSIONS_UPDATED_STORAGE_KEY } from '@/lib/session-updates';
+import { subscribeToSessionsUpdated } from '@/lib/session-updates';
 import { buildPullAllPlan, buildPullAllToastPayload, parseTrackingUpstream } from './pull-all-utils';
 
 
@@ -983,25 +983,15 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
       }
     };
 
-    const handleSessionsUpdated = () => {
-      void loadSessionsForRepo();
-    };
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === SESSIONS_UPDATED_STORAGE_KEY) {
-        void loadSessionsForRepo();
-      }
-    };
-
     void loadSessionsForRepo();
 
-    window.addEventListener(SESSIONS_UPDATED_EVENT, handleSessionsUpdated);
-    window.addEventListener('storage', handleStorage);
+    const unsubscribeSessionsUpdated = subscribeToSessionsUpdated(() => {
+      void loadSessionsForRepo();
+    });
 
     return () => {
       isDisposed = true;
-      window.removeEventListener(SESSIONS_UPDATED_EVENT, handleSessionsUpdated);
-      window.removeEventListener('storage', handleStorage);
+      unsubscribeSessionsUpdated();
     };
   }, [repoPath]);
 
