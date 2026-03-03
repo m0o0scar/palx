@@ -376,14 +376,14 @@ export async function deleteSession(sessionName: string): Promise<{ success: boo
     // 2. Delete metadata file
     const sessionsDir = await getSessionsDir();
     const filePath = path.join(sessionsDir, `${sessionName}.json`);
-    await fs.rm(filePath, { force: true });
+    await fs.rm(filePath, { force: true, maxRetries: 3 });
     const contextFilePath = await getSessionContextFilePath(sessionName);
-    await fs.rm(contextFilePath, { force: true });
+    await fs.rm(contextFilePath, { force: true, maxRetries: 3 });
 
     // 3. Delete prompt file
     const promptsDir = await getSessionPromptsDir();
     const promptFilePath = path.join(promptsDir, `${sessionName}.txt`);
-    await fs.rm(promptFilePath, { force: true });
+    await fs.rm(promptFilePath, { force: true, maxRetries: 3 });
 
     return { success: true };
   } catch (e: unknown) {

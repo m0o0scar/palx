@@ -1041,7 +1041,7 @@ export async function terminateSessionTerminalSessions(sessionName: string): Pro
   try {
     const { spawnSync } = await import('child_process');
     const tmuxExists =
-      spawnSync('which', ['tmux'], {
+      spawnSync('tmux', ['-V'], {
         stdio: 'ignore',
         env: process.env,
       }).status === 0;
@@ -1128,14 +1128,24 @@ export async function removeWorktree(repoPath: string, worktreePath: string, bra
     }
 
     try {
-      await fs.rm(worktreePath, { recursive: true, force: true });
+      await fs.rm(worktreePath, { recursive: true, force: true, maxRetries: 3 });
     } catch {
       // ignore
     }
 
     try {
       const attachmentsDir = `${worktreePath}-attachments`;
-      await fs.rm(attachmentsDir, { recursive: true, force: true });
+      await fs.rm(attachmentsDir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      // ignore
+    }
+
+    try {
+      const vibaDir = path.dirname(worktreePath);
+      const entries = await fs.readdir(vibaDir);
+      if (entries.length === 0) {
+        await fs.rm(vibaDir, { recursive: true, force: true, maxRetries: 3 });
+      }
     } catch {
       // ignore
     }
