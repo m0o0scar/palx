@@ -102,6 +102,24 @@ button {
       transparent 100%);
 }
 
+:root.dark .repo-card-tilt::before {
+  background: radial-gradient(900px circle at var(--tilt-mouse-x) var(--tilt-mouse-y),
+      rgba(255, 255, 255, 0.38) 0%,
+      rgba(255, 255, 255, 0.12) 25%,
+      transparent 62%);
+}
+
+:root.dark .repo-card-tilt::after {
+  background-image: linear-gradient(112deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0) 30%,
+      rgba(255, 255, 255, 0.24) 45%,
+      rgba(255, 255, 255, 0.44) 50%,
+      rgba(255, 255, 255, 0.22) 55%,
+      rgba(255, 255, 255, 0) 70%,
+      transparent 100%);
+}
+
 .repo-card-tilt-wrapper:hover .repo-card-tilt::before,
 .repo-card-tilt-wrapper:hover .repo-card-tilt::after {
   opacity: 1;

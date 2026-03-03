@@ -1,12 +1,18 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
+import { useCallback, useEffect, useRef } from 'react';
 
-const COLOR_PALETTE = [
-  '#ff70a6', '#ff9770', '#ffd670',
-  '#e9ff70', '#70d6ff', '#8338ec',
-  '#3a86ff', '#00f5d4',
+const LIGHT_COLOR_PALETTE = [
+  '#f8c4d9', '#f2c3af', '#ffeab7',
+  '#ecf3b7', '#cef3ff', '#eee3ff',
+  '#c0d8f9', '#98f8e9',
+];
+
+const DARK_COLOR_PALETTE = [
+  '#6b1f43', '#6a2f1a', '#6a5314',
+  '#44580f', '#14415a', '#31185f',
+  '#1d2f64', '#0e5748',
 ];
 
 const SPLAT_COUNT = 12;
@@ -22,7 +28,8 @@ interface SplatState {
   x: number;
   y: number;
   radius: number;
-  color: string;
+  lightColor: string;
+  darkColor: string;
   vx: number;
   vy: number;
   pulseSpeed: number;
@@ -34,7 +41,8 @@ function createSplat(width: number, height: number): SplatState {
     x: Math.random() * width,
     y: Math.random() * height,
     radius: Math.random() * 450 + 450,
-    color: COLOR_PALETTE[Math.floor(Math.random() * COLOR_PALETTE.length)],
+    lightColor: LIGHT_COLOR_PALETTE[Math.floor(Math.random() * LIGHT_COLOR_PALETTE.length)],
+    darkColor: DARK_COLOR_PALETTE[Math.floor(Math.random() * DARK_COLOR_PALETTE.length)],
     vx: (Math.random() - 0.5) * 2.2,
     vy: (Math.random() - 0.5) * 2.2,
     pulseSpeed: Math.random() * 0.016,
@@ -50,10 +58,10 @@ function updateSplat(s: SplatState, width: number, height: number) {
   s.pulseAmount += s.pulseSpeed;
 }
 
-function drawSplat(ctx: CanvasRenderingContext2D, s: SplatState, gradientEnd: string) {
+function drawSplat(ctx: CanvasRenderingContext2D, s: SplatState, color: string, gradientEnd: string) {
   const currentRadius = s.radius + Math.sin(s.pulseAmount) * 80;
   const gradient = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, currentRadius);
-  gradient.addColorStop(0, s.color);
+  gradient.addColorStop(0, color);
   gradient.addColorStop(1, gradientEnd);
   ctx.beginPath();
   ctx.fillStyle = gradient;
@@ -114,7 +122,8 @@ export default function SplatBackground() {
       ctx!.globalCompositeOperation = t.blendMode;
       for (const splat of splatsRef.current) {
         updateSplat(splat, w, h);
-        drawSplat(ctx!, splat, t.gradientEnd);
+        const color = darkRef.current ? splat.darkColor : splat.lightColor;
+        drawSplat(ctx!, splat, color, t.gradientEnd);
       }
 
       animIdRef.current = requestAnimationFrame(animate);
