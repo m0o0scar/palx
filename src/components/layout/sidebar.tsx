@@ -91,7 +91,7 @@ export function Sidebar({ className, initialCollapsed = false }: SidebarPropsWit
         width: sidebarWidth
       }}
       className={cn(
-        "pb-12 border-r border-gray-200 dark:border-gray-800 min-h-screen bg-gray-50 dark:bg-gray-900/50 relative",
+        "pb-12 border-r border-gray-200 dark:border-[#30363d] min-h-screen bg-gray-50 dark:bg-[#22272e] relative",
         enableTransition && "transition-all duration-300",
         className
       )}
@@ -143,8 +143,8 @@ export function Sidebar({ className, initialCollapsed = false }: SidebarPropsWit
                 "flex items-center w-full rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 isCollapsed ? "justify-center px-0 py-3" : "justify-start",
                 isActive('history')
-                  ? "bg-gray-200 text-gray-900 dark:bg-gray-800 dark:text-white"
-                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-white"
+                  ? "bg-gray-200 text-gray-900 dark:bg-[#2d333b] dark:text-white"
+                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-[#2d333b]/70 dark:hover:text-white"
               )}
               title={isCollapsed ? "History" : undefined}
             >
@@ -158,8 +158,8 @@ export function Sidebar({ className, initialCollapsed = false }: SidebarPropsWit
                 "flex items-center w-full rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 isCollapsed ? "justify-center px-0 py-3" : "justify-start",
                 isActive('status')
-                  ? "bg-gray-200 text-gray-900 dark:bg-gray-800 dark:text-white"
-                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-white"
+                  ? "bg-gray-200 text-gray-900 dark:bg-[#2d333b] dark:text-white"
+                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-[#2d333b]/70 dark:hover:text-white"
               )}
               title={isCollapsed ? `Changes${changesCount > 0 ? ` (${changesCount})` : ''}` : undefined}
             >
@@ -185,8 +185,8 @@ export function Sidebar({ className, initialCollapsed = false }: SidebarPropsWit
                 "flex items-center w-full rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 isCollapsed ? "justify-center px-0 py-3" : "justify-start",
                 isActive('stashes')
-                  ? "bg-gray-200 text-gray-900 dark:bg-gray-800 dark:text-white"
-                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-white"
+                  ? "bg-gray-200 text-gray-900 dark:bg-[#2d333b] dark:text-white"
+                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-[#2d333b]/70 dark:hover:text-white"
               )}
               title={isCollapsed ? "Stashes" : undefined}
             >
@@ -200,8 +200,8 @@ export function Sidebar({ className, initialCollapsed = false }: SidebarPropsWit
                 "flex items-center w-full rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 isCollapsed ? "justify-center px-0 py-3" : "justify-start",
                 isActive('custom-scripts')
-                  ? "bg-gray-200 text-gray-900 dark:bg-gray-800 dark:text-white"
-                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-white"
+                  ? "bg-gray-200 text-gray-900 dark:bg-[#2d333b] dark:text-white"
+                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-[#2d333b]/70 dark:hover:text-white"
               )}
               title={isCollapsed ? "Custom scripts" : undefined}
             >

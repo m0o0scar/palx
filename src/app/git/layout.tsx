@@ -11,7 +11,7 @@ export default function WorkspaceLayout({
     const sidebarCollapsed = getSettings().sidebarCollapsed ?? false;
 
     return (
-        <div className="flex h-screen gap-2 bg-slate-100/80 p-2 dark:bg-slate-950 sm:p-3">
+        <div className="flex h-screen gap-2 bg-slate-100/80 p-2 dark:bg-[#22272e] sm:p-3">
             <Suspense fallback={null}>
                 <WorkspaceRepoOpenTracker />
             </Suspense>
