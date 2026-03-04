@@ -439,7 +439,8 @@ export const GitGraph = forwardRef<GitGraphHandle, {
                                                         <span
                                                             className={cn(
                                                                 "text-[10px] px-1.5 rounded-full whitespace-nowrap shrink-0",
-                                                                isCurrent && "font-bold"
+                                                                isCurrent && "font-bold",
+                                                                hasAssociatedSession && "pr-4"
                                                             )}
                                                             style={{
                                                                 color: tagColors.textColor,
@@ -449,7 +450,7 @@ export const GitGraph = forwardRef<GitGraphHandle, {
                                                         >
                                                             <HighlightedText text={tag.displayName} searchQuery={searchQuery} />
                                                         </span>
-                                                        {hasAssociatedSession && <SessionAssociationDot className="-top-1 -right-1" />}
+                                                        {hasAssociatedSession && <SessionAssociationDot className="top-0.5 right-0.5 z-10" />}
                                                     </span>
                                                 );
 
