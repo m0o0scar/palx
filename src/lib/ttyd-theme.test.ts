@@ -179,6 +179,11 @@ describe('applyThemeToTerminalWindow', () => {
       0x1b, 0x5b, 0x30, 0x6d, // ESC[0m
     ]) as unknown as string);
     assert.strictEqual(writes[5], '\x1b[31mBYTES\x1b[0m');
+
+    // U+2500 "BOX DRAWINGS LIGHT HORIZONTAL" split across UTF-8 chunks: E2 94 80
+    term.write(Uint8Array.from([0xe2, 0x94]) as unknown as string);
+    term.write(Uint8Array.from([0x80, 0x0a]) as unknown as string);
+    assert.strictEqual(writes[6], '─\n');
   });
 
   it('defers repaint until rows are ready to avoid blank initial render', () => {

@@ -186,14 +186,31 @@ function scheduleTerminalRefresh(
   });
 }
 
-const UTF8_DECODER = typeof TextDecoder === 'function'
-  ? new TextDecoder()
-  : null;
+type Utf8DecodeState = {
+  decoder: TextDecoder | null;
+  sawByteChunk: boolean;
+};
 
-function decodeUint8Bytes(bytes: Uint8Array): string {
+function createUtf8DecodeState(): Utf8DecodeState {
+  return {
+    decoder: typeof TextDecoder === 'function' ? new TextDecoder() : null,
+    sawByteChunk: false,
+  };
+}
+
+function resetUtf8DecodeState(state: Utf8DecodeState): void {
+  if (!state.sawByteChunk) return;
+  state.sawByteChunk = false;
+  if (typeof TextDecoder === 'function') {
+    state.decoder = new TextDecoder();
+  }
+}
+
+function decodeUint8Bytes(bytes: Uint8Array, state: Utf8DecodeState): string {
   if (bytes.length === 0) return '';
-  if (UTF8_DECODER) {
-    return UTF8_DECODER.decode(bytes);
+  state.sawByteChunk = true;
+  if (state.decoder) {
+    return state.decoder.decode(bytes, { stream: true });
   }
   let output = '';
   for (const byte of bytes) {
@@ -202,25 +219,32 @@ function decodeUint8Bytes(bytes: Uint8Array): string {
   return output;
 }
 
-function normalizeTerminalWriteChunk(chunk: unknown): string {
-  if (typeof chunk === 'string') return chunk;
+function normalizeTerminalWriteChunk(chunk: unknown, utf8DecodeState: Utf8DecodeState): string {
+  if (typeof chunk === 'string') {
+    // If ttyd switches from byte chunks back to string chunks, drop any partial UTF-8 byte state.
+    resetUtf8DecodeState(utf8DecodeState);
+    return chunk;
+  }
   if (chunk === null || chunk === undefined) return '';
 
   if (chunk instanceof Uint8Array) {
-    return decodeUint8Bytes(chunk);
+    return decodeUint8Bytes(chunk, utf8DecodeState);
   }
 
   if (typeof ArrayBuffer !== 'undefined' && chunk instanceof ArrayBuffer) {
-    return decodeUint8Bytes(new Uint8Array(chunk));
+    return decodeUint8Bytes(new Uint8Array(chunk), utf8DecodeState);
   }
 
   if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(chunk)) {
     const typedView = chunk as ArrayBufferView;
-    return decodeUint8Bytes(new Uint8Array(typedView.buffer, typedView.byteOffset, typedView.byteLength));
+    return decodeUint8Bytes(
+      new Uint8Array(typedView.buffer, typedView.byteOffset, typedView.byteLength),
+      utf8DecodeState,
+    );
   }
 
   if (Array.isArray(chunk) && chunk.every((entry) => typeof entry === 'number')) {
-    return decodeUint8Bytes(Uint8Array.from(chunk));
+    return decodeUint8Bytes(Uint8Array.from(chunk), utf8DecodeState);
   }
 
   return String(chunk);
@@ -420,6 +444,7 @@ function installMonochromeAnsiFilter(
   const terminal = term as NonNullable<TtydWindow['term']> & TerminalWithMonochromeFilterState;
   if (terminal.__vibaMonochromeFilterInstalled) return;
   if (typeof terminal.write !== 'function') return;
+  const utf8DecodeState = createUtf8DecodeState();
   terminal.__vibaMonochromeFilterInstalled = true;
   const originalWrite = terminal.write.bind(terminal);
   terminal.__vibaMonochromeFilterOriginalWrite = originalWrite;
@@ -433,7 +458,7 @@ function installMonochromeAnsiFilter(
   }
 
   terminal.write = (chunk: unknown, callback?: () => void): void => {
-    const normalizedChunk = normalizeTerminalWriteChunk(chunk);
+    const normalizedChunk = normalizeTerminalWriteChunk(chunk, utf8DecodeState);
     const nextChunk = terminal.__vibaMonochromeFilterCarry
       ? `${terminal.__vibaMonochromeFilterCarry}${normalizedChunk}`
       : normalizedChunk;
