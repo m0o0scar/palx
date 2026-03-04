@@ -19,7 +19,7 @@ import SessionFileBrowser from './SessionFileBrowser';
 import { SessionRepoViewer } from './SessionRepoViewer';
 import { getBaseName } from '@/lib/path';
 import { notifySessionsUpdated } from '@/lib/session-updates';
-import { buildTtydTerminalSrc } from '@/lib/terminal-session';
+import { buildTtydTerminalSrc, parseTerminalSessionEnvironmentsFromSrc, type TerminalSessionEnvironment } from '@/lib/terminal-session';
 import { normalizePreviewUrl } from '@/lib/url';
 import { sanitizeBranchName } from '@/lib/utils';
 import { useTerminalLink, type TerminalWindow } from '@/hooks/useTerminalLink';
@@ -82,6 +82,12 @@ const NOTIFICATION_INSTRUCTION =
     'When your task is completed or you need user attention (for plan approval, permissions, or blockers), send a notification to the matching Palx session.';
 
 const clampAgentPaneRatio = (value: number): number => Math.max(0.2, Math.min(0.8, value));
+
+const buildExportEnvironmentCommand = (environments: TerminalSessionEnvironment[]): string => {
+    if (environments.length === 0) return '';
+    const assignments = environments.map((env) => `${env.name}=${quoteShellArg(env.value)}`);
+    return `export ${assignments.join(' ')}`;
+};
 
 type PreviewComponentStackEntry = {
     name?: unknown;
@@ -258,6 +264,11 @@ export function SessionView({
         () => floatingTerminalSrcOverride || buildTtydTerminalSrc(sessionName, 'terminal'),
         [floatingTerminalSrcOverride, sessionName],
     );
+    const shellBootstrapEnvironmentCommand = useMemo(() => {
+        if (terminalPersistenceMode !== 'shell') return '';
+        const environments = parseTerminalSessionEnvironmentsFromSrc(agentTerminalSrc);
+        return buildExportEnvironmentCommand(environments);
+    }, [agentTerminalSrc, terminalPersistenceMode]);
 
     const terminalBootstrapStateRef = useRef<Record<TerminalBootstrapSlot, TerminalBootstrapState>>({
         agent: 'idle',
@@ -1815,6 +1826,10 @@ export function SessionView({
                     };
 
                     pressEnter();
+                    if (shellBootstrapEnvironmentCommand) {
+                        term.paste(shellBootstrapEnvironmentCommand);
+                        pressEnter();
+                    }
                     markTerminalBootstrapped('agent');
 
                     // Inject agent command if present
@@ -2064,6 +2079,10 @@ export function SessionView({
                         }
                     };
                     pressEnter();
+                    if (shellBootstrapEnvironmentCommand) {
+                        term.paste(shellBootstrapEnvironmentCommand);
+                        pressEnter();
+                    }
                     markTerminalBootstrapped('terminal');
                     injectTerminalStartupScript(iframe, win, term);
 

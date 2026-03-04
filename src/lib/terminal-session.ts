@@ -4,6 +4,8 @@ export type TerminalSessionEnvironment = {
   name: string;
   value: string;
 };
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 type DetectGitRemoteProviderOptions = {
   gitlabHosts?: string[];
 };
@@ -109,4 +111,36 @@ export function buildTtydTerminalSrc(
   params.append('arg', '-s');
   params.append('arg', tmuxSession);
   return `/terminal?${params.toString()}`;
+}
+
+export function parseTerminalSessionEnvironmentsFromSrc(src: string): TerminalSessionEnvironment[] {
+  const trimmed = src.trim();
+  if (!trimmed) return [];
+
+  const queryIndex = trimmed.indexOf('?');
+  const query = queryIndex >= 0 ? trimmed.slice(queryIndex + 1) : trimmed.replace(/^\?/, '');
+  const params = new URLSearchParams(query);
+  const args = params.getAll('arg');
+  const environments = new Map<string, string>();
+
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] !== '-e') continue;
+
+    const assignment = args[i + 1];
+    i += 1;
+    if (!assignment) continue;
+
+    const separatorIndex = assignment.indexOf('=');
+    if (separatorIndex <= 0) continue;
+
+    const name = assignment.slice(0, separatorIndex).trim();
+    if (!ENV_NAME_PATTERN.test(name)) continue;
+
+    const value = assignment.slice(separatorIndex + 1);
+    if (!value) continue;
+
+    environments.set(name, value);
+  }
+
+  return Array.from(environments.entries()).map(([name, value]) => ({ name, value }));
 }

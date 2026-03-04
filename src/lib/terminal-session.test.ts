@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
   buildTtydTerminalSrc,
   detectGitRemoteProvider,
+  parseTerminalSessionEnvironmentsFromSrc,
   parseGitRemoteHost,
 } from './terminal-session.ts';
 
@@ -74,6 +75,28 @@ describe('buildTtydTerminalSrc', () => {
       '-A',
       '-s',
       'viba-session-1-agent',
+    ]);
+  });
+});
+
+describe('parseTerminalSessionEnvironmentsFromSrc', () => {
+  it('extracts -e environment assignments from a ttyd URL', () => {
+    const src = buildTtydTerminalSrc('session-1', 'agent', [
+      { name: 'GITHUB_TOKEN', value: 'secret-token' },
+      { name: 'OPENAI_API_KEY', value: 'sk-example' },
+    ]);
+
+    assert.deepStrictEqual(parseTerminalSessionEnvironmentsFromSrc(src), [
+      { name: 'GITHUB_TOKEN', value: 'secret-token' },
+      { name: 'OPENAI_API_KEY', value: 'sk-example' },
+    ]);
+  });
+
+  it('ignores malformed env args and keeps the most recent duplicate', () => {
+    const src = '/terminal?arg=new-session&arg=-e&arg=GITHUB_TOKEN=old&arg=-e&arg=BAD-NAME=value&arg=-e&arg=GITHUB_TOKEN=new';
+
+    assert.deepStrictEqual(parseTerminalSessionEnvironmentsFromSrc(src), [
+      { name: 'GITHUB_TOKEN', value: 'new' },
     ]);
   });
 });
