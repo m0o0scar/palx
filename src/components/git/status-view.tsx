@@ -139,7 +139,7 @@ function StatusFileTreeItem({
                     return (
                         <div key={child.path} className="group">
                             <div
-                                className="flex items-center gap-1 px-2 py-1.5 text-xs rounded cursor-pointer text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-colors"
+                                className="flex items-center gap-1 px-2 py-1.5 text-xs rounded cursor-pointer text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-[#30363d]/70 transition-colors"
                                 style={{ paddingLeft: `${depth * 12 + 8}px` }}
                                 onClick={() => onToggleFolder(child.path)}
                                 title={child.path}
@@ -194,8 +194,8 @@ function StatusFileTreeItem({
                     <div
                         key={filePath}
                         className={cn(
-                            'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md cursor-pointer group hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-colors text-sm',
-                            selectedFile === filePath && 'bg-slate-100 dark:bg-slate-800/70 font-medium text-primary'
+                            'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md cursor-pointer group hover:bg-slate-100 dark:hover:bg-[#30363d]/70 transition-colors text-sm',
+                            selectedFile === filePath && 'bg-slate-100 dark:bg-[#30363d]/70 font-medium text-primary'
                         )}
                         style={{ paddingLeft: `${depth * 12 + 8}px` }}
                         onClick={() => onSelectFile(filePath)}
@@ -497,12 +497,12 @@ export function StatusView({ repoPath }: { repoPath: string }) {
     if (!status) return <div className="flex items-center justify-center h-64 opacity-70">No status data available</div>;
 
     const headerActionButtonClass =
-        "flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100";
+        "flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#30363d] dark:bg-[#161b22] dark:text-slate-300 dark:hover:bg-[#30363d]/60 dark:hover:text-slate-100";
 
     return (
         <div className="flex h-full overflow-hidden">
             <div className="flex flex-1 min-w-0 flex-col gap-2 overflow-hidden">
-                <div className="flex min-h-[57px] shrink-0 items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex min-h-[57px] shrink-0 items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 dark:border-[#30363d] dark:bg-[#161b22]">
                     <h1 className="font-bold text-lg text-slate-900 dark:text-slate-100">Changes</h1>
                     <button className={headerActionButtonClass} onClick={() => refetch()} disabled={action.isPending} title="Refresh status">
                         {action.isPending ? <span className="loading loading-spinner loading-xs"></span> : <i className="iconoir-refresh-circle text-[16px]" aria-hidden="true" />}
@@ -510,9 +510,9 @@ export function StatusView({ repoPath }: { repoPath: string }) {
                     </button>
                 </div>
 
-                <div className="flex flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-[#30363d] dark:bg-[#161b22]">
                     {/* Left Panel: File List */}
-                    <div className="w-64 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-slate-50/70 dark:bg-slate-900/70">
+                    <div className="w-64 border-r border-slate-200 dark:border-[#30363d] flex flex-col bg-slate-50/70 dark:bg-[#161b22]/70">
                         <div className="flex-1 overflow-y-auto">
                             {/* Unstaged Changes */}
                             <div className="p-2">
@@ -553,7 +553,7 @@ export function StatusView({ repoPath }: { repoPath: string }) {
                                 </div>
                             </div>
 
-                            <div className="h-px bg-slate-200 dark:bg-slate-800 mx-4 my-2" />
+                            <div className="h-px bg-slate-200 dark:bg-[#30363d] mx-4 my-2" />
 
                             {/* Staged Changes */}
                             <div className="p-2">
@@ -580,7 +580,7 @@ export function StatusView({ repoPath }: { repoPath: string }) {
                     </div>
 
                     {/* Right Panel: Diff View & Commit Box */}
-                    <div className="flex-1 flex flex-col bg-white dark:bg-slate-900 overflow-hidden">
+                    <div className="flex-1 flex flex-col bg-white dark:bg-[#161b22] overflow-hidden">
                         {/* Diff View Area */}
                         <div className="flex-1 overflow-hidden flex flex-col min-h-0">
                             {selectedFile ? (
@@ -589,7 +589,7 @@ export function StatusView({ repoPath }: { repoPath: string }) {
                                 </div>
                             ) : (
                                 <div className="flex-1 flex flex-col items-center justify-center opacity-50">
-                                    <div className="p-8 rounded-full bg-slate-100 dark:bg-slate-800/60 mb-4 text-4xl">
+                                    <div className="p-8 rounded-full bg-slate-100 dark:bg-[#30363d]/60 mb-4 text-4xl">
                                         <i className="iconoir-refresh-circle text-[32px]" aria-hidden="true" />
                                     </div>
                                     <p className="text-sm font-bold">Select a file to view changes</p>
@@ -599,7 +599,7 @@ export function StatusView({ repoPath }: { repoPath: string }) {
 
                         {/* Resize Handle */}
                         <div
-                            className="h-1.5 cursor-ns-resize flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors group shrink-0 border-t border-slate-200 dark:border-slate-800"
+                            className="h-1.5 cursor-ns-resize flex items-center justify-center hover:bg-slate-100 dark:hover:bg-[#30363d]/60 transition-colors group shrink-0 border-t border-slate-200 dark:border-[#30363d]"
                             onMouseDown={handleResizeStart}
                         >
                             <div className="w-8 h-1 rounded-full bg-base-300 group-hover:bg-base-content/20 transition-colors" />
@@ -607,7 +607,7 @@ export function StatusView({ repoPath }: { repoPath: string }) {
 
                         {/* Commit Box */}
                         <div
-                            className="flex flex-col border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0"
+                            className="flex flex-col border-t border-slate-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] shrink-0"
                             style={{ height: commitBoxHeight }}
                         >
                             <div className="flex-1 p-4 overflow-y-auto">

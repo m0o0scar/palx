@@ -39,8 +39,8 @@ function StashDiffView({ repoPath, stashIndex, filePath }: { repoPath: string; s
 
     if (isImageFile(filePath)) {
         return (
-            <div className="flex flex-col h-full bg-white dark:bg-slate-900">
-                <div className="flex items-center justify-between px-4 h-[57px] border-b border-slate-200 dark:border-slate-800 shrink-0 bg-white dark:bg-slate-900">
+            <div className="flex flex-col h-full bg-white dark:bg-[#161b22]">
+                <div className="flex items-center justify-between px-4 h-[57px] border-b border-slate-200 dark:border-[#30363d] shrink-0 bg-white dark:bg-[#161b22]">
                     <span className="text-sm font-mono truncate max-w-[70%]" title={filePath}>{filePath}</span>
                 </div>
                 <div className="flex-1 overflow-auto">
@@ -54,8 +54,8 @@ function StashDiffView({ repoPath, stashIndex, filePath }: { repoPath: string; s
 
     if (isBinary) {
         return (
-            <div className="flex flex-col h-full bg-white dark:bg-slate-900">
-                <div className="flex items-center justify-between px-4 h-[57px] border-b border-slate-200 dark:border-slate-800 shrink-0 bg-white dark:bg-slate-900">
+            <div className="flex flex-col h-full bg-white dark:bg-[#161b22]">
+                <div className="flex items-center justify-between px-4 h-[57px] border-b border-slate-200 dark:border-[#30363d] shrink-0 bg-white dark:bg-[#161b22]">
                     <span className="text-sm font-mono truncate max-w-[70%]" title={filePath}>{filePath}</span>
                 </div>
                 <div className="flex-1 flex items-center justify-center opacity-50">
@@ -75,8 +75,8 @@ function StashDiffView({ repoPath, stashIndex, filePath }: { repoPath: string; s
     const isLargeDiff = (contentSize > MAX_DIFF_SIZE || lineCount > MAX_DIFF_LINES);
 
     return (
-        <div className="flex flex-col h-full bg-white dark:bg-slate-900">
-            <div className="flex items-center justify-between px-4 h-[57px] border-b border-slate-200 dark:border-slate-800 shrink-0 bg-white dark:bg-slate-900">
+        <div className="flex flex-col h-full bg-white dark:bg-[#161b22]">
+            <div className="flex items-center justify-between px-4 h-[57px] border-b border-slate-200 dark:border-[#30363d] shrink-0 bg-white dark:bg-[#161b22]">
                 <span className="text-sm font-mono truncate max-w-[70%]" title={filePath}>{filePath}</span>
                 <div className="flex items-center gap-2">
                     <label htmlFor="split-view-stash" className="text-[10px] uppercase tracking-wider font-bold cursor-pointer opacity-70">Split View</label>
@@ -228,12 +228,12 @@ function StashesContent() {
     };
 
     const headerActionButtonClass =
-        "flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100";
+        "flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#30363d] dark:bg-[#161b22] dark:text-slate-300 dark:hover:bg-[#30363d]/60 dark:hover:text-slate-100";
 
     return (
         <div className="flex h-full overflow-hidden">
             <div className="flex flex-1 min-w-0 flex-col gap-2 overflow-hidden">
-                <div className="flex min-h-[57px] shrink-0 items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex min-h-[57px] shrink-0 items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 dark:border-[#30363d] dark:bg-[#161b22]">
                     <h1 className="font-bold text-lg text-slate-900 dark:text-slate-100">Stashes</h1>
                     <button className={headerActionButtonClass} onClick={() => refetch()} disabled={action.isPending} title="Refresh stashes">
                         {action.isPending ? <span className="loading loading-spinner loading-xs"></span> : <i className="iconoir-refresh-circle text-[16px]" aria-hidden="true" />}
@@ -241,13 +241,13 @@ function StashesContent() {
                     </button>
                 </div>
 
-                <div className="flex flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-[#30363d] dark:bg-[#161b22]">
                     {/* Left Panel: Stash List */}
-                    <div className="w-64 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-slate-50/70 dark:bg-slate-900/70">
+                    <div className="w-64 border-r border-slate-200 dark:border-[#30363d] flex flex-col bg-slate-50/70 dark:bg-[#161b22]/70">
                         <div className="flex-1 overflow-y-auto overflow-x-hidden">
                     {!stashes || stashes.length === 0 ? (
                         <div className="flex-1 flex flex-col items-center justify-center opacity-50 h-64">
-                            <div className="p-8 rounded-full bg-slate-100 dark:bg-slate-800/60 mb-4 text-4xl">
+                            <div className="p-8 rounded-full bg-slate-100 dark:bg-[#30363d]/60 mb-4 text-4xl">
                                 📦
                             </div>
                             <p className="text-sm font-bold">No stashes</p>
@@ -264,7 +264,7 @@ function StashesContent() {
                                         <div
                                             className={cn(
                                                 "p-2 rounded-md cursor-pointer transition-colors",
-                                                isSelected ? "bg-slate-100 dark:bg-slate-800/70" : "hover:bg-slate-100 dark:hover:bg-slate-800/60"
+                                                isSelected ? "bg-slate-100 dark:bg-[#30363d]/70" : "hover:bg-slate-100 dark:hover:bg-[#30363d]/60"
                                             )}
                                             onClick={() => toggleStashExpanded(stash.index)}
                                         >
@@ -275,7 +275,7 @@ function StashesContent() {
                                                         <div className="opacity-50 text-[10px]">
                                                             {isExpanded ? '▼' : '▶'}
                                                         </div>
-                                                        <span className="text-[10px] font-mono bg-slate-200 dark:bg-slate-800 px-1 py-0.5 rounded opacity-70">
+                                                        <span className="text-[10px] font-mono bg-slate-200 dark:bg-[#30363d] px-1 py-0.5 rounded opacity-70">
                                                             stash@{'{' + stash.index + '}'}
                                                         </span>
                                                     </div>
@@ -338,7 +338,7 @@ function StashesContent() {
                                                             key={file.path}
                                                             className={cn(
                                                                 "flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors text-xs",
-                                                                selectedFile === file.path ? "bg-primary/10 text-primary font-bold" : "hover:bg-slate-100 dark:hover:bg-slate-800/60"
+                                                                selectedFile === file.path ? "bg-primary/10 text-primary font-bold" : "hover:bg-slate-100 dark:hover:bg-[#30363d]/60"
                                                             )}
                                                             onClick={(e) => { e.stopPropagation(); setSelectedFile(file.path); }}
                                                         >
@@ -365,7 +365,7 @@ function StashesContent() {
                     </div>
 
                     {/* Right Panel: Diff View */}
-                    <div className="flex-1 flex flex-col bg-white dark:bg-slate-900 overflow-hidden">
+                    <div className="flex-1 flex flex-col bg-white dark:bg-[#161b22] overflow-hidden">
                         {selectedStashIndex !== null && selectedFile ? (
                             <StashDiffView
                                 key={`${selectedStashIndex}:${selectedFile}`}
@@ -375,7 +375,7 @@ function StashesContent() {
                             />
                         ) : (
                             <div className="flex-1 flex flex-col items-center justify-center opacity-50">
-                                <div className="p-8 rounded-full bg-slate-100 dark:bg-slate-800/60 mb-4 text-4xl">
+                                <div className="p-8 rounded-full bg-slate-100 dark:bg-[#30363d]/60 mb-4 text-4xl">
                                     📦
                                 </div>
                                 <p className="text-sm font-bold">
