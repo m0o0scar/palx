@@ -2325,7 +2325,16 @@ export function SessionView({
                         pressEnter();
                     }
                     markTerminalBootstrapped(bootstrapSlot);
-                    injectTerminalStartupScript(bootstrapSlot, iframe, win, term);
+
+                    if (tabId === MAIN_TERMINAL_TAB_ID) {
+                        injectTerminalStartupScript(bootstrapSlot, iframe, win, term);
+                    } else {
+                        const targetPath = sessionWorkspaceRootPath || worktree || repo;
+                        if (targetPath) {
+                            term.paste(`cd ${quoteShellArg(targetPath)}`);
+                            pressEnter();
+                        }
+                    }
 
                     // Focus
                     if (isActiveTerminalFrame()) {
