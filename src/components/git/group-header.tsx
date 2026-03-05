@@ -6,6 +6,7 @@ export function GroupHeader({
   name,
   groupPath,
   icon,
+  actions,
   isExpanded,
   onToggle,
   visibilityMap,
@@ -15,6 +16,7 @@ export function GroupHeader({
   name: string;
   groupPath: string;
   icon: React.ReactNode;
+  actions?: React.ReactNode;
   isExpanded: boolean;
   onToggle: () => void;
   visibilityMap: VisibilityMap;
@@ -42,6 +44,7 @@ export function GroupHeader({
         <span className="shrink-0">{icon}</span>
         <span className="truncate min-w-0 flex-1">{name}</span>
       </div>
+      {actions}
       <div className="flex items-center gap-0.5 ml-auto">
         <VisibilityToggle
           type="visible"

@@ -132,6 +132,48 @@ function formatCommitMessageForDisplay(message: string): string {
     .replace(/\\n/g, '\n');
 }
 
+function normalizeRemoteRepoPath(path: string): string {
+  const trimmed = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!trimmed) return '';
+  return trimmed.replace(/\.git$/i, '');
+}
+
+function toRemoteRepositoryWebUrl(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim();
+  if (!trimmed) return null;
+
+  const scpLikeMatch = trimmed.match(/^git@([^:]+):(.+)$/);
+  if (scpLikeMatch) {
+    const host = scpLikeMatch[1].trim();
+    const repoPath = normalizeRemoteRepoPath(scpLikeMatch[2] ?? '');
+    if (!host || !repoPath) return null;
+    return `https://${host}/${repoPath}`;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      parsed.username = '';
+      parsed.password = '';
+      parsed.hash = '';
+      parsed.search = '';
+      parsed.pathname = `/${normalizeRemoteRepoPath(parsed.pathname)}`;
+      return parsed.toString().replace(/\/$/, '');
+    }
+
+    if (parsed.protocol === 'ssh:') {
+      const host = parsed.hostname.trim();
+      const repoPath = normalizeRemoteRepoPath(parsed.pathname);
+      if (!host || !repoPath) return null;
+      return `https://${host}/${repoPath}`;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // File status icon component
 function FileStatusIcon({ status }: { status: string }) {
   switch (status) {
@@ -307,6 +349,8 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
   const [isRenameRemoteOpen, setIsRenameRemoteOpen] = useState(false);
   const [remoteToRename, setRemoteToRename] = useState<string | null>(null);
   const [newRemoteNameForRename, setNewRemoteNameForRename] = useState('');
+  const [remoteUrlToEdit, setRemoteUrlToEdit] = useState('');
+  const [newRemoteUrlForEdit, setNewRemoteUrlForEdit] = useState('');
   const [isRenamingRemote, setIsRenamingRemote] = useState(false);
   const [isDeleteRemoteOpen, setIsDeleteRemoteOpen] = useState(false);
   const [remoteToDelete, setRemoteToDelete] = useState<string | null>(null);
@@ -443,6 +487,8 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
     setIsRenameRemoteOpen(false);
     setRemoteToRename(null);
     setNewRemoteNameForRename('');
+    setRemoteUrlToEdit('');
+    setNewRemoteUrlForEdit('');
   }, []);
 
   const closeDeleteRemoteDialog = useCallback(() => {
@@ -652,9 +698,14 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
     }
     if (isRenameRemoteOpen) {
       const trimmedNewName = newRemoteNameForRename.trim();
+      const trimmedNewUrl = newRemoteUrlForEdit.trim();
+      const trimmedOldUrl = remoteUrlToEdit.trim();
+      const hasNameChange = trimmedNewName !== (remoteToRename ?? '').trim();
+      const hasUrlChange = trimmedNewUrl !== trimmedOldUrl;
       if (
         trimmedNewName &&
-        trimmedNewName !== (remoteToRename ?? '').trim() &&
+        trimmedNewUrl &&
+        (hasNameChange || hasUrlChange) &&
         !isRenamingRemote
       ) {
         void handleRenameRemote();
@@ -1687,8 +1738,11 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
   }
 
   const confirmRenameRemote = (remote: string) => {
+    const currentRemoteUrl = branchData?.remoteUrls?.[remote] ?? '';
     setRemoteToRename(remote);
     setNewRemoteNameForRename(remote);
+    setRemoteUrlToEdit(currentRemoteUrl);
+    setNewRemoteUrlForEdit(currentRemoteUrl);
     setIsRenameRemoteOpen(true);
   }
 
@@ -1749,23 +1803,45 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
     if (!remoteToRename) return;
     const trimmedOldName = remoteToRename.trim();
     const trimmedNewName = newRemoteNameForRename.trim();
-    if (!trimmedOldName || !trimmedNewName) return;
+    const trimmedOldUrl = remoteUrlToEdit.trim();
+    const trimmedNewUrl = newRemoteUrlForEdit.trim();
+    if (!trimmedOldName || !trimmedNewName || !trimmedNewUrl) return;
 
-    if (trimmedOldName === trimmedNewName) {
+    const hasNameChange = trimmedOldName !== trimmedNewName;
+    const hasUrlChange = trimmedOldUrl !== trimmedNewUrl;
+
+    if (!hasNameChange && !hasUrlChange) {
       closeRenameRemoteDialog();
       return;
     }
 
     setIsRenamingRemote(true);
     try {
-      await runGitAction({
-        repoPath,
-        action: 'rename-remote',
-        data: {
-          oldName: trimmedOldName,
-          newName: trimmedNewName,
-        },
-      });
+      let targetRemoteName = trimmedOldName;
+
+      if (hasNameChange) {
+        await runGitAction({
+          repoPath,
+          action: 'rename-remote',
+          data: {
+            oldName: trimmedOldName,
+            newName: trimmedNewName,
+          },
+        });
+        targetRemoteName = trimmedNewName;
+      }
+
+      if (hasUrlChange) {
+        await runGitAction({
+          repoPath,
+          action: 'set-remote-url',
+          data: {
+            name: targetRemoteName,
+            url: trimmedNewUrl,
+          },
+        });
+      }
+
       closeRenameRemoteDialog();
     } catch (e) {
       console.error(e);
@@ -2543,6 +2619,20 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
   }, []);
 
+  const handleOpenRemoteRepositoryInNewTab = useCallback((remoteName: string) => {
+    const remoteUrl = branchData?.remoteUrls?.[remoteName] ?? '';
+    const targetUrl = toRemoteRepositoryWebUrl(remoteUrl);
+    if (!targetUrl) {
+      toast({
+        type: 'warning',
+        title: 'Cannot Open Remote Repository',
+        description: `Remote "${remoteName}" URL is not a browsable repository URL.`,
+      });
+      return;
+    }
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  }, [branchData?.remoteUrls]);
+
   const handleOpenSession = useCallback((sessionName: string) => {
     router.push(`/session/${encodeURIComponent(sessionName)}`);
   }, [router]);
@@ -3133,7 +3223,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                         onClick: () => handleFetchFromRemote(remoteName),
                       },
                       {
-                        label: 'Rename',
+                        label: 'Edit',
                         icon: <i className="iconoir-edit-pencil text-[14px]" aria-hidden="true" />,
                         onClick: () => confirmRenameRemote(remoteName),
                       },
@@ -3149,6 +3239,27 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                       name={remoteName}
                       groupPath={remoteGroupPath}
                       icon={<i className="iconoir-globe text-[14px] opacity-50" aria-hidden="true" />}
+                      actions={(() => {
+                        const remoteUrl = branchData?.remoteUrls?.[remoteName] ?? '';
+                        const targetUrl = toRemoteRepositoryWebUrl(remoteUrl);
+                        return (
+                          <div className="tooltip tooltip-left z-20" data-tip="Open remote repository">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs btn-square"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleOpenRemoteRepositoryInNewTab(remoteName);
+                              }}
+                              disabled={!targetUrl}
+                              aria-label={`Open ${remoteName} remote repository`}
+                              title={targetUrl ?? 'Remote URL is not a browsable repository URL'}
+                            >
+                              <i className="iconoir-link text-[14px]" aria-hidden="true" />
+                            </button>
+                          </div>
+                        );
+                      })()}
                       isExpanded={isRemoteExpanded}
                       onToggle={() => toggleFolder(remoteGroupPath)}
                       visibilityMap={visibilityMap}
@@ -3728,27 +3839,67 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
       {isRenameRemoteOpen && (
         <dialog className="modal modal-open">
           <div className="modal-box">
-            <h3 className="font-bold text-lg">Rename Remote</h3>
+            <h3 className="font-bold text-lg">Edit Remote</h3>
             <p className="py-4 break-words">
-              Enter a new name for remote <span className="font-bold break-all">{remoteToRename}</span>. Press <kbd className="kbd kbd-sm">Enter</kbd> to confirm.
+              Edit the remote name and URL for <span className="font-bold break-all">{remoteToRename}</span>. Press <kbd className="kbd kbd-sm">Enter</kbd> to confirm.
             </p>
-            <input
-              type="text"
-              className="input input-bordered w-full"
-              value={newRemoteNameForRename}
-              onChange={(e) => setNewRemoteNameForRename(e.target.value)}
-              placeholder="New remote name"
-              disabled={isRenamingRemote}
-              autoFocus
-              onKeyDown={(e) => {
-                const shortcutPressed = e.key === 'Enter' && (e.metaKey || e.ctrlKey);
-                const trimmedNewName = newRemoteNameForRename.trim();
-                const sameName = trimmedNewName === (remoteToRename ?? '').trim();
-                if (shortcutPressed && trimmedNewName && !sameName && !isRenamingRemote) {
-                  handleRenameRemote();
-                }
-              }}
-            />
+            <div className="space-y-3">
+              <label className="form-control">
+                <span className="label-text text-sm mb-1">Remote Name</span>
+                <input
+                  type="text"
+                  className="input input-bordered w-full"
+                  value={newRemoteNameForRename}
+                  onChange={(e) => setNewRemoteNameForRename(e.target.value)}
+                  placeholder="Remote name"
+                  disabled={isRenamingRemote}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    const shortcutPressed = e.key === 'Enter' && (e.metaKey || e.ctrlKey);
+                    const trimmedNewName = newRemoteNameForRename.trim();
+                    const trimmedNewUrl = newRemoteUrlForEdit.trim();
+                    const hasNameChange = trimmedNewName !== (remoteToRename ?? '').trim();
+                    const hasUrlChange = trimmedNewUrl !== remoteUrlToEdit.trim();
+                    if (
+                      shortcutPressed &&
+                      trimmedNewName &&
+                      trimmedNewUrl &&
+                      (hasNameChange || hasUrlChange) &&
+                      !isRenamingRemote
+                    ) {
+                      handleRenameRemote();
+                    }
+                  }}
+                />
+              </label>
+              <label className="form-control">
+                <span className="label-text text-sm mb-1">Remote URL</span>
+                <input
+                  type="text"
+                  className="input input-bordered w-full"
+                  value={newRemoteUrlForEdit}
+                  onChange={(e) => setNewRemoteUrlForEdit(e.target.value)}
+                  placeholder="https://github.com/owner/repo.git"
+                  disabled={isRenamingRemote}
+                  onKeyDown={(e) => {
+                    const shortcutPressed = e.key === 'Enter' && (e.metaKey || e.ctrlKey);
+                    const trimmedNewName = newRemoteNameForRename.trim();
+                    const trimmedNewUrl = newRemoteUrlForEdit.trim();
+                    const hasNameChange = trimmedNewName !== (remoteToRename ?? '').trim();
+                    const hasUrlChange = trimmedNewUrl !== remoteUrlToEdit.trim();
+                    if (
+                      shortcutPressed &&
+                      trimmedNewName &&
+                      trimmedNewUrl &&
+                      (hasNameChange || hasUrlChange) &&
+                      !isRenamingRemote
+                    ) {
+                      handleRenameRemote();
+                    }
+                  }}
+                />
+              </label>
+            </div>
             <div className="modal-action">
               <button
                 className="btn"
@@ -3762,12 +3913,16 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                 onClick={handleRenameRemote}
                 disabled={
                   !newRemoteNameForRename.trim() ||
-                  newRemoteNameForRename.trim() === (remoteToRename ?? '').trim() ||
+                  !newRemoteUrlForEdit.trim() ||
+                  (
+                    newRemoteNameForRename.trim() === (remoteToRename ?? '').trim() &&
+                    newRemoteUrlForEdit.trim() === remoteUrlToEdit.trim()
+                  ) ||
                   isRenamingRemote
                 }
               >
                 {isRenamingRemote && <span className="loading loading-spinner loading-xs"></span>}
-                Rename
+                Save
               </button>
             </div>
           </div>
