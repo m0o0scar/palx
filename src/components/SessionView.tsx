@@ -2125,6 +2125,10 @@ export function SessionView({
         ...(currentBaseBranch ? [currentBaseBranch] : []),
         ...baseBranchOptions
     ])).filter((branchOption) => branchOption !== branch || branchOption === currentBaseBranch);
+    const rebaseButtonLabel = currentBaseBranch ? `Rebase onto ${currentBaseBranch}` : 'Rebase';
+    const rebaseButtonTitle = currentBaseBranch
+        ? `Select base branch and rebase onto ${currentBaseBranch}`
+        : 'Select base branch and rebase';
     const hasDevServerScript = Boolean(devServerScript?.trim());
     const isDevButtonDisabled = !hasDevServerScript || isStartingDevServer || isTerminalForegroundProcessRunning;
     const devButtonTitle = !hasDevServerScript
@@ -2213,10 +2217,10 @@ export function SessionView({
                                 className="btn btn-ghost btn-xs h-6 min-h-6 rounded-none rounded-l border-none px-2 text-slate-700 hover:bg-base-content/10 dark:text-slate-300 dark:hover:bg-[#30363d]/60"
                                 onClick={handleRebase}
                                 disabled={isRebasing || isMerging || isUpdatingBaseBranch}
-                                title="Select base branch and rebase"
+                                title={rebaseButtonTitle}
                             >
                                 {isRebasing ? <span className="loading loading-spinner loading-xs"></span> : <GitMerge className="w-3 h-3" />}
-                                <span className={headerButtonLabelClass}>Rebase</span>
+                                <span className={headerButtonLabelClass}>{rebaseButtonLabel}</span>
                                 <ChevronDown className="w-3 h-3 opacity-50 ml-0.5" />
                             </button>
                             {isRebaseDropdownOpen && (
