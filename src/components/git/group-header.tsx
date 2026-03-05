@@ -31,6 +31,7 @@ export function GroupHeader({
   const parentVisibility = parentGroupPath ? visibilityMap[parentGroupPath] : null;
   const effectiveVisibility = directVisibility || parentVisibility;
   const isInherited = !directVisibility && parentVisibility !== null;
+  const hasPinnedVisibilityControl = Boolean(directVisibility);
   
   return (
     <div
@@ -45,7 +46,14 @@ export function GroupHeader({
         <span className="truncate min-w-0 flex-1">{name}</span>
       </div>
       {actions}
-      <div className="flex items-center gap-0.5 ml-auto">
+      <div
+        className={cn(
+          "ml-auto flex items-center gap-0.5",
+          hasPinnedVisibilityControl
+            ? "max-w-16 opacity-100"
+            : "max-w-0 overflow-hidden opacity-0 pointer-events-none group-hover:max-w-16 group-hover:opacity-100 group-hover:pointer-events-auto",
+        )}
+      >
         <VisibilityToggle
           type="visible"
           isActive={directVisibility === 'visible' || (isInherited && effectiveVisibility === 'visible')}
