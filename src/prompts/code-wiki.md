@@ -86,6 +86,8 @@ WIKI OUTPUT STRUCTURE (create these files)
 
 MERMAID REQUIREMENTS
 
+- Before generating Mermaid diagrams, install and consult the Mermaid skill using:
+  `npx skills add https://github.com/softaworks/agent-toolkit --skill mermaid-diagrams --yes`
 - Use Mermaid diagrams in Markdown fenced blocks, e.g.:
   ```mermaid
   flowchart LR

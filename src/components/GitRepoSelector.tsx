@@ -66,6 +66,7 @@ type TerminalWindow = Window & {
 
 type PredefinedPrompt = {
   id: string;
+  group: string;
   label: string;
   content: string;
 };
@@ -764,13 +765,39 @@ export default function GitRepoSelector({
     () => prefilledAttachmentPaths.map((attachmentPath) => getBaseName(attachmentPath)),
     [prefilledAttachmentPaths],
   );
-  const hasPredefinedPrompts = mode === 'new' && predefinedPrompts.length > 0;
+  const predefinedPromptGroups = useMemo(() => {
+    const groupedPrompts = new Map<string, PredefinedPrompt[]>();
+    for (const prompt of predefinedPrompts) {
+      const existingGroup = groupedPrompts.get(prompt.group) ?? [];
+      existingGroup.push(prompt);
+      groupedPrompts.set(prompt.group, existingGroup);
+    }
+    return Array.from(groupedPrompts.entries()).map(([group, prompts]) => ({
+      group,
+      prompts,
+    }));
+  }, [predefinedPrompts]);
+  const predefinedPromptById = useMemo(
+    () => new Map(predefinedPrompts.map((prompt) => [prompt.id, prompt])),
+    [predefinedPrompts],
+  );
+  const activePredefinedPrompt = useMemo(
+    () => predefinedPrompts.find((prompt) => prompt.content === initialMessage) ?? null,
+    [predefinedPrompts, initialMessage],
+  );
+  const hasPredefinedPrompts = mode === 'new' && predefinedPromptGroups.length > 0;
 
   const handleApplyPredefinedPrompt = useCallback((promptContent: string) => {
     setInitialMessage(promptContent);
     setCursorPosition(promptContent.length);
     setShowSuggestions(false);
   }, []);
+  const handleSelectPredefinedPrompt = useCallback((promptId: string) => {
+    if (!promptId) return;
+    const prompt = predefinedPromptById.get(promptId);
+    if (!prompt) return;
+    handleApplyPredefinedPrompt(prompt.content);
+  }, [handleApplyPredefinedPrompt, predefinedPromptById]);
 
   const updateSuggestions = (query: string, files: string[], currentAttachments: string[], carriedAttachments: string[]) => {
     const lowerQ = query.toLowerCase();
@@ -1803,25 +1830,28 @@ export default function GitRepoSelector({
                     Task Description
                   </label>
                   {hasPredefinedPrompts && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {predefinedPrompts.map((prompt) => {
-                        const isActivePrompt = initialMessage === prompt.content;
-                        return (
-                          <button
-                            key={prompt.id}
-                            type="button"
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${isActivePrompt
-                                ? 'border-primary bg-primary/10 text-primary dark:border-primary dark:bg-primary/20 dark:text-blue-300'
-                                : 'border-slate-300 bg-white text-slate-700 hover:border-primary hover:text-primary dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-primary dark:hover:text-blue-300'
-                              }`}
-                            onClick={() => handleApplyPredefinedPrompt(prompt.content)}
-                            disabled={loading}
-                            aria-label={`Fill task description with ${prompt.label} prompt`}
-                          >
-                            {prompt.label}
-                          </button>
-                        );
-                      })}
+                    <div className="ml-auto w-full sm:w-[340px]">
+                      <div className="relative">
+                        <select
+                          className="h-12 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                          value={activePredefinedPrompt?.id ?? ''}
+                          onChange={(event) => handleSelectPredefinedPrompt(event.target.value)}
+                          disabled={loading}
+                          aria-label="Select predefined prompt"
+                        >
+                          <option value="">Select Prompt</option>
+                          {predefinedPromptGroups.map(({ group, prompts }) => (
+                            <optgroup key={group} label={group}>
+                              {prompts.map((prompt) => (
+                                <option key={prompt.id} value={prompt.id}>
+                                  {prompt.label}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
+                      </div>
                     </div>
                   )}
                 </div>
