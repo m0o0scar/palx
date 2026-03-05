@@ -1830,34 +1830,28 @@ export default function GitRepoSelector({
                     Task Description
                   </label>
                   {hasPredefinedPrompts && (
-                    <div className="flex flex-wrap items-start gap-3">
-                      {predefinedPromptGroups.map(({ group, prompts }) => {
-                        const selectedPromptValue = activePredefinedPrompt?.group === group
-                          ? activePredefinedPrompt.id
-                          : '';
-                        return (
-                          <label
-                            key={group}
-                            className="flex min-w-[180px] flex-col gap-1 text-xs font-semibold text-slate-600 dark:text-slate-300"
-                          >
-                            <span>{group}</span>
-                            <select
-                              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                              value={selectedPromptValue}
-                              onChange={(event) => handleSelectPredefinedPrompt(event.target.value)}
-                              disabled={loading}
-                              aria-label={`Select a predefined ${group.toLowerCase()} prompt`}
-                            >
-                              <option value="">Select {group} prompt</option>
+                    <div className="ml-auto w-full sm:w-[340px]">
+                      <div className="relative">
+                        <select
+                          className="h-12 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                          value={activePredefinedPrompt?.id ?? ''}
+                          onChange={(event) => handleSelectPredefinedPrompt(event.target.value)}
+                          disabled={loading}
+                          aria-label="Select predefined prompt"
+                        >
+                          <option value="">Select Prompt</option>
+                          {predefinedPromptGroups.map(({ group, prompts }) => (
+                            <optgroup key={group} label={group}>
                               {prompts.map((prompt) => (
                                 <option key={prompt.id} value={prompt.id}>
                                   {prompt.label}
                                 </option>
                               ))}
-                            </select>
-                          </label>
-                        );
-                      })}
+                            </optgroup>
+                          ))}
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
+                      </div>
                     </div>
                   )}
                 </div>
