@@ -11,6 +11,8 @@
 }
 
 :root {
+  --font-geist-sans: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-geist-mono: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --background: #ffffff;
   --foreground: #171717;
   color-scheme: light dark;

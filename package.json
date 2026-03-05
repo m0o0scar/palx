@@ -24,7 +24,7 @@
   ],
   "scripts": {
     "dev": "node ./bin/viba.mjs --dev --port \"$(npx gfport 3200)\"",
-    "build": "next build",
+    "build": "next build --webpack",
     "prepack": "rm -rf .next && npm run build",
     "start": "node ./bin/viba.mjs",
     "lint": "eslint",
