@@ -107,6 +107,11 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
     if (branchPointIndex < 0) return allCommits;
     return allCommits.slice(0, branchPointIndex + 1);
   }, [allCommits, mergeBaseHash]);
+  const displayCommitCount = useMemo(() => {
+    const hasMergeBaseBoundaryCommit = !!mergeBaseHash && commits.some((commit) => isSameCommitHash(commit.hash, mergeBaseHash));
+    if (!hasMergeBaseBoundaryCommit) return commits.length;
+    return Math.max(commits.length - 1, 0);
+  }, [commits, mergeBaseHash]);
   const selectedCommitHash = useMemo(() => {
     if (commits.length === 0) return null;
     if (selection.mode === 'unselected') return null;
@@ -193,7 +198,7 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span className="text-[10px] opacity-70">
-              {commits.length} commit{commits.length === 1 ? '' : 's'}
+              {displayCommitCount} commit{displayCommitCount === 1 ? '' : 's'}
             </span>
             <button
               type="button"
