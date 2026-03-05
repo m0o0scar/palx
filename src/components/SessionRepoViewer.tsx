@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { useGitBranches, useGitLog, useGitMergeBase } from '@/hooks/use-git';
+import { useGitAction, useGitBranches, useGitLog, useGitMergeBase, useGitStatus } from '@/hooks/use-git';
+import { useEscapeDismiss } from '@/hooks/use-escape-dismiss';
 import { Commit } from '@/lib/types';
 import { CommitChangesView } from './git/commit-changes-view';
 
@@ -36,6 +37,15 @@ function parseBranchHintList(value: string | undefined): string[] {
   );
 }
 
+function normalizeCommitMessage(message: string): string {
+  return message.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+}
+
+function hasCommitSubject(message: string): boolean {
+  const [firstLine = ''] = message.replace(/\r\n/g, '\n').split('\n');
+  return firstLine.trim().length > 0;
+}
+
 type SessionRepoViewerProps = {
   repoPath: string;
   branchHint?: string;
@@ -49,7 +59,13 @@ type CommitSelectionState =
 
 export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: SessionRepoViewerProps) {
   const [selection, setSelection] = useState<CommitSelectionState>({ mode: 'auto', hash: null });
+  const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
+  const [commitDialogOpen, setCommitDialogOpen] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
+  const [commitMessageError, setCommitMessageError] = useState<string | null>(null);
+  const action = useGitAction();
   const { data: branchData } = useGitBranches(repoPath);
+  const { data: statusData } = useGitStatus(repoPath);
   const {
     data: log,
     isLoading,
@@ -96,6 +112,48 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
     }
     return commits[0].hash;
   }, [commits, selection]);
+  const hasUnstagedChanges = (statusData?.files ?? []).some(
+    (file) => file.working_dir !== ' ' || file.index === '?'
+  );
+  const hasAnyChanges = (statusData?.files?.length ?? 0) > 0;
+
+  const closeCommitDialog = () => {
+    setCommitDialogOpen(false);
+    setCommitMessageError(null);
+  };
+
+  const handleDiscard = async () => {
+    await action.mutateAsync({ repoPath, action: 'discard', data: { includeUntracked: true } });
+    setDiscardDialogOpen(false);
+    setSelection({ mode: 'auto', hash: null });
+  };
+
+  const handleCommitAll = async () => {
+    const normalizedMessage = normalizeCommitMessage(commitMessage);
+    if (!hasCommitSubject(normalizedMessage)) {
+      setCommitMessageError('Commit message first line (subject) is required.');
+      return;
+    }
+
+    await action.mutateAsync({
+      repoPath,
+      action: 'commit',
+      data: { message: normalizedMessage, files: ['.'] },
+    });
+    setCommitDialogOpen(false);
+    setCommitMessage('');
+    setCommitMessageError(null);
+    setSelection({ mode: 'auto', hash: null });
+  };
+
+  useEscapeDismiss(discardDialogOpen, () => setDiscardDialogOpen(false), () => {
+    if (action.isPending) return;
+    void handleDiscard();
+  });
+  useEscapeDismiss(commitDialogOpen, closeCommitDialog, () => {
+    if (action.isPending) return;
+    void handleCommitAll();
+  });
 
   const handleCommitClick = (commitHash: string) => {
     if (selectedCommitHash === commitHash) {
@@ -116,9 +174,32 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
               {currentBranch}
             </span>
           </div>
-          <span className="shrink-0 text-[10px] opacity-70">
-            {commits.length} commit{commits.length === 1 ? '' : 's'}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="text-[10px] opacity-70">
+              {commits.length} commit{commits.length === 1 ? '' : 's'}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs h-6 min-h-6 border-none px-2 text-[10px] text-red-600 hover:bg-red-50 disabled:text-slate-400 dark:text-red-300 dark:hover:bg-red-500/10 dark:disabled:text-slate-600"
+              onClick={() => setDiscardDialogOpen(true)}
+              disabled={!hasUnstagedChanges || action.isPending}
+              title="Discard all unstaged changes"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs h-6 min-h-6 border-none px-2 text-[10px] text-emerald-700 hover:bg-emerald-50 disabled:text-slate-400 dark:text-emerald-300 dark:hover:bg-emerald-500/10 dark:disabled:text-slate-600"
+              onClick={() => {
+                setCommitMessageError(null);
+                setCommitDialogOpen(true);
+              }}
+              disabled={!hasAnyChanges || action.isPending}
+              title="Stage all and commit"
+            >
+              Commit
+            </button>
+          </div>
         </div>
         <div className="min-h-0 flex-1">
           <CommitChangesView
@@ -203,6 +284,73 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
           )}
         </div>
       </div>
+
+      {discardDialogOpen && (
+        <dialog className="modal modal-open">
+          <div className="modal-box">
+            <h3 className="font-bold text-lg">Discard Unstaged Changes</h3>
+            <p className="py-4">
+              Are you sure you want to discard all unstaged local changes and new files? This action cannot be undone.
+            </p>
+            <div className="modal-action">
+              <button className="btn" onClick={() => setDiscardDialogOpen(false)} disabled={action.isPending}>
+                Cancel
+              </button>
+              <button className="btn btn-error" onClick={() => void handleDiscard()} disabled={action.isPending}>
+                {action.isPending && <span className="loading loading-spinner loading-xs"></span>}
+                Discard
+              </button>
+            </div>
+          </div>
+          <form method="dialog" className="modal-backdrop">
+            <button onClick={() => setDiscardDialogOpen(false)}>close</button>
+          </form>
+        </dialog>
+      )}
+
+      {commitDialogOpen && (
+        <dialog className="modal modal-open">
+          <div className="modal-box max-w-2xl">
+            <h3 className="font-bold text-lg">Commit All Changes</h3>
+            <p className="py-3 opacity-70">
+              Provide a commit message. The first line is used as the subject.
+            </p>
+            <textarea
+              className="textarea textarea-bordered h-48 w-full font-sans"
+              value={commitMessage}
+              onChange={(event) => {
+                setCommitMessage(event.target.value);
+                if (commitMessageError) setCommitMessageError(null);
+              }}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                  event.preventDefault();
+                  if (!action.isPending) {
+                    void handleCommitAll();
+                  }
+                }
+              }}
+              autoFocus
+              placeholder={'feat: describe your change\n\nOptional details...'}
+            />
+            {commitMessageError && (
+              <p className="mt-2 text-sm text-red-600 dark:text-red-300">{commitMessageError}</p>
+            )}
+            <div className="modal-action">
+              <button className="btn" onClick={closeCommitDialog} disabled={action.isPending}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" onClick={() => void handleCommitAll()} disabled={action.isPending}>
+                {action.isPending && <span className="loading loading-spinner loading-xs"></span>}
+                Commit
+              </button>
+            </div>
+          </div>
+          <form method="dialog" className="modal-backdrop">
+            <button onClick={closeCommitDialog}>close</button>
+          </form>
+        </dialog>
+      )}
     </div>
   );
 }
