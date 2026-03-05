@@ -526,7 +526,7 @@ export function useStashFileDiff(repoPath: string | null, stashIndex: number | n
 }
 
 // Actions
-export type GitActionType = 'commit' | 'push' | 'pull' | 'fetch' | 'stage' | 'unstage' | 'checkout' | 'checkout-to-local' | 'branch' | 'create-tag' | 'delete-branch' | 'delete-worktree' | 'delete-remote-branch' | 'delete-remote' | 'delete-tag' | 'delete-remote-tag' | 'rename-branch' | 'rename-remote-branch' | 'rename-remote' | 'add-remote' | 'reset' | 'revert' | 'cherry-pick' | 'cherry-pick-multiple' | 'cherry-pick-abort' | 'rebase' | 'merge' | 'check-merge-conflicts' | 'check-rebase-conflicts' | 'get-conflict-state' | 'get-conflict-file-versions' | 'resolve-conflict-file' | 'continue-merge' | 'abort-merge' | 'continue-rebase' | 'abort-rebase' | 'get-remotes' | 'get-remote-branches' | 'get-tracking-branch' | 'get-latest-commit-message' | 'push-to-remote' | 'pull-from-remote' | 'stash' | 'stash-apply' | 'stash-drop' | 'stash-pop' | 'reword' | 'discard' | 'cleanup-lock-file';
+export type GitActionType = 'commit' | 'push' | 'pull' | 'fetch' | 'stage' | 'unstage' | 'checkout' | 'checkout-to-local' | 'branch' | 'create-tag' | 'delete-branch' | 'delete-worktree' | 'delete-remote-branch' | 'delete-remote' | 'delete-tag' | 'delete-remote-tag' | 'rename-branch' | 'rename-remote-branch' | 'rename-remote' | 'set-remote-url' | 'add-remote' | 'reset' | 'revert' | 'cherry-pick' | 'cherry-pick-multiple' | 'cherry-pick-abort' | 'rebase' | 'merge' | 'check-merge-conflicts' | 'check-rebase-conflicts' | 'get-conflict-state' | 'get-conflict-file-versions' | 'resolve-conflict-file' | 'continue-merge' | 'abort-merge' | 'continue-rebase' | 'abort-rebase' | 'get-remotes' | 'get-remote-branches' | 'get-tracking-branch' | 'get-latest-commit-message' | 'push-to-remote' | 'pull-from-remote' | 'stash' | 'stash-apply' | 'stash-drop' | 'stash-pop' | 'reword' | 'discard' | 'cleanup-lock-file';
 
 // Map action types to human-readable operation names
 const actionOperationNames: Record<GitActionType, string> = {
@@ -549,6 +549,7 @@ const actionOperationNames: Record<GitActionType, string> = {
   'rename-branch': 'Rename Branch',
   'rename-remote-branch': 'Rename Remote Branch',
   'rename-remote': 'Rename Remote',
+  'set-remote-url': 'Set Remote URL',
   'add-remote': 'Add Remote',
   'reset': 'Reset',
   'revert': 'Revert Commit',
