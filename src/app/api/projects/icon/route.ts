@@ -8,6 +8,11 @@ import { addProject, getProjects, updateProject } from '@/lib/store';
 const MAX_ICON_BYTES = 2 * 1024 * 1024;
 const ICON_DIR = path.join(os.homedir(), '.viba', 'project-icons');
 const ALLOWED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico']);
+type ParsedIconUpload = {
+  projectPath: string;
+  extension: string;
+  fileBuffer: Buffer;
+};
 
 function sanitizeExtension(fileName: string): string | null {
   const extension = path.extname(fileName).toLowerCase();
@@ -72,30 +77,81 @@ async function removeExistingManagedIcon(iconPath: string | null | undefined): P
   }
 }
 
-export async function POST(request: Request) {
-  try {
+async function parseIconUpload(request: Request): Promise<ParsedIconUpload> {
+  const contentType = request.headers.get('content-type')?.toLowerCase() ?? '';
+
+  if (contentType.includes('multipart/form-data')) {
     const formData = await request.formData();
     const projectPathValue = formData.get('projectPath');
     const iconFileValue = formData.get('iconFile');
 
     if (typeof projectPathValue !== 'string' || !projectPathValue.trim()) {
-      return NextResponse.json({ error: 'projectPath is required.' }, { status: 400 });
+      throw new Error('projectPath is required.');
     }
 
     if (!(iconFileValue instanceof File)) {
-      return NextResponse.json({ error: 'iconFile is required.' }, { status: 400 });
+      throw new Error('iconFile is required.');
     }
 
     const extension = sanitizeExtension(iconFileValue.name);
     if (!extension) {
-      return NextResponse.json({ error: 'Unsupported icon type. Use png, jpg, jpeg, webp, svg, or ico.' }, { status: 400 });
+      throw new Error('Unsupported icon type. Use png, jpg, jpeg, webp, svg, or ico.');
     }
 
     if (iconFileValue.size > MAX_ICON_BYTES) {
-      return NextResponse.json({ error: 'Icon file must be 2MB or smaller.' }, { status: 400 });
+      throw new Error('Icon file must be 2MB or smaller.');
     }
 
-    const projectPath = path.resolve(projectPathValue.trim());
+    return {
+      projectPath: path.resolve(projectPathValue.trim()),
+      extension,
+      fileBuffer: Buffer.from(await iconFileValue.arrayBuffer()),
+    };
+  }
+
+  const body = await request.json().catch(() => null);
+  const projectPathValue = typeof body?.projectPath === 'string' ? body.projectPath.trim() : '';
+  const iconPathValue = typeof body?.iconPath === 'string' ? body.iconPath.trim() : '';
+
+  if (!projectPathValue) {
+    throw new Error('projectPath is required.');
+  }
+
+  if (!iconPathValue) {
+    throw new Error('iconPath is required.');
+  }
+
+  const resolvedIconPath = path.resolve(iconPathValue);
+  const extension = sanitizeExtension(path.basename(resolvedIconPath));
+  if (!extension) {
+    throw new Error('Unsupported icon type. Use png, jpg, jpeg, webp, svg, or ico.');
+  }
+
+  let iconStats;
+  try {
+    iconStats = await fs.stat(resolvedIconPath);
+  } catch {
+    throw new Error('Icon file not found.');
+  }
+
+  if (!iconStats.isFile()) {
+    throw new Error('Icon path must be a file.');
+  }
+
+  if (iconStats.size > MAX_ICON_BYTES) {
+    throw new Error('Icon file must be 2MB or smaller.');
+  }
+
+  return {
+    projectPath: path.resolve(projectPathValue),
+    extension,
+    fileBuffer: await fs.readFile(resolvedIconPath),
+  };
+}
+
+export async function POST(request: Request) {
+  try {
+    const { projectPath, extension, fileBuffer } = await parseIconUpload(request);
     const existingProject = await ensureProjectExists(projectPath);
 
     await fs.mkdir(ICON_DIR, { recursive: true });
@@ -103,7 +159,6 @@ export async function POST(request: Request) {
     const destinationPath = getManagedIconPath(projectPath, extension);
     await removeExistingManagedIcon(existingProject.iconPath);
 
-    const fileBuffer = Buffer.from(await iconFileValue.arrayBuffer());
     await fs.writeFile(destinationPath, fileBuffer);
 
     const updatedProject = updateProject(existingProject.path, { iconPath: destinationPath });
@@ -113,7 +168,16 @@ export async function POST(request: Request) {
     if (message === 'Project not found.') {
       return NextResponse.json({ error: message }, { status: 404 });
     }
-    if (message === 'Project path must be a directory.') {
+    if (
+      message === 'Project path must be a directory.'
+      || message === 'projectPath is required.'
+      || message === 'iconFile is required.'
+      || message === 'iconPath is required.'
+      || message === 'Unsupported icon type. Use png, jpg, jpeg, webp, svg, or ico.'
+      || message === 'Icon file must be 2MB or smaller.'
+      || message === 'Icon file not found.'
+      || message === 'Icon path must be a file.'
+    ) {
       return NextResponse.json({ error: message }, { status: 400 });
     }
     console.error('Failed to upload project icon:', error);

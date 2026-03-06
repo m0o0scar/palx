@@ -4,7 +4,6 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { FolderGit2, Plus, X, ChevronRight, ChevronDown, Bot, Trash2, ExternalLink, CloudDownload, Monitor, Sun, Moon } from 'lucide-react';
 import FileBrowser from './FileBrowser';
 import {
-  getBranches,
   GitBranch,
   startTtydProcess,
   listRepoFiles,
@@ -13,7 +12,13 @@ import {
   SupportedAgentCli,
   resolveRepoCardIcon,
 } from '@/app/actions/git';
-import { cloneRemoteProject, discoverProjectGitRepos, resolveProjectByName } from '@/app/actions/project';
+import {
+  cloneRemoteProject,
+  discoverProjectGitRepos,
+  discoverProjectGitReposWithBranches,
+  getProjectActivity,
+  resolveProjectByName,
+} from '@/app/actions/project';
 import { createSession, deleteSession, getSessionPrefillContext, listSessions, saveSessionLaunchContext, SessionMetadata } from '@/app/actions/session';
 import { deleteDraft, listDrafts, saveDraft, DraftMetadata } from '@/app/actions/draft';
 import { getConfig, updateConfig, updateProjectSettings, Config } from '@/app/actions/config';
@@ -23,6 +28,7 @@ import { useRouter } from 'next/navigation';
 import { getBaseName } from '@/lib/path';
 import { notifySessionsUpdated, subscribeToSessionsUpdated } from '@/lib/session-updates';
 import { consumePendingSessionNavigationRetry, recordPendingSessionNavigation } from '@/lib/session-navigation';
+import { hasStartupTaskDescription } from '@/lib/agent-startup-prompt';
 import {
   applyThemeToTerminalIframe,
   applyThemeToTerminalWindow,
@@ -44,13 +50,6 @@ type ThemeMode = 'auto' | 'light' | 'dark';
 const DEFAULT_PROJECT_STARTUP_COMMAND = '';
 const DEFAULT_PROJECT_DEV_SERVER_COMMAND = '';
 const THEME_MODE_SEQUENCE: ThemeMode[] = ['auto', 'light', 'dark'];
-const PROJECT_GIT_CONTEXT_INSTRUCTION = [
-  'Project context:',
-  '- This project may contain zero, one, or multiple Git repositories.',
-  '- Inspect the workspace structure before running git commands.',
-  '- If there are multiple repositories, apply commits and push/PR strategy per repository.',
-  '- If there is no repository, use a folder-mode workflow and skip git-only steps.',
-].join('\n');
 
 const SESSION_MODE_STORAGE_KEY = 'viba:new-session-mode';
 const SESSION_TITLE_MAX_LENGTH = 120;
@@ -114,6 +113,11 @@ function toProjectRelativeRepoPath(projectPath: string, repoPath: string): strin
   return repoPath;
 }
 
+function arePathListsEqual(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
 export default function GitRepoSelector({
   mode = 'home',
   projectPath = null,
@@ -149,7 +153,6 @@ export default function GitRepoSelector({
 
   const router = useRouter();
 
-  const [branches, setBranches] = useState<GitBranch[]>([]);
   const [currentBranchName, setCurrentBranchName] = useState<string>('');
   const [projectGitRepos, setProjectGitRepos] = useState<string[]>([]);
   const [branchesByRepo, setBranchesByRepo] = useState<Record<string, GitBranch[]>>({});
@@ -197,6 +200,8 @@ export default function GitRepoSelector({
     repos: string[];
   } | null>(null);
   const repoCardIconResolutionsInFlightRef = useRef<Set<string>>(new Set());
+  const selectedProjectLoadRequestRef = useRef(0);
+  const pendingProjectRouteSyncRef = useRef<string | null>(null);
   const loginTerminalRef = useRef<HTMLIFrameElement>(null);
 
   const [isSavingDraft, setIsSavingDraft] = useState(false);
@@ -208,6 +213,31 @@ export default function GitRepoSelector({
   const notifySessionsChanged = useCallback(() => {
     notifySessionsUpdated();
   }, []);
+
+  const isActiveSelectedProjectLoad = useCallback((requestId: number) => {
+    return selectedProjectLoadRequestRef.current === requestId;
+  }, []);
+
+  const resetSelectedProjectState = useCallback((projectPath: string) => {
+    setSelectedRepo(projectPath);
+    setRepoFilesCache([]);
+    setProjectGitRepos([]);
+    setBranchesByRepo({});
+    setBaseBranchByRepo({});
+    setCurrentBranchName('');
+    setIsProjectGitReposTruncated(false);
+    setExistingSessions([]);
+    setExistingDrafts([]);
+    setStartupScript('');
+    setDevServerScript('');
+  }, []);
+
+  const beginSelectedProjectLoad = useCallback((projectPath: string) => {
+    const requestId = selectedProjectLoadRequestRef.current + 1;
+    selectedProjectLoadRequestRef.current = requestId;
+    resetSelectedProjectState(projectPath);
+    return requestId;
+  }, [resetSelectedProjectState]);
 
   const navigateToSession = useCallback((sessionName: string) => {
     const targetPath = `/session/${encodeURIComponent(sessionName)}`;
@@ -236,24 +266,54 @@ export default function GitRepoSelector({
     };
   }, []);
 
-  const refreshSessionData = useCallback(async (repo: string | null = selectedRepo) => {
+  const refreshSessionData = useCallback(async (
+    repo: string | null = selectedRepo,
+    options?: { includeGlobal?: boolean },
+    selectedProjectRequestId?: number,
+  ) => {
+    const includeGlobal = options?.includeGlobal ?? mode === 'home';
+
     try {
+      if (!includeGlobal && repo) {
+        const activity = await getProjectActivity(repo);
+        if (
+          selectedProjectRequestId !== undefined
+          && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+        ) {
+          return;
+        }
+        setExistingSessions(activity.sessions);
+        setExistingDrafts(activity.drafts);
+        return;
+      }
+
       const [allSess, repoSess, allD, repoD] = await Promise.all([
-        listSessions(),
+        includeGlobal ? listSessions() : Promise.resolve(null),
         repo ? listSessions(repo) : Promise.resolve([] as SessionMetadata[]),
-        listDrafts(),
+        includeGlobal ? listDrafts() : Promise.resolve(null),
         repo ? listDrafts(repo) : Promise.resolve([] as DraftMetadata[]),
       ]);
-      setAllSessions(allSess);
-      setAllDrafts(allD);
+
+      if (allSess) {
+        setAllSessions(allSess);
+      }
+      if (allD) {
+        setAllDrafts(allD);
+      }
       if (repo) {
+        if (
+          selectedProjectRequestId !== undefined
+          && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+        ) {
+          return;
+        }
         setExistingSessions(repoSess);
         setExistingDrafts(repoD);
       }
     } catch (e) {
       console.error('Failed to refresh sessions and drafts', e);
     }
-  }, [selectedRepo]);
+  }, [isActiveSelectedProjectLoad, mode, selectedRepo]);
 
   const dismissRepoSettingsDialog = useCallback(() => {
     if (isSavingRepoSettings) return;
@@ -300,30 +360,40 @@ export default function GitRepoSelector({
     setIsLoadingCloneCredentialOptions(false);
   }, [isCloningRemote]);
 
-  // Load config and all sessions on mount
+  // Load home dashboard data on mount. The /new route loads project-specific data lazily.
   useEffect(() => {
+    if (mode !== 'home') {
+      setIsLoaded(true);
+      return;
+    }
+
+    let cancelled = false;
+
     const loadData = async () => {
       try {
-        const [cfg, sessions, drafts, credentialsResult] = await Promise.all([
+        const [cfg, sessions, drafts] = await Promise.all([
           getConfig(),
           listSessions(),
           listDrafts(),
-          listCredentials(),
         ]);
+        if (cancelled) return;
         setConfig(cfg);
         setAllSessions(sessions);
         setAllDrafts(drafts);
-        if (credentialsResult.success) {
-          setCredentialOptions(credentialsResult.credentials);
-        }
       } catch (e) {
         console.error('Failed to load data', e);
       } finally {
-        setIsLoaded(true);
+        if (!cancelled) {
+          setIsLoaded(true);
+        }
       }
     };
-    loadData();
-  }, []);
+    void loadData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
 
   useEffect(() => {
     try {
@@ -393,39 +463,43 @@ export default function GitRepoSelector({
   }, [mode]);
 
   useEffect(() => {
+    if (mode === 'new' && !selectedRepo) {
+      return;
+    }
+
     const refresh = () => {
       const repoForList = mode === 'new' ? selectedRepo : null;
-      void refreshSessionData(repoForList);
+      void refreshSessionData(repoForList, { includeGlobal: mode === 'home' });
     };
 
     const unsubscribeSessionsUpdated = subscribeToSessionsUpdated(refresh);
-    refresh();
+    if (mode === 'home') {
+      refresh();
+    }
 
     return () => {
       unsubscribeSessionsUpdated();
     };
   }, [mode, refreshSessionData, selectedRepo]);
 
-  const loadProjectGitRepos = async (projectPath: string) => {
+  const loadProjectGitRepos = async (projectPath: string, selectedProjectRequestId?: number) => {
     setIsLoadingProjectGitRepos(true);
     try {
-      const discovery = await discoverProjectGitRepos(projectPath);
+      const discovery = await discoverProjectGitReposWithBranches(projectPath);
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return;
+      }
       const repoPaths = discovery.repos.map((repo) => repo.repoPath);
       setProjectGitRepos(repoPaths);
       setIsProjectGitReposTruncated(discovery.truncated);
 
-      const branchEntries = await Promise.all(repoPaths.map(async (repoPath) => {
-        try {
-          const repoBranches = await getBranches(repoPath);
-          return [repoPath, repoBranches] as const;
-        } catch {
-          return [repoPath, [] as GitBranch[]] as const;
-        }
-      }));
-
       const nextBranchesByRepo: Record<string, GitBranch[]> = {};
       const nextBaseBranchByRepo: Record<string, string> = {};
-      for (const [repoPath, repoBranches] of branchEntries) {
+      for (const repoPath of repoPaths) {
+        const repoBranches = discovery.branchesByRepo[repoPath] ?? [];
         nextBranchesByRepo[repoPath] = repoBranches;
         const currentBranch = repoBranches.find((branch) => branch.current)?.name;
         if (currentBranch) {
@@ -439,33 +513,48 @@ export default function GitRepoSelector({
       setBaseBranchByRepo(nextBaseBranchByRepo);
 
       const primaryRepo = repoPaths[0] || '';
-      const primaryBranches = primaryRepo ? (nextBranchesByRepo[primaryRepo] || []) : [];
-      setBranches(primaryBranches);
       setCurrentBranchName(primaryRepo ? (nextBaseBranchByRepo[primaryRepo] || '') : '');
     } catch (loadError) {
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return;
+      }
       console.error('Failed to discover project git repositories:', loadError);
       setProjectGitRepos([]);
       setBranchesByRepo({});
       setBaseBranchByRepo({});
-      setBranches([]);
       setCurrentBranchName('');
       setIsProjectGitReposTruncated(false);
     } finally {
-      setIsLoadingProjectGitRepos(false);
+      if (
+        selectedProjectRequestId === undefined
+        || isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        setIsLoadingProjectGitRepos(false);
+      }
     }
   };
 
-  const loadSelectedRepoData = async (path: string) => {
-    setSelectedRepo(path);
-    setRepoFilesCache([]);
-
+  const loadSelectedRepoData = async (
+    path: string,
+    resolvedConfig?: Config,
+    selectedProjectRequestId?: number,
+  ) => {
     // Load saved session scripts
-    await loadSavedAgentSettings(path);
+    await loadSavedAgentSettings(path, resolvedConfig, selectedProjectRequestId);
+    if (
+      selectedProjectRequestId !== undefined
+      && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+    ) {
+      return;
+    }
 
-    // Discover project git repos and branch lists at runtime.
-    await loadProjectGitRepos(path);
-
-    await refreshSessionData(path);
+    await Promise.all([
+      loadProjectGitRepos(path, selectedProjectRequestId),
+      refreshSessionData(path, { includeGlobal: false }, selectedProjectRequestId),
+    ]);
   };
 
   const getRepoDisplayPath = useCallback((repoPath: string, totalRepos: number): string => {
@@ -503,10 +592,22 @@ export default function GitRepoSelector({
   ) => {
     setLoading(true);
     setError(null);
+    const selectedProjectRequestId = mode === 'new'
+      ? beginSelectedProjectLoad(path)
+      : undefined;
     try {
       await ensureProjectRegistered(path);
 
       const currentConfig = config || await getConfig();
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return false;
+      }
+      if (!config) {
+        setConfig(currentConfig);
+      }
       let newRecent = [...currentConfig.recentProjects];
       if (!newRecent.includes(path)) {
         newRecent.unshift(path);
@@ -515,9 +616,16 @@ export default function GitRepoSelector({
         newRecent = [path, ...newRecent.filter(r => r !== path)];
       }
 
-      // Update config
-      const newConfig = await updateConfig({ recentProjects: newRecent });
-      setConfig(newConfig);
+      const nextConfig = arePathListsEqual(newRecent, currentConfig.recentProjects)
+        ? currentConfig
+        : await updateConfig({ recentProjects: newRecent });
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return false;
+      }
+      setConfig(nextConfig);
 
       setIsBrowsing(false);
 
@@ -530,14 +638,30 @@ export default function GitRepoSelector({
         return true;
       }
 
-      await loadSelectedRepoData(path);
+      await loadSelectedRepoData(path, nextConfig, selectedProjectRequestId);
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return false;
+      }
       return true;
     } catch (err) {
       console.error(err);
-      setError('Failed to open project.');
+      if (
+        selectedProjectRequestId === undefined
+        || isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        setError('Failed to open project.');
+      }
       return false;
     } finally {
-      setLoading(false);
+      if (
+        selectedProjectRequestId === undefined
+        || isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        setLoading(false);
+      }
     }
   };
 
@@ -589,9 +713,16 @@ export default function GitRepoSelector({
     const nextRepo = e.target.value;
     if (!nextRepo || nextRepo === selectedRepo) return;
 
+    pendingProjectRouteSyncRef.current = nextRepo;
     const changed = await handleSelectRepo(nextRepo);
-    if (!changed) return;
-    if (sessionNavigationCommittedRef.current) return;
+    if (!changed) {
+      pendingProjectRouteSyncRef.current = null;
+      return;
+    }
+    if (sessionNavigationCommittedRef.current) {
+      pendingProjectRouteSyncRef.current = null;
+      return;
+    }
 
     const params = new URLSearchParams();
     params.set('project', nextRepo);
@@ -617,11 +748,19 @@ export default function GitRepoSelector({
     if (mode !== 'new') return;
 
     if (!repoPath) {
+      pendingProjectRouteSyncRef.current = null;
       setSelectedRepo(null);
       setExistingSessions([]);
-      setBranches([]);
       setCurrentBranchName('');
       return;
+    }
+
+    const pendingProjectRouteSync = pendingProjectRouteSyncRef.current;
+    if (pendingProjectRouteSync) {
+      if (repoPath !== pendingProjectRouteSync) {
+        return;
+      }
+      pendingProjectRouteSyncRef.current = null;
     }
 
     if (repoPath === selectedRepo) return;
@@ -730,12 +869,22 @@ export default function GitRepoSelector({
     };
   }, [hasAppliedPrefill, mode, prefillFromSession, selectedRepo]);
 
-  const loadSavedAgentSettings = async (repoPath: string) => {
+  const loadSavedAgentSettings = async (
+    repoPath: string,
+    resolvedConfig?: Config,
+    selectedProjectRequestId?: number,
+  ) => {
     // Refresh config to ensure we have latest settings?
     // We can just rely on current config state if we assume single user or minimal concurrency.
     // Or we can refetch.
-    const currentConfig = config || await getConfig();
-    if (!config) setConfig(currentConfig);
+    const currentConfig = resolvedConfig || config || await getConfig();
+    if (
+      selectedProjectRequestId !== undefined
+      && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+    ) {
+      return;
+    }
+    if (!config && currentConfig) setConfig(currentConfig);
 
     const settings = currentConfig.projectSettings[repoPath] || {};
 
@@ -1028,28 +1177,28 @@ export default function GitRepoSelector({
     }
   };
 
-  const handleUploadProjectIcon = async (file: File) => {
+  const handleUploadProjectIcon = async (iconPath: string) => {
     if (!repoForSettings || isUploadingProjectIcon) return;
     setRepoSettingsError(null);
     setIsUploadingProjectIcon(true);
 
     try {
-      const formData = new FormData();
-      formData.append('projectPath', repoForSettings);
-      formData.append('iconFile', file);
-
       const response = await fetch('/api/projects/icon', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectPath: repoForSettings,
+          iconPath,
+        }),
       });
       const payload = await response.json();
       if (!response.ok) {
         throw new Error(payload?.error || 'Failed to upload project icon.');
       }
 
-      const iconPath = typeof payload?.iconPath === 'string' ? payload.iconPath : null;
-      setProjectIconPathForSettings(iconPath);
-      setRepoCardIconByRepo((previous) => ({ ...previous, [repoForSettings]: iconPath }));
+      const uploadedIconPath = typeof payload?.iconPath === 'string' ? payload.iconPath : null;
+      setProjectIconPathForSettings(uploadedIconPath);
+      setRepoCardIconByRepo((previous) => ({ ...previous, [repoForSettings]: uploadedIconPath }));
       setBrokenRepoCardIcons((previous) => ({ ...previous, [repoForSettings]: false }));
     } catch (error) {
       console.error(error);
@@ -1243,7 +1392,7 @@ export default function GitRepoSelector({
 
         // Process initial message mentions
         const trimmedInitialMessage = initialMessage.trim();
-        const hasTaskDescription = trimmedInitialMessage.length > 0;
+        const hasTaskDescription = hasStartupTaskDescription(trimmedInitialMessage);
         let processedMessage = trimmedInitialMessage;
 
         if (hasTaskDescription) {
@@ -1258,11 +1407,7 @@ export default function GitRepoSelector({
           });
         }
 
-        const launchInitialMessage = hasTaskDescription
-          ? [PROJECT_GIT_CONTEXT_INSTRUCTION, processedMessage]
-              .filter((entry) => entry.trim().length > 0)
-              .join('\n\n')
-          : '';
+        const launchInitialMessage = hasTaskDescription ? processedMessage : '';
 
         // 3. Persist launch context for the new session
         const launchContextResult = await saveSessionLaunchContext(wtResult.sessionName, {
@@ -1475,13 +1620,8 @@ export default function GitRepoSelector({
         return;
       }
 
-      const sessions = await listSessions(selectedRepo);
-      setExistingSessions(sessions);
-
-      // Also refresh all sessions
-      const allSess = await listSessions();
-      setAllSessions(allSess);
-      notifySessionsChanged();
+      setExistingSessions((previous) => previous.filter((item) => item.sessionName !== session.sessionName));
+      setAllSessions((previous) => previous.filter((item) => item.sessionName !== session.sessionName));
     } catch (e) {
       console.error(e);
       setError('Failed to delete session');
@@ -1592,6 +1732,8 @@ export default function GitRepoSelector({
   }, [discoverHomeProjectRepos, mode, projectGitReposByPath, recentProjects]);
 
   useEffect(() => {
+    if (mode !== 'home') return;
+
     const inFlightResolutions = repoCardIconResolutionsInFlightRef.current;
     const reposToResolve = recentProjects.filter((repo) => (
       !(repo in repoCardIconByRepo)
@@ -1637,7 +1779,7 @@ export default function GitRepoSelector({
         inFlightResolutions.delete(repo);
       });
     };
-  }, [recentProjects, repoCardIconByRepo]);
+  }, [mode, recentProjects, repoCardIconByRepo]);
 
   const currentThemeModeIndex = THEME_MODE_SEQUENCE.indexOf(themeMode);
   const nextThemeMode = THEME_MODE_SEQUENCE[(currentThemeModeIndex + 1) % THEME_MODE_SEQUENCE.length];
@@ -1727,6 +1869,7 @@ export default function GitRepoSelector({
 
       {mode === 'home' && (
         <RepoSettingsDialog
+          key={`${repoForSettings ?? 'none'}:${isRepoSettingsDialogOpen ? 'open' : 'closed'}`}
           isOpen={isRepoSettingsDialogOpen}
           projectForSettings={repoForSettings}
           projectAlias={repoAlias}
@@ -1741,8 +1884,8 @@ export default function GitRepoSelector({
           onAliasChange={setRepoAlias}
           onStartupCommandChange={setRepoStartupCommand}
           onDevServerCommandChange={setRepoDevServerCommand}
-          onUploadIcon={(file) => {
-            void handleUploadProjectIcon(file);
+          onUploadIcon={(iconPath) => {
+            void handleUploadProjectIcon(iconPath);
           }}
           onRemoveIcon={() => {
             void handleRemoveProjectIcon();
@@ -1993,54 +2136,6 @@ export default function GitRepoSelector({
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
-                <h3 className="mb-4 text-lg font-bold text-slate-900 dark:text-white">Drafts</h3>
-                <div className="space-y-2">
-                  {existingDrafts.length === 0 && (
-                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
-                      No drafts for this project.
-                    </div>
-                  )}
-
-                  {existingDrafts.map((draft) => (
-                    <div
-                      key={draft.id}
-                      className="group flex items-center gap-3 rounded-lg border border-transparent px-3 py-3 transition-colors hover:border-slate-100 hover:bg-slate-50 dark:hover:border-slate-700/70 dark:hover:bg-slate-800/50"
-                    >
-                      <div
-                        className={`h-2 w-2 flex-shrink-0 rounded-full bg-blue-500`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{draft.title}</p>
-                        <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                          {getProjectDisplayName(draft.projectPath || draft.repoPath || '')} • {draft.agentProvider}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
-                        <button
-                          type="button"
-                          className="rounded p-1 text-slate-400 transition-colors hover:text-primary dark:text-slate-400 dark:hover:text-primary"
-                          title="Open Draft"
-                          onClick={() => handleOpenDraft(draft)}
-                          disabled={loading || isSavingDraft}
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded p-1 text-slate-400 transition-colors hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400"
-                          title="Delete Draft"
-                          onClick={() => handleDeleteDraft(draft.id)}
-                          disabled={loading || isSavingDraft}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
                 <h3 className="mb-4 text-lg font-bold text-slate-900 dark:text-white">Ongoing Tasks</h3>
                 <div className="space-y-2">
                   {existingSessions.length === 0 && (
@@ -2089,6 +2184,54 @@ export default function GitRepoSelector({
                           title={deletingSessionName === session.sessionName ? 'Deleting...' : 'Delete'}
                           onClick={() => handleDeleteSession(session)}
                           disabled={loading || deletingSessionName === session.sessionName}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
+                <h3 className="mb-4 text-lg font-bold text-slate-900 dark:text-white">Drafts</h3>
+                <div className="space-y-2">
+                  {existingDrafts.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
+                      No drafts for this project.
+                    </div>
+                  )}
+
+                  {existingDrafts.map((draft) => (
+                    <div
+                      key={draft.id}
+                      className="group flex items-center gap-3 rounded-lg border border-transparent px-3 py-3 transition-colors hover:border-slate-100 hover:bg-slate-50 dark:hover:border-slate-700/70 dark:hover:bg-slate-800/50"
+                    >
+                      <div
+                        className={`h-2 w-2 flex-shrink-0 rounded-full bg-blue-500`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{draft.title}</p>
+                        <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                          {getProjectDisplayName(draft.projectPath || draft.repoPath || '')} • {draft.agentProvider}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                        <button
+                          type="button"
+                          className="rounded p-1 text-slate-400 transition-colors hover:text-primary dark:text-slate-400 dark:hover:text-primary"
+                          title="Open Draft"
+                          onClick={() => handleOpenDraft(draft)}
+                          disabled={loading || isSavingDraft}
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded p-1 text-slate-400 transition-colors hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400"
+                          title="Delete Draft"
+                          onClick={() => handleDeleteDraft(draft.id)}
+                          disabled={loading || isSavingDraft}
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>

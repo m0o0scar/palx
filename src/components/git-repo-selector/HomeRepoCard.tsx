@@ -1,5 +1,4 @@
 import { ChevronRight, FolderGit2, Settings, X, GitBranch as GitBranchIcon } from 'lucide-react';
-import Image from 'next/image';
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { getBaseName } from '@/lib/path';
 import { getStableRepoCardGradient } from '@/lib/repo-card-gradient';
@@ -22,6 +21,39 @@ export type HomeRepoCardProps = {
   onMouseMove: (event: ReactMouseEvent<HTMLDivElement>) => void;
   onMouseLeave: (event: ReactMouseEvent<HTMLDivElement>) => void;
 };
+
+const thumbnailObjectUrlCache = new Map<string, string>();
+const thumbnailObjectUrlPromiseCache = new Map<string, Promise<string>>();
+
+async function getCachedThumbnailObjectUrl(sourceUrl: string): Promise<string> {
+  const cachedUrl = thumbnailObjectUrlCache.get(sourceUrl);
+  if (cachedUrl) {
+    return cachedUrl;
+  }
+
+  const pendingRequest = thumbnailObjectUrlPromiseCache.get(sourceUrl);
+  if (pendingRequest) {
+    return pendingRequest;
+  }
+
+  const nextRequest = fetch(sourceUrl, { cache: 'force-cache' })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Failed to load thumbnail: ${response.status}`);
+      }
+
+      const imageBlob = await response.blob();
+      const objectUrl = URL.createObjectURL(imageBlob);
+      thumbnailObjectUrlCache.set(sourceUrl, objectUrl);
+      return objectUrl;
+    })
+    .finally(() => {
+      thumbnailObjectUrlPromiseCache.delete(sourceUrl);
+    });
+
+  thumbnailObjectUrlPromiseCache.set(sourceUrl, nextRequest);
+  return nextRequest;
+}
 
 function normalizePathForComparison(pathValue: string): string {
   return pathValue.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -67,10 +99,23 @@ export function HomeRepoCard({
   const projectIconUrl = projectIconPath
     ? `/api/file-thumbnail?path=${encodeURIComponent(projectIconPath)}`
     : null;
+  const immediateCachedProjectIconUrl = projectIconUrl
+    ? thumbnailObjectUrlCache.get(projectIconUrl) ?? null
+    : null;
+  const [loadedProjectIconState, setLoadedProjectIconState] = useState<{
+    sourceUrl: string;
+    objectUrl: string;
+  } | null>(() => (
+    projectIconUrl && immediateCachedProjectIconUrl
+      ? { sourceUrl: projectIconUrl, objectUrl: immediateCachedProjectIconUrl }
+      : null
+  ));
   const discoveredProjectGitRepos = projectGitRepos ?? [];
   const hasDiscoveredGitRepos = Array.isArray(projectGitRepos);
   const hasGitRepos = discoveredProjectGitRepos.length > 0;
   const hasMultipleGitRepos = discoveredProjectGitRepos.length > 1;
+  const displayedProjectIconUrl = immediateCachedProjectIconUrl
+    ?? (loadedProjectIconState?.sourceUrl === projectIconUrl ? loadedProjectIconState.objectUrl : null);
 
   useEffect(() => {
     if (!isGitRepoMenuOpen) return;
@@ -83,6 +128,38 @@ export function HomeRepoCard({
       document.removeEventListener('mousedown', handleDocumentClick);
     };
   }, [isGitRepoMenuOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!showProjectIcon || !projectIconUrl) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (immediateCachedProjectIconUrl) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void getCachedThumbnailObjectUrl(projectIconUrl)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          setLoadedProjectIconState({ sourceUrl: projectIconUrl, objectUrl });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          onProjectIconError(project);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [immediateCachedProjectIconUrl, onProjectIconError, project, projectIconUrl, showProjectIcon]);
 
   return (
     <div
@@ -108,14 +185,12 @@ export function HomeRepoCard({
           <div className="flex items-start justify-between gap-3">
             <div className="relative flex items-center">
               <div className="repo-card-tilt-icon flex h-10 w-10 items-center justify-center rounded-xl bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm dark:border dark:border-white/15 dark:bg-white/10 dark:text-slate-200">
-                {showProjectIcon && projectIconUrl ? (
-                  <Image
-                    src={projectIconUrl}
+                {showProjectIcon && displayedProjectIconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={displayedProjectIconUrl}
                     alt={`${projectName} icon`}
-                    width={24}
-                    height={24}
                     className="h-6 w-6 rounded-md object-cover"
-                    unoptimized
                     onError={() => onProjectIconError(project)}
                   />
                 ) : (

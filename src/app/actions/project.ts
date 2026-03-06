@@ -8,6 +8,13 @@ import { resolveRepositoryPathByName } from '@/lib/repo-resolver';
 import { getAllCredentials, getCredentialById, getCredentialToken } from '@/lib/credentials';
 import type { Credential } from '@/lib/credentials';
 import { detectGitRemoteProvider, parseGitRemoteHost } from '@/lib/terminal-session';
+import { listDrafts, type DraftMetadata } from './draft';
+import { listSessions, type SessionMetadata } from './session';
+
+type GitBranch = {
+  name: string;
+  current: boolean;
+};
 
 export type ResolveProjectResult = {
   success: boolean;
@@ -31,6 +38,15 @@ export type DiscoverProjectGitReposResult = {
   truncated: boolean;
   scannedDirs: number;
   overlapDetected: boolean;
+};
+
+export type DiscoverProjectGitReposWithBranchesResult = DiscoverProjectGitReposResult & {
+  branchesByRepo: Record<string, GitBranch[]>;
+};
+
+export type ProjectActivityResult = {
+  sessions: SessionMetadata[];
+  drafts: DraftMetadata[];
 };
 
 const DISCOVERY_SKIP_DIRS = new Set([
@@ -89,6 +105,19 @@ async function isGitRepositoryRoot(dirPath: string): Promise<boolean> {
     return gitStat.isDirectory() || gitStat.isFile();
   } catch {
     return false;
+  }
+}
+
+async function listRepoBranches(repoPath: string): Promise<GitBranch[]> {
+  try {
+    const git = simpleGit(repoPath);
+    const branchSummary = await git.branchLocal();
+    return branchSummary.all.map((name) => ({
+      name,
+      current: branchSummary.current === name,
+    }));
+  } catch {
+    return [];
   }
 }
 
@@ -158,6 +187,30 @@ export async function discoverProjectGitRepos(projectPath: string): Promise<Disc
     truncated,
     scannedDirs,
     overlapDetected: hasOverlappingRepoRoots(uniqueRepos),
+  };
+}
+
+export async function discoverProjectGitReposWithBranches(projectPath: string): Promise<DiscoverProjectGitReposWithBranchesResult> {
+  const discovery = await discoverProjectGitRepos(projectPath);
+  const branchEntries = await Promise.all(
+    discovery.repos.map(async (repo) => [repo.repoPath, await listRepoBranches(repo.repoPath)] as const)
+  );
+
+  return {
+    ...discovery,
+    branchesByRepo: Object.fromEntries(branchEntries),
+  };
+}
+
+export async function getProjectActivity(projectPath: string): Promise<ProjectActivityResult> {
+  const [sessions, drafts] = await Promise.all([
+    listSessions(projectPath),
+    listDrafts(projectPath),
+  ]);
+
+  return {
+    sessions,
+    drafts,
   };
 }
 

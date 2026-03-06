@@ -21,6 +21,7 @@ import { getConfig, updateConfig } from '@/app/actions/config';
 import { Trash2, ExternalLink, Play, GitMerge, GitPullRequestArrow, GitBranch, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, ChevronRight, Grip, ChevronDown, Plus, MousePointer2, ArrowLeft, ArrowRight, RotateCw, ScrollText, TextCursorInput, X } from 'lucide-react';
 import SessionFileBrowser from './SessionFileBrowser';
 import { SessionRepoViewer, type SessionRepoViewerOption } from './SessionRepoViewer';
+import { buildAgentStartupPrompt } from '@/lib/agent-startup-prompt';
 import { getBaseName } from '@/lib/path';
 import { notifySessionsUpdated } from '@/lib/session-updates';
 import { buildTtydTerminalSrc, parseTerminalSessionEnvironmentsFromSrc, type TerminalSessionEnvironment } from '@/lib/terminal-session';
@@ -43,6 +44,9 @@ const SUPPORTED_IDES = [
     { id: 'windsurf', name: 'Windsurf', protocol: 'windsurf' },
     { id: 'antigravity', name: 'Antigravity', protocol: 'antigravity' },
 ];
+
+let configuredIdeCache: string | null = null;
+let configuredIdePromise: Promise<string | null> | null = null;
 
 
 type CleanupPhase = 'idle' | 'error';
@@ -88,25 +92,33 @@ const getFloatingTerminalTabIdFromSlot = (slot: TerminalBootstrapSlot): string |
     return tabId || MAIN_TERMINAL_TAB_ID;
 };
 
-const PLAN_MODE_STARTUP_INSTRUCTION =
-    'Plan mode: inspect the relevant code first, present a concrete implementation plan, and wait for explicit user approval before any file edits or write commands.';
-const AUTO_COMMIT_INSTRUCTION =
-    'After each round, if work is complete and files changed, commit all changes without confirmation. Use a commit message with a clear title and a detailed body explaining what changed and why. If GITHUB_TOKEN or GITLAB_TOKEN is set, push the current branch after committed rounds and create (or update) a pull/merge request with an appropriate title and description; include the pull/merge request link in the first push reply.';
-const AGENT_BROWSER_SKILL_INSTRUCTION =
-    'For visual web tasks, use the `agent-browser` skill (https://skills.sh/vercel-labs/agent-browser/agent-browser).';
-const SYSTEMATIC_DEBUGGING_SKILL_INSTRUCTION =
-    'For bugfix/debugging tasks, use the `systematic-debugging` skill (https://github.com/obra/superpowers).';
-const VISUAL_EVIDENCE_INSTRUCTION =
-    'When working on a visual-related feature or bugfix in a web project, after coding is complete, use `agent-browser` or equivalent Chrome MCP tooling to load the relevant page and capture screenshot(s). Do not commit evidence files to the repository; upload them as pull/merge request or comment attachments via GitHub/GitLab APIs.';
-const NOTIFICATION_INSTRUCTION =
-    'When your task is completed or you need user attention (for plan approval, permissions, or blockers), send a notification to the matching Palx session.';
-
 const clampAgentPaneRatio = (value: number): number => Math.max(0.2, Math.min(0.8, value));
 
 const buildExportEnvironmentCommand = (environments: TerminalSessionEnvironment[]): string => {
     if (environments.length === 0) return '';
     const assignments = environments.map((env) => `${env.name}=${quoteShellArg(env.value)}`);
     return `export ${assignments.join(' ')}`;
+};
+
+const loadConfiguredIde = async (): Promise<string | null> => {
+    if (configuredIdeCache && SUPPORTED_IDES.some((ide) => ide.id === configuredIdeCache)) {
+        return configuredIdeCache;
+    }
+    if (!configuredIdePromise) {
+        configuredIdePromise = (async () => {
+            const config = await getConfig();
+            const selectedIde = config.selectedIde?.trim() || null;
+            if (selectedIde && SUPPORTED_IDES.some((ide) => ide.id === selectedIde)) {
+                configuredIdeCache = selectedIde;
+                return selectedIde;
+            }
+            configuredIdeCache = null;
+            return null;
+        })().finally(() => {
+            configuredIdePromise = null;
+        });
+    }
+    return configuredIdePromise;
 };
 
 type PreviewComponentStackEntry = {
@@ -230,6 +242,7 @@ export interface SessionViewProps {
     initialMessage?: string;
     attachmentPaths?: string[];
     attachmentNames?: string[];
+    projectGitRepoRelativePaths?: string[];
     title?: string;
     sessionMode?: 'fast' | 'plan';
     onExit: (force?: boolean) => void;
@@ -256,6 +269,7 @@ export function SessionView({
     initialMessage,
     attachmentPaths,
     attachmentNames,
+    projectGitRepoRelativePaths = [],
     title,
     sessionMode = 'fast',
     onExit,
@@ -363,6 +377,12 @@ export function SessionView({
         agent: false,
         [MAIN_TERMINAL_TAB_ID]: false,
     });
+    const tmuxStatusRequestInFlightRef = useRef<Record<string, boolean>>({
+        agent: false,
+        [MAIN_TERMINAL_TAB_ID]: false,
+    });
+    const tmuxSilentScrollRequestKeyRef = useRef<string | null>(null);
+    const tmuxSilentScrollAppliedKeyRef = useRef<string | null>(null);
 
     const getTerminalStartupScriptState = useCallback((slot: TerminalBootstrapSlot): TerminalStartupScriptState => {
         const existing = terminalStartupScriptStateRef.current[slot];
@@ -399,6 +419,12 @@ export function SessionView({
             agent: false,
             [MAIN_TERMINAL_TAB_ID]: false,
         };
+        tmuxStatusRequestInFlightRef.current = {
+            agent: false,
+            [MAIN_TERMINAL_TAB_ID]: false,
+        };
+        tmuxSilentScrollRequestKeyRef.current = null;
+        tmuxSilentScrollAppliedKeyRef.current = null;
         resetAllTerminalStartupScriptStates();
     }, [resetAllTerminalStartupScriptStates, sessionName]);
 
@@ -1095,13 +1121,19 @@ export function SessionView({
 
 
     useEffect(() => {
+        let cancelled = false;
+
         const loadConfig = async () => {
-            const config = await getConfig();
-            if (config.selectedIde && SUPPORTED_IDES.some(ide => ide.id === config.selectedIde)) {
-                setSelectedIde(config.selectedIde);
+            const configuredIde = await loadConfiguredIde();
+            if (!cancelled && configuredIde) {
+                setSelectedIde(configuredIde);
             }
         };
-        loadConfig();
+        void loadConfig();
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     useEffect(() => {
@@ -1118,6 +1150,7 @@ export function SessionView({
     const handleIdeChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const value = e.target.value;
         setSelectedIde(value);
+        configuredIdeCache = value;
         await updateConfig({ selectedIde: value });
     };
 
@@ -1172,21 +1205,49 @@ export function SessionView({
     const ensureTmuxStatusBarHidden = useCallback((role: string) => {
         if (terminalPersistenceMode !== 'tmux') return;
         if (tmuxStatusAppliedRef.current[role]) return;
+        if (tmuxStatusRequestInFlightRef.current[role]) return;
+
+        tmuxStatusRequestInFlightRef.current[role] = true;
 
         void (async () => {
+            let applied = false;
             const result = await setTmuxSessionStatusVisibility(sessionName, role, false);
             if (result.success && result.applied) {
                 tmuxStatusAppliedRef.current[role] = true;
+                applied = true;
             } else if (!result.success) {
                 console.error(`Failed to hide tmux status bar for ${role}:`, result.error);
             }
+            if (!applied) {
+                tmuxStatusRequestInFlightRef.current[role] = false;
+                return;
+            }
+            tmuxStatusRequestInFlightRef.current[role] = false;
         })();
     }, [sessionName, terminalPersistenceMode]);
 
     useEffect(() => {
         if (terminalPersistenceMode !== 'tmux') return;
-        void applyTerminalInteractionMode('scroll', { silent: true });
-    }, [applyTerminalInteractionMode, terminalPersistenceMode]);
+        const roles = Array.from(new Set(['agent', ...terminalTabIds])).sort();
+        const requestKey = `${sessionName}:scroll:${roles.join(',')}`;
+        if (
+            tmuxSilentScrollAppliedKeyRef.current === requestKey
+            || tmuxSilentScrollRequestKeyRef.current === requestKey
+        ) {
+            return;
+        }
+
+        tmuxSilentScrollRequestKeyRef.current = requestKey;
+        void (async () => {
+            const success = await applyTerminalInteractionMode('scroll', { silent: true });
+            if (tmuxSilentScrollRequestKeyRef.current === requestKey) {
+                tmuxSilentScrollRequestKeyRef.current = null;
+            }
+            if (success) {
+                tmuxSilentScrollAppliedKeyRef.current = requestKey;
+            }
+        })();
+    }, [applyTerminalInteractionMode, sessionName, terminalPersistenceMode, terminalTabIds]);
 
     const handleToggleTerminalInteractionMode = useCallback(() => {
         if (terminalPersistenceMode !== 'tmux' || isUpdatingTerminalInteractionMode) return;
@@ -2085,47 +2146,21 @@ export function SessionView({
                                     .map((entry) => entry.trim())
                                     .filter(Boolean);
                                 const resolvedAttachmentPaths = Array.from(new Set(normalizedAttachmentPaths));
-                                const shouldInjectStartupPrompt = taskContent.length > 0;
-                                const taskSections: string[] = [];
-                                if (shouldInjectStartupPrompt && taskContent) taskSections.push(taskContent);
-                                if (shouldInjectStartupPrompt && resolvedAttachmentPaths.length > 0) {
-                                    taskSections.push([
-                                        'Attachments:',
-                                        ...resolvedAttachmentPaths.map((attachmentPath) => `- ${attachmentPath}`),
-                                    ].join('\n'));
-                                }
-                                const fullTaskContent = taskSections.join('\n\n');
                                 let safeMessage = '';
 
+                                const fullMessage = buildAgentStartupPrompt({
+                                    taskDescription: taskContent,
+                                    attachmentPaths: resolvedAttachmentPaths,
+                                    sessionMode,
+                                    sessionName,
+                                    notificationApiUrl: `${window.location.origin}/api/notifications`,
+                                    workspaceMode,
+                                    gitRepos: normalizedGitRepos,
+                                    discoveredRepoRelativePaths: projectGitRepoRelativePaths,
+                                });
+
                                 // Send startup prompt only when task description is provided.
-                                if (fullTaskContent) {
-                                    const instructionLines: string[] = [];
-                                    if (sessionMode === 'plan') {
-                                        instructionLines.push(PLAN_MODE_STARTUP_INSTRUCTION);
-                                    }
-                                    instructionLines.push(AUTO_COMMIT_INSTRUCTION);
-                                    instructionLines.push(AGENT_BROWSER_SKILL_INSTRUCTION);
-                                    instructionLines.push(SYSTEMATIC_DEBUGGING_SKILL_INSTRUCTION);
-                                    instructionLines.push(VISUAL_EVIDENCE_INSTRUCTION);
-                                    instructionLines.push(NOTIFICATION_INSTRUCTION);
-                                    const notificationApiUrl = `${window.location.origin}/api/notifications`;
-                                    instructionLines.push(
-                                        `Notification API endpoint: ${notificationApiUrl} (POST JSON with sessionId, title, and description).`
-                                    );
-                                    instructionLines.push(
-                                        `Notification payload template: {"sessionId":"${sessionName}","title":"<short title>","description":"<clear detail about completion or required attention>"}.`
-                                    );
-
-                                    const fullMessage = [
-                                        '# Instructions',
-                                        '',
-                                        instructionLines.map((line) => `- ${line}`).join('\n'),
-                                        '',
-                                        '# Task',
-                                        '',
-                                        fullTaskContent,
-                                    ].join('\n');
-
+                                if (fullMessage) {
                                     try {
                                         const result = await writeSessionPromptFile(sessionName, fullMessage);
                                         if (result.success && result.filePath) {

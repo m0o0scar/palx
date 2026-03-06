@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { ImagePlus, Trash2, X } from 'lucide-react';
+import SessionFileBrowser from '@/components/SessionFileBrowser';
 
 export type RepoSettingsDialogProps = {
   isOpen: boolean;
@@ -15,7 +17,7 @@ export type RepoSettingsDialogProps = {
   onAliasChange: (value: string) => void;
   onStartupCommandChange: (value: string) => void;
   onDevServerCommandChange: (value: string) => void;
-  onUploadIcon: (file: File) => void;
+  onUploadIcon: (iconPath: string) => void;
   onRemoveIcon: () => void;
   onClose: () => void;
   onSave: () => void;
@@ -41,6 +43,8 @@ export function RepoSettingsDialog({
   onClose,
   onSave,
 }: RepoSettingsDialogProps) {
+  const [isIconBrowserOpen, setIsIconBrowserOpen] = useState(false);
+
   if (!isOpen || !projectForSettings) return null;
 
   const iconPreviewUrl = projectIconPath
@@ -81,7 +85,7 @@ export function RepoSettingsDialog({
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Icon</label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Icon</label>
             <div className="flex items-center gap-3">
               <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-[#1e2532]">
                 {iconPreviewUrl ? (
@@ -91,22 +95,15 @@ export function RepoSettingsDialog({
                   <span className="text-[10px] text-slate-500">No Icon</span>
                 )}
               </div>
-              <label className="btn btn-sm gap-2">
+              <button
+                type="button"
+                className="btn btn-sm gap-2"
+                disabled={isUploadingProjectIcon || isSavingProjectSettings}
+                onClick={() => setIsIconBrowserOpen(true)}
+              >
                 <ImagePlus className="h-4 w-4" />
                 Choose Icon
-                <input
-                  type="file"
-                  className="hidden"
-                  accept=".png,.jpg,.jpeg,.webp,.svg,.ico"
-                  disabled={isUploadingProjectIcon || isSavingProjectSettings}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (!file) return;
-                    onUploadIcon(file);
-                    event.currentTarget.value = '';
-                  }}
-                />
-              </label>
+              </button>
               {projectIconPath && (
                 <button
                   type="button"
@@ -185,6 +182,26 @@ export function RepoSettingsDialog({
           </div>
         </div>
       </div>
+
+      {isIconBrowserOpen && (
+        <SessionFileBrowser
+          title="Choose Project Icon"
+          initialPath={projectForSettings}
+          onConfirm={async (paths) => {
+            const selectedPath = paths[0];
+            if (!selectedPath) return;
+            onUploadIcon(selectedPath);
+            setIsIconBrowserOpen(false);
+          }}
+          onCancel={() => setIsIconBrowserOpen(false)}
+          confirmLabel="Use Selected Icon"
+          defaultViewMode="grid"
+          viewModeStorageKey={null}
+          selectionMode="single"
+          allowedFileExtensions={['.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico']}
+          zIndexClassName="z-[1003]"
+        />
+      )}
     </div>
   );
 }

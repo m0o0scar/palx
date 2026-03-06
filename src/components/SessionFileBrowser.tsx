@@ -8,7 +8,7 @@ import { ArrowLeft, Clipboard, FileText, Folder, Grid2x2, House, List, Pin, PinO
 import { getDirName } from '@/lib/path';
 import { useDialogKeyboardShortcuts } from '@/hooks/useDialogKeyboardShortcuts';
 
-const VIEW_MODE_STORAGE_KEY = 'viba:session-file-browser:view-mode';
+const DEFAULT_VIEW_MODE_STORAGE_KEY = 'viba:session-file-browser:view-mode';
 
 type FileSystemItem = {
   name: string;
@@ -23,6 +23,13 @@ interface SessionFileBrowserProps {
   onConfirm: (paths: string[]) => void | Promise<void>;
   onCancel: () => void;
   onPathChange?: (path: string) => void;
+  title?: string;
+  confirmLabel?: string;
+  defaultViewMode?: 'list' | 'grid';
+  viewModeStorageKey?: string | null;
+  selectionMode?: 'single' | 'multiple';
+  allowedFileExtensions?: string[];
+  zIndexClassName?: string;
 }
 
 export default function SessionFileBrowser({
@@ -31,6 +38,13 @@ export default function SessionFileBrowser({
   onConfirm,
   onCancel,
   onPathChange,
+  title = 'Browse Files',
+  confirmLabel,
+  defaultViewMode = 'list',
+  viewModeStorageKey = DEFAULT_VIEW_MODE_STORAGE_KEY,
+  selectionMode = 'multiple',
+  allowedFileExtensions,
+  zIndexClassName = 'z-50',
 }: SessionFileBrowserProps) {
   const imageExtensions = useMemo(
     () => new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico', '.avif']),
@@ -43,10 +57,20 @@ export default function SessionFileBrowser({
   const [homePath, setHomePath] = useState('');
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>(defaultViewMode);
   const [hasLoadedViewMode, setHasLoadedViewMode] = useState(false);
   const [brokenThumbnails, setBrokenThumbnails] = useState<Record<string, boolean>>({});
   const [pinnedFolderShortcuts, setPinnedFolderShortcuts] = useState<string[]>([]);
+  const normalizedAllowedFileExtensions = useMemo(
+    () =>
+      new Set(
+        (allowedFileExtensions ?? [])
+          .map((extension) => extension.trim().toLowerCase())
+          .filter(Boolean)
+          .map((extension) => (extension.startsWith('.') ? extension : `.${extension}`))
+      ),
+    [allowedFileExtensions]
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -99,26 +123,31 @@ export default function SessionFileBrowser({
   }, []);
 
   useEffect(() => {
+    setViewMode(defaultViewMode);
     try {
-      const savedViewMode = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
-      if (savedViewMode === 'list' || savedViewMode === 'grid') {
-        setViewMode(savedViewMode);
+      if (viewModeStorageKey) {
+        const savedViewMode = localStorage.getItem(viewModeStorageKey);
+        if (savedViewMode === 'list' || savedViewMode === 'grid') {
+          setViewMode(savedViewMode);
+        }
       }
     } catch {
       // Ignore localStorage failures.
     } finally {
       setHasLoadedViewMode(true);
     }
-  }, []);
+  }, [defaultViewMode, viewModeStorageKey]);
 
   useEffect(() => {
     if (!hasLoadedViewMode) return;
     try {
-      localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
+      if (viewModeStorageKey) {
+        localStorage.setItem(viewModeStorageKey, viewMode);
+      }
     } catch {
       // Ignore localStorage failures.
     }
-  }, [hasLoadedViewMode, viewMode]);
+  }, [hasLoadedViewMode, viewMode, viewModeStorageKey]);
 
   useEffect(() => {
     if (!currentPath) return;
@@ -157,6 +186,17 @@ export default function SessionFileBrowser({
     if (dotIndex === -1) return false;
     return imageExtensions.has(fileName.slice(dotIndex).toLowerCase());
   };
+  const isAllowedFileType = useCallback((fileName: string) => {
+    if (normalizedAllowedFileExtensions.size === 0) return true;
+    const dotIndex = fileName.lastIndexOf('.');
+    if (dotIndex === -1) return false;
+    return normalizedAllowedFileExtensions.has(fileName.slice(dotIndex).toLowerCase());
+  }, [normalizedAllowedFileExtensions]);
+  const confirmationLabel = confirmLabel ?? (selectionMode === 'single' ? 'Use Selected File' : 'Insert');
+  const selectionInstruction = selectionMode === 'single'
+    ? 'Click a file to select it. Click a folder to open it.'
+    : 'Click: single select. Cmd/Ctrl+Click: multi-select. Shift+Click: range select. Click a folder to open it.';
+  const shouldShowPasteAction = Boolean(worktreePath);
 
   const handleGoUp = () => {
     const parent = getDirName(currentPath);
@@ -173,6 +213,17 @@ export default function SessionFileBrowser({
   const handleItemClick = (item: FileSystemItem, index: number, e: React.MouseEvent<HTMLElement>) => {
     if (item.isDirectory) {
       setCurrentPath(item.path);
+      return;
+    }
+
+    if (!isAllowedFileType(item.name)) {
+      setError(`Only ${Array.from(normalizedAllowedFileExtensions).join(', ')} files can be selected.`);
+      return;
+    }
+
+    if (selectionMode === 'single') {
+      setSelectedPaths([item.path]);
+      setAnchorIndex(index);
       return;
     }
 
@@ -313,12 +364,12 @@ export default function SessionFileBrowser({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+    <div className={`fixed inset-0 ${zIndexClassName} flex items-center justify-center bg-black/50 backdrop-blur-sm p-4`}>
       <div className="bg-base-200 rounded-lg shadow-xl w-full max-w-5xl h-[82vh] flex flex-col">
         <div className="flex items-center justify-between p-4 border-b border-base-300">
           <h2 className="text-xl font-bold flex items-center gap-2">
             <Folder className="w-5 h-5" />
-            Browse Files
+            {title}
           </h2>
           <button onClick={onCancel} className="btn btn-sm btn-ghost btn-circle" title="Close file browser">
             ✕
@@ -368,22 +419,25 @@ export default function SessionFileBrowser({
             onClick={handleConfirm}
             className="btn btn-sm btn-primary gap-2"
             disabled={selectedPaths.length === 0}
-            title="Insert selected absolute paths"
+            title={confirmationLabel}
           >
-            Insert ({selectedPaths.length})
+            {confirmationLabel} ({selectedPaths.length})
           </button>
           
-          <div className="w-[1px] h-6 bg-base-content/10 mx-1"></div>
+          {shouldShowPasteAction && (
+            <>
+              <div className="w-[1px] h-6 bg-base-content/10 mx-1"></div>
 
-          <button
-            onClick={handlePaste}
-            className="btn btn-sm btn-ghost gap-2"
-            title="Paste file/image from clipboard"
-            disabled={!worktreePath}
-          >
-            <Clipboard className="w-4 h-4" />
-            Paste
-          </button>
+              <button
+                onClick={handlePaste}
+                className="btn btn-sm btn-ghost gap-2"
+                title="Paste file/image from clipboard"
+              >
+                <Clipboard className="w-4 h-4" />
+                Paste
+              </button>
+            </>
+          )}
         </div>
         {pinnedFolderShortcuts.length > 0 && (
           <div className="px-3 py-2 border-b border-base-300 bg-base-200/50">
@@ -430,13 +484,14 @@ export default function SessionFileBrowser({
             <div className="grid grid-cols-1 gap-1">
               {items.map((item, index) => {
                 const isSelected = selectedSet.has(item.path);
+                const isSelectable = item.isDirectory || isAllowedFileType(item.name);
                 return (
                   <div
                     key={item.path}
                     className={`flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors border ${isSelected
                       ? 'bg-primary text-primary-content border-primary'
                       : 'hover:bg-base-100 border-transparent'
-                      }`}
+                      } ${!isSelectable ? 'opacity-50' : ''}`}
                     onClick={(e) => handleItemClick(item, index, e)}
                     title={item.path}
                   >
@@ -461,7 +516,7 @@ export default function SessionFileBrowser({
                         >
                           <Pin className={`w-3 h-3 ${pinnedFolderShortcuts.includes(item.path) ? 'fill-current' : ''}`} />
                         </button>
-                      ) : 'file'}
+                      ) : isSelectable ? 'file' : 'unsupported'}
                     </span>
                   </div>
                 );
@@ -472,6 +527,7 @@ export default function SessionFileBrowser({
               {items.map((item, index) => {
                 const isSelected = selectedSet.has(item.path);
                 const isImage = !item.isDirectory && isImageFile(item.name);
+                const isSelectable = item.isDirectory || isAllowedFileType(item.name);
                 const thumbnailUrl = `/api/file-thumbnail?path=${encodeURIComponent(item.path)}`;
 
                 return (
@@ -481,7 +537,7 @@ export default function SessionFileBrowser({
                     className={`rounded-lg border text-left overflow-hidden transition-colors ${isSelected
                       ? 'border-primary bg-primary/15'
                       : 'border-base-300 hover:bg-base-100'
-                      }`}
+                      } ${!isSelectable ? 'opacity-50' : ''}`}
                     onClick={(e) => handleItemClick(item, index, e)}
                     title={item.path}
                   >
@@ -520,7 +576,7 @@ export default function SessionFileBrowser({
                     <div className="px-2 py-2">
                       <div className="truncate text-sm font-medium" title={item.name}>{item.name}</div>
                       <div className="text-[10px] opacity-70">
-                        {item.isDirectory ? 'folder' : isImage ? 'image' : 'file'}
+                        {item.isDirectory ? 'folder' : !isSelectable ? 'unsupported' : isImage ? 'image' : 'file'}
                       </div>
                     </div>
                   </button>
@@ -531,8 +587,7 @@ export default function SessionFileBrowser({
         </div>
 
         <div className="p-3 border-t border-base-300 text-xs text-base-content/60 text-center">
-          Click: single select. Cmd/Ctrl+Click: multi-select. Shift+Click: range select.
-          Click a folder to open it.
+          {selectionInstruction}
         </div>
       </div>
     </div>
