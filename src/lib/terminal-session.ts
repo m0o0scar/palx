@@ -1,8 +1,11 @@
-export type TerminalSessionRole = 'agent' | 'terminal';
+export type TerminalSessionRole = string;
 export type GitRemoteProvider = 'github' | 'gitlab';
 export type TerminalSessionEnvironment = {
   name: string;
   value: string;
+};
+export type BuildTtydTerminalSrcOptions = {
+  workingDirectory?: string | null;
 };
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -92,6 +95,7 @@ export function buildTtydTerminalSrc(
   sessionName: string,
   role: TerminalSessionRole,
   environment?: TerminalSessionEnvironment | TerminalSessionEnvironment[] | null,
+  options?: BuildTtydTerminalSrcOptions,
 ): string {
   const tmuxSession = getTmuxSessionName(sessionName, role);
   const params = new URLSearchParams();
@@ -106,6 +110,11 @@ export function buildTtydTerminalSrc(
     if (!env.value) continue;
     params.append('arg', '-e');
     params.append('arg', `${env.name}=${env.value}`);
+  }
+  const workingDirectory = options?.workingDirectory?.trim();
+  if (workingDirectory) {
+    params.append('arg', '-c');
+    params.append('arg', workingDirectory);
   }
   params.append('arg', '-A');
   params.append('arg', '-s');

@@ -3,10 +3,10 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import { GitService } from '@/lib/git';
-import { addRepository, getRepositories, updateRepository } from '@/lib/store';
+import { addProject, getProjects } from '@/lib/store';
 import { findCredentialForRemote, getCredentialById, getCredentialToken } from '@/lib/credentials';
 
-const cloneRepoSchema = z.object({
+const cloneProjectSchema = z.object({
   repoUrl: z.string().min(1, 'Repository URL is required'),
   destinationParent: z.string().min(1, 'Destination parent folder is required'),
   folderName: z.string().optional(),
@@ -47,7 +47,7 @@ function normalizeFolderName(rawFolderName: string): string {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { repoUrl, destinationParent, folderName, credentialId } = cloneRepoSchema.parse(body);
+    const { repoUrl, destinationParent, folderName, credentialId } = cloneProjectSchema.parse(body);
 
     const normalizedParent = path.resolve(destinationParent.trim());
     if (!fs.existsSync(normalizedParent)) {
@@ -66,9 +66,9 @@ export async function POST(request: Request) {
     const destinationPath = path.join(normalizedParent, normalizedFolderName);
     const normalizedDestinationPath = path.resolve(destinationPath);
 
-    const existingRepo = getRepositories().find((repo) => path.resolve(repo.path) === normalizedDestinationPath);
-    if (existingRepo) {
-      return NextResponse.json({ error: 'Repository already exists' }, { status: 400 });
+    const existingProject = getProjects().find((project) => path.resolve(project.path) === normalizedDestinationPath);
+    if (existingProject) {
+      return NextResponse.json({ error: 'Project already exists' }, { status: 400 });
     }
 
     if (fs.existsSync(normalizedDestinationPath)) {
@@ -82,11 +82,10 @@ export async function POST(request: Request) {
       }
     }
 
-    let associatedCredentialId: string | null = credentialId ?? null;
     let credentialsForClone: { username: string; token: string } | undefined;
 
-    if (associatedCredentialId) {
-      const selectedCredential = await getCredentialById(associatedCredentialId);
+    if (credentialId) {
+      const selectedCredential = await getCredentialById(credentialId);
       if (!selectedCredential) {
         return NextResponse.json({ error: 'Selected credential not found' }, { status: 400 });
       }
@@ -98,7 +97,6 @@ export async function POST(request: Request) {
     } else {
       const matchedCredential = await findCredentialForRemote(repoUrl);
       if (matchedCredential) {
-        associatedCredentialId = matchedCredential.credential.id;
         credentialsForClone = {
           username: matchedCredential.credential.username,
           token: matchedCredential.token,
@@ -110,14 +108,11 @@ export async function POST(request: Request) {
       credentials: credentialsForClone,
     });
 
-    const addedRepo = addRepository(normalizedDestinationPath, normalizedFolderName);
-    const repo = associatedCredentialId
-      ? updateRepository(normalizedDestinationPath, { credentialId: associatedCredentialId })
-      : addedRepo;
+    const project = addProject(normalizedDestinationPath, normalizedFolderName);
 
     return NextResponse.json({
-      ...repo,
-      usedCredentialId: associatedCredentialId,
+      ...project,
+      usedCredentialId: credentialId ?? null,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

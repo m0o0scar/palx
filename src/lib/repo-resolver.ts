@@ -17,7 +17,7 @@ const SKIPPED_DIR_NAMES = new Set([
 ]);
 
 type RepoResolutionCacheEntry = {
-  repoPath: string;
+  projectPath: string;
   resolvedAt: number;
 };
 
@@ -34,7 +34,7 @@ function getResolutionCache(): Map<string, RepoResolutionCacheEntry> {
 
 function cacheResolution(repoName: string, repoPath: string): void {
   getResolutionCache().set(repoName.toLowerCase(), {
-    repoPath,
+    projectPath: repoPath,
     resolvedAt: Date.now(),
   });
 }
@@ -47,18 +47,18 @@ async function getValidCachedResolution(repoName: string): Promise<string | null
     return null;
   }
 
-  if (await isGitRepository(entry.repoPath)) {
-    return entry.repoPath;
+  if (await isExistingDirectory(entry.projectPath)) {
+    return entry.projectPath;
   }
 
   getResolutionCache().delete(repoName.toLowerCase());
   return null;
 }
 
-async function isGitRepository(dirPath: string): Promise<boolean> {
+async function isExistingDirectory(dirPath: string): Promise<boolean> {
   try {
-    await fs.access(path.join(dirPath, '.git'));
-    return true;
+    const stats = await fs.stat(dirPath);
+    return stats.isDirectory();
   } catch {
     return false;
   }
@@ -78,7 +78,7 @@ function shouldSkipDirectory(entryName: string, targetName: string): boolean {
 
 async function findByNameWithinRoot(rootPath: string, repoName: string): Promise<string | null> {
   const directCandidate = path.join(rootPath, repoName);
-  if (await isGitRepository(directCandidate)) {
+  if (await isExistingDirectory(directCandidate)) {
     return directCandidate;
   }
 
@@ -106,7 +106,7 @@ async function findByNameWithinRoot(rootPath: string, repoName: string): Promise
 
       const nextDirPath = path.join(current.dirPath, entry.name);
 
-      if (entry.name.toLowerCase() === targetName && await isGitRepository(nextDirPath)) {
+      if (entry.name.toLowerCase() === targetName && await isExistingDirectory(nextDirPath)) {
         return nextDirPath;
       }
 
@@ -129,10 +129,11 @@ export async function resolveRepositoryPathByName(repoName: string): Promise<str
   }
 
   const config = await getConfig();
+  const recentProjects = config.recentProjects ?? config.recentRepos ?? [];
 
-  const recentMatches = config.recentRepos.filter((repoPath) => hasMatchingName(repoPath, trimmedName));
+  const recentMatches = recentProjects.filter((repoPath) => hasMatchingName(repoPath, trimmedName));
   for (const repoPath of recentMatches) {
-    if (await isGitRepository(repoPath)) {
+    if (await isExistingDirectory(repoPath)) {
       cacheResolution(trimmedName, repoPath);
       return repoPath;
     }
@@ -140,7 +141,7 @@ export async function resolveRepositoryPathByName(repoName: string): Promise<str
 
   const searchRoots: string[] = [];
   const visitedRoots = new Set<string>();
-  for (const repoPath of config.recentRepos) {
+  for (const repoPath of recentProjects) {
     const parentPath = path.dirname(repoPath);
     if (!visitedRoots.has(parentPath)) {
       visitedRoots.add(parentPath);

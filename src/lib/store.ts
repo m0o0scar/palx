@@ -1,15 +1,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Repository, AppSettings } from './types';
+import { Project, AppSettings } from './types';
 import { getLocalDb } from './local-db';
 
-type RepositoryRow = {
+type ProjectRow = {
   path: string;
   name: string;
   display_name: string | null;
+  icon_path: string | null;
   last_opened_at: string | null;
-  credential_id: string | null;
   expanded_folders_json: string | null;
   visibility_map_json: string | null;
   local_group_expanded: number | null;
@@ -39,130 +39,140 @@ function normalizeDisplayName(displayName?: string | null): string | null | unde
   return normalized.length > 0 ? normalized : null;
 }
 
-function rowToRepository(row: RepositoryRow): Repository {
-  const repo: Repository = {
+function normalizeIconPath(iconPath?: string | null): string | null | undefined {
+  if (iconPath === undefined) return undefined;
+  if (iconPath === null) return null;
+  const normalized = iconPath.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function rowToProject(row: ProjectRow): Project {
+  const project: Project = {
     path: row.path,
     name: row.name,
   };
 
-  if (row.display_name !== null) repo.displayName = row.display_name;
-  if (row.last_opened_at !== null) repo.lastOpenedAt = row.last_opened_at;
-  if (row.credential_id !== null) repo.credentialId = row.credential_id;
+  if (row.display_name !== null) project.displayName = row.display_name;
+  if (row.icon_path !== null) project.iconPath = row.icon_path;
+  if (row.last_opened_at !== null) project.lastOpenedAt = row.last_opened_at;
 
-  const expandedFolders = parseJsonValue<Repository['expandedFolders']>(row.expanded_folders_json);
-  if (expandedFolders) repo.expandedFolders = expandedFolders;
-  const visibilityMap = parseJsonValue<Repository['visibilityMap']>(row.visibility_map_json);
-  if (visibilityMap) repo.visibilityMap = visibilityMap;
+  const expandedFolders = parseJsonValue<Project['expandedFolders']>(row.expanded_folders_json);
+  if (expandedFolders) project.expandedFolders = expandedFolders;
+  const visibilityMap = parseJsonValue<Project['visibilityMap']>(row.visibility_map_json);
+  if (visibilityMap) project.visibilityMap = visibilityMap;
 
-  if (row.local_group_expanded !== null) repo.localGroupExpanded = Boolean(row.local_group_expanded);
-  if (row.remotes_group_expanded !== null) repo.remotesGroupExpanded = Boolean(row.remotes_group_expanded);
-  if (row.worktrees_group_expanded !== null) repo.worktreesGroupExpanded = Boolean(row.worktrees_group_expanded);
-  return repo;
+  if (row.local_group_expanded !== null) project.localGroupExpanded = Boolean(row.local_group_expanded);
+  if (row.remotes_group_expanded !== null) project.remotesGroupExpanded = Boolean(row.remotes_group_expanded);
+  if (row.worktrees_group_expanded !== null) project.worktreesGroupExpanded = Boolean(row.worktrees_group_expanded);
+  return project;
 }
 
-function writeRepository(repo: Repository): void {
+function writeProject(project: Project): void {
   const db = getLocalDb();
   db.prepare(`
-    INSERT OR REPLACE INTO repositories (
-      path, name, display_name, last_opened_at, credential_id,
+    INSERT OR REPLACE INTO projects (
+      path, name, display_name, icon_path, last_opened_at,
       expanded_folders_json, visibility_map_json, local_group_expanded,
-      remotes_group_expanded, worktrees_group_expanded
+      remotes_group_expanded, worktrees_group_expanded, created_at, updated_at
     ) VALUES (
-      @path, @name, @displayName, @lastOpenedAt, @credentialId,
+      @path, @name, @displayName, @iconPath, @lastOpenedAt,
       @expandedFoldersJson, @visibilityMapJson, @localGroupExpanded,
-      @remotesGroupExpanded, @worktreesGroupExpanded
+      @remotesGroupExpanded, @worktreesGroupExpanded,
+      COALESCE((SELECT created_at FROM projects WHERE path = @path), datetime('now')),
+      datetime('now')
     )
   `).run({
-    path: repo.path,
-    name: repo.name,
-    displayName: repo.displayName ?? null,
-    lastOpenedAt: repo.lastOpenedAt ?? null,
-    credentialId: repo.credentialId ?? null,
-    expandedFoldersJson: repo.expandedFolders ? JSON.stringify(repo.expandedFolders) : null,
-    visibilityMapJson: repo.visibilityMap ? JSON.stringify(repo.visibilityMap) : null,
-    localGroupExpanded: repo.localGroupExpanded === undefined ? null : Number(repo.localGroupExpanded),
-    remotesGroupExpanded: repo.remotesGroupExpanded === undefined ? null : Number(repo.remotesGroupExpanded),
-    worktreesGroupExpanded: repo.worktreesGroupExpanded === undefined ? null : Number(repo.worktreesGroupExpanded),
+    path: project.path,
+    name: project.name,
+    displayName: project.displayName ?? null,
+    iconPath: project.iconPath ?? null,
+    lastOpenedAt: project.lastOpenedAt ?? null,
+    expandedFoldersJson: project.expandedFolders ? JSON.stringify(project.expandedFolders) : null,
+    visibilityMapJson: project.visibilityMap ? JSON.stringify(project.visibilityMap) : null,
+    localGroupExpanded: project.localGroupExpanded === undefined ? null : Number(project.localGroupExpanded),
+    remotesGroupExpanded: project.remotesGroupExpanded === undefined ? null : Number(project.remotesGroupExpanded),
+    worktreesGroupExpanded: project.worktreesGroupExpanded === undefined ? null : Number(project.worktreesGroupExpanded),
   });
 }
 
-export function getRepositories(): Repository[] {
+export function getProjects(): Project[] {
   const db = getLocalDb();
   const rows = db.prepare(`
     SELECT
-      path, name, display_name, last_opened_at, credential_id,
+      path, name, display_name, icon_path, last_opened_at,
       expanded_folders_json, visibility_map_json, local_group_expanded,
       remotes_group_expanded, worktrees_group_expanded
-    FROM repositories
+    FROM projects
     ORDER BY rowid ASC
-  `).all() as RepositoryRow[];
+  `).all() as ProjectRow[];
 
-  return rows.map(rowToRepository);
+  return rows.map(rowToProject);
 }
 
-export function addRepository(repoPath: string, name?: string, displayName?: string | null): Repository {
+export function addProject(projectPath: string, name?: string, displayName?: string | null): Project {
   const db = getLocalDb();
   const existing = db.prepare(`
-    SELECT path FROM repositories WHERE path = ?
-  `).get(repoPath) as { path: string } | undefined;
+    SELECT path FROM projects WHERE path = ?
+  `).get(projectPath) as { path: string } | undefined;
 
   if (existing) {
-    throw new Error('Repository already exists');
+    throw new Error('Project already exists');
   }
 
   const normalizedDisplayName = normalizeDisplayName(displayName);
-  const newRepo: Repository = {
-    path: repoPath,
-    name: name || path.basename(repoPath),
+  const newProject: Project = {
+    path: projectPath,
+    name: name || path.basename(projectPath),
     ...(normalizedDisplayName ? { displayName: normalizedDisplayName } : {}),
   };
 
-  writeRepository(newRepo);
-  return newRepo;
+  writeProject(newProject);
+  return newProject;
 }
 
-export function updateRepository(repoPath: string, updates: Partial<Repository>): Repository {
+export function updateProject(projectPath: string, updates: Partial<Project>): Project {
   const db = getLocalDb();
   const row = db.prepare(`
     SELECT
-      path, name, display_name, last_opened_at, credential_id,
+      path, name, display_name, icon_path, last_opened_at,
       expanded_folders_json, visibility_map_json, local_group_expanded,
       remotes_group_expanded, worktrees_group_expanded
-    FROM repositories
+    FROM projects
     WHERE path = ?
-  `).get(repoPath) as RepositoryRow | undefined;
+  `).get(projectPath) as ProjectRow | undefined;
 
   if (!row) {
-    throw new Error('Repository not found');
+    throw new Error('Project not found');
   }
 
-  const current = rowToRepository(row);
-  const normalizedUpdates: Partial<Repository> = { ...updates };
+  const current = rowToProject(row);
+  const normalizedUpdates: Partial<Project> = { ...updates };
   if ('displayName' in normalizedUpdates) {
     normalizedUpdates.displayName = normalizeDisplayName(normalizedUpdates.displayName);
   }
+  if ('iconPath' in normalizedUpdates) {
+    normalizedUpdates.iconPath = normalizeIconPath(normalizedUpdates.iconPath);
+  }
 
-  const updatedRepo = { ...current, ...normalizedUpdates };
-  writeRepository(updatedRepo);
-  return updatedRepo;
+  const updatedProject = { ...current, ...normalizedUpdates };
+  writeProject(updatedProject);
+  return updatedProject;
 }
 
-export function removeRepository(repoPath: string, options?: { deleteLocalFolder?: boolean }): void {
+export function removeProject(projectPath: string, options?: { deleteLocalFolder?: boolean }): void {
   const { deleteLocalFolder = false } = options || {};
 
   if (deleteLocalFolder) {
-    const resolvedRepoPath = path.resolve(repoPath);
-    const rootPath = path.parse(resolvedRepoPath).root;
-    if (resolvedRepoPath === rootPath) {
+    const resolvedProjectPath = path.resolve(projectPath);
+    const rootPath = path.parse(resolvedProjectPath).root;
+    if (resolvedProjectPath === rootPath) {
       throw new Error('Refusing to delete a filesystem root path');
     }
-    fs.rmSync(resolvedRepoPath, { recursive: true, force: true });
+    fs.rmSync(resolvedProjectPath, { recursive: true, force: true });
   }
 
   const db = getLocalDb();
-  db.prepare(`
-    DELETE FROM repositories WHERE path = ?
-  `).run(repoPath);
+  db.prepare(`DELETE FROM projects WHERE path = ?`).run(projectPath);
 }
 
 export function getSettings(): AppSettings {
@@ -223,3 +233,9 @@ export function getDefaultRootFolder(): string {
 
   return os.homedir();
 }
+
+// Backward-compatible wrappers while callers migrate.
+export const getRepositories = getProjects;
+export const addRepository = addProject;
+export const updateRepository = updateProject;
+export const removeRepository = removeProject;

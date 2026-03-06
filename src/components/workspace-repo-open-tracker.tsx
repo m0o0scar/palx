@@ -2,14 +2,14 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { useRepositories, useUpdateRepository } from '@/hooks/use-git';
+import { useProjects, useUpdateProject } from '@/hooks/use-git';
 
 export function WorkspaceRepoOpenTracker() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const repoPath = searchParams.get('path');
-  const { data: repositories } = useRepositories();
-  const updateRepository = useUpdateRepository();
+  const { data: projects } = useProjects();
+  const updateProject = useUpdateProject();
   const lastTrackedPathRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -18,7 +18,7 @@ export function WorkspaceRepoOpenTracker() {
       return;
     }
 
-    if (!repoPath || !repositories?.some((repo) => repo.path === repoPath)) {
+    if (!repoPath || !projects?.some((project) => project.path === repoPath)) {
       return;
     }
 
@@ -27,13 +27,13 @@ export function WorkspaceRepoOpenTracker() {
     }
 
     lastTrackedPathRef.current = repoPath;
-    updateRepository.mutate({
+    updateProject.mutate({
       path: repoPath,
       updates: {
         lastOpenedAt: new Date().toISOString(),
       },
     });
-  }, [pathname, repoPath, repositories, updateRepository]);
+  }, [pathname, repoPath, projects, updateProject]);
 
   return null;
 }

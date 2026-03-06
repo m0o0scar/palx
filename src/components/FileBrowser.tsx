@@ -152,7 +152,7 @@ export default function FileBrowser({ title, initialPath, onSelect, onCancel, ch
         <div className="flex items-center justify-between p-4 border-b border-base-300">
           <h2 className="text-xl font-bold flex items-center gap-2">
             <Folder className="w-5 h-5" />
-            {title || "Browse Local Repository"}
+            {title || "Browse Local Folder"}
           </h2>
           <button onClick={onCancel} className="btn btn-sm btn-ghost btn-circle">
             ✕
@@ -207,19 +207,17 @@ export default function FileBrowser({ title, initialPath, onSelect, onCancel, ch
                       </span>
                     )}
                   </div>
-                  {item.isGitRepo && (
-                    <button
-                      className="flex items-center justify-center p-1.5 rounded-md bg-primary/10 text-primary hover:bg-primary hover:text-white transition-colors"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void handleSelectPath(item.path);
-                      }}
-                      title={`Select ${item.name}`}
-                    >
-                      <Check className="h-[18px] w-[18px]" />
-                      <span className="sr-only">Select</span>
-                    </button>
-                  )}
+                  <button
+                    className="flex items-center justify-center p-1.5 rounded-md bg-primary/10 text-primary hover:bg-primary hover:text-white transition-colors"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleSelectPath(item.path);
+                    }}
+                    title={`Select ${item.name}`}
+                  >
+                    <Check className="h-[18px] w-[18px]" />
+                    <span className="sr-only">Select</span>
+                  </button>
                 </div>
               ))}
             </div>

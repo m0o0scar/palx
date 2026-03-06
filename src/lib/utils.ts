@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import type { Repository } from './types';
+import type { Project, Repository } from './types';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -13,22 +13,32 @@ export function getRepoFolderName(repoPath: string): string {
 }
 
 export async function getRepoDisplayNameFromConfig(repoPath: string): Promise<string> {
-  const { getRepoAlias } = await import('@/app/actions/config');
-  const alias = await getRepoAlias(repoPath);
+  const { getProjectAlias } = await import('@/app/actions/config');
+  const alias = await getProjectAlias(repoPath);
   return alias || getRepoFolderName(repoPath);
 }
 
-export function getRepositoryDisplayName(repo: Pick<Repository, 'path' | 'name' | 'displayName'>): string {
-  const customName = repo.displayName?.trim();
+export async function getProjectDisplayNameFromConfig(projectPath: string): Promise<string> {
+  const { getProjectAlias } = await import('@/app/actions/config');
+  const alias = await getProjectAlias(projectPath);
+  return alias || getRepoFolderName(projectPath);
+}
+
+export function getProjectDisplayName(project: Pick<Project, 'path' | 'name' | 'displayName'>): string {
+  const customName = project.displayName?.trim();
   if (customName) {
     return customName;
   }
 
-  if (repo.name?.trim()) {
-    return repo.name;
+  if (project.name?.trim()) {
+    return project.name;
   }
 
-  return getRepoFolderName(repo.path);
+  return getRepoFolderName(project.path);
+}
+
+export function getRepositoryDisplayName(repo: Pick<Repository, 'path' | 'name' | 'displayName'>): string {
+  return getProjectDisplayName(repo);
 }
 
 function getNormalizedExtension(filePath: string): string {

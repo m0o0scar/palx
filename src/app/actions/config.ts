@@ -2,31 +2,38 @@
 
 import { getLocalDb } from '@/lib/local-db';
 
-export interface RepoSettings {
+export interface ProjectSettings {
   agentProvider?: string;
   agentModel?: string;
   startupScript?: string;
   devServerScript?: string;
+  alias?: string | null;
+  // Deprecated compatibility fields.
   lastBranch?: string;
   credentialId?: string | null;
   credentialPreference?: 'auto' | 'github' | 'gitlab';
-  alias?: string | null;
 }
 
 export interface Config {
+  recentProjects: string[];
+  // Backward compatibility for callers that have not migrated yet.
   recentRepos: string[];
   defaultRoot: string;
   selectedIde: string;
   agentWidth: number;
-  repoSettings: Record<string, RepoSettings>;
+  projectSettings: Record<string, ProjectSettings>;
+  // Backward compatibility for callers that have not migrated yet.
+  repoSettings: Record<string, ProjectSettings>;
   pinnedFolderShortcuts: string[];
 }
 
 const DEFAULT_CONFIG: Config = {
+  recentProjects: [],
   recentRepos: [],
   defaultRoot: '',
   selectedIde: 'vscode',
   agentWidth: 66.666,
+  projectSettings: {},
   repoSettings: {},
   pinnedFolderShortcuts: [],
 };
@@ -37,34 +44,21 @@ type ConfigRow = {
   agent_width: number;
 };
 
-type RepoSettingsRow = {
-  repo_path: string;
+type ProjectSettingsRow = {
+  project_path: string;
   agent_provider: string | null;
   agent_model: string | null;
   startup_script: string | null;
   dev_server_script: string | null;
-  last_branch: string | null;
-  credential_id: string | null;
-  credential_preference: string | null;
   alias: string | null;
 };
 
-function normalizeCredentialPreference(
-  value: string | null | undefined,
-): 'auto' | 'github' | 'gitlab' | undefined {
-  return value === 'auto' || value === 'github' || value === 'gitlab' ? value : undefined;
-}
-
-function toRepoSettings(row: RepoSettingsRow): RepoSettings {
-  const settings: RepoSettings = {};
+function toProjectSettings(row: ProjectSettingsRow): ProjectSettings {
+  const settings: ProjectSettings = {};
   if (row.agent_provider !== null) settings.agentProvider = row.agent_provider;
   if (row.agent_model !== null) settings.agentModel = row.agent_model;
   if (row.startup_script !== null) settings.startupScript = row.startup_script;
   if (row.dev_server_script !== null) settings.devServerScript = row.dev_server_script;
-  if (row.last_branch !== null) settings.lastBranch = row.last_branch;
-  if (row.credential_id !== null) settings.credentialId = row.credential_id;
-  const credentialPreference = normalizeCredentialPreference(row.credential_preference);
-  if (credentialPreference) settings.credentialPreference = credentialPreference;
   if (row.alias !== null) settings.alias = row.alias;
   return settings;
 }
@@ -84,12 +78,12 @@ function writeConfig(config: Config): void {
       agentWidth: nextConfig.agentWidth,
     });
 
-    db.prepare('DELETE FROM app_config_recent_repos').run();
-    const insertRecentRepo = db.prepare(`
-      INSERT INTO app_config_recent_repos (position, repo_path) VALUES (?, ?)
+    db.prepare('DELETE FROM app_config_recent_projects').run();
+    const insertRecentProject = db.prepare(`
+      INSERT INTO app_config_recent_projects (position, project_path) VALUES (?, ?)
     `);
-    nextConfig.recentRepos.forEach((repoPath, index) => {
-      insertRecentRepo.run(index, repoPath);
+    nextConfig.recentProjects.forEach((projectPath, index) => {
+      insertRecentProject.run(index, projectPath);
     });
 
     db.prepare('DELETE FROM app_config_pinned_folder_shortcuts').run();
@@ -100,27 +94,22 @@ function writeConfig(config: Config): void {
       insertPinnedShortcut.run(index, folderPath);
     });
 
-    db.prepare('DELETE FROM app_config_repo_settings').run();
-    const insertRepoSettings = db.prepare(`
-      INSERT INTO app_config_repo_settings (
-        repo_path, agent_provider, agent_model, startup_script, dev_server_script,
-        last_branch, credential_id, credential_preference, alias
+    db.prepare('DELETE FROM app_config_project_settings').run();
+    const insertProjectSettings = db.prepare(`
+      INSERT INTO app_config_project_settings (
+        project_path, agent_provider, agent_model, startup_script, dev_server_script, alias
       ) VALUES (
-        @repoPath, @agentProvider, @agentModel, @startupScript, @devServerScript,
-        @lastBranch, @credentialId, @credentialPreference, @alias
+        @projectPath, @agentProvider, @agentModel, @startupScript, @devServerScript, @alias
       )
     `);
-    for (const [repoPath, repoSettings] of Object.entries(nextConfig.repoSettings)) {
-      insertRepoSettings.run({
-        repoPath,
-        agentProvider: repoSettings.agentProvider ?? null,
-        agentModel: repoSettings.agentModel ?? null,
-        startupScript: repoSettings.startupScript ?? null,
-        devServerScript: repoSettings.devServerScript ?? null,
-        lastBranch: repoSettings.lastBranch ?? null,
-        credentialId: repoSettings.credentialId ?? null,
-        credentialPreference: repoSettings.credentialPreference ?? null,
-        alias: repoSettings.alias ?? null,
+    for (const [projectPath, projectSettings] of Object.entries(nextConfig.projectSettings)) {
+      insertProjectSettings.run({
+        projectPath,
+        agentProvider: projectSettings.agentProvider ?? null,
+        agentModel: projectSettings.agentModel ?? null,
+        startupScript: projectSettings.startupScript ?? null,
+        devServerScript: projectSettings.devServerScript ?? null,
+        alias: projectSettings.alias ?? null,
       });
     }
   });
@@ -136,11 +125,11 @@ export async function getConfig(): Promise<Config> {
     WHERE singleton_id = 1
   `).get() as ConfigRow | undefined;
 
-  const recentRepos = db.prepare(`
-    SELECT repo_path
-    FROM app_config_recent_repos
+  const recentProjects = db.prepare(`
+    SELECT project_path
+    FROM app_config_recent_projects
     ORDER BY position ASC
-  `).all() as Array<{ repo_path: string }>;
+  `).all() as Array<{ project_path: string }>;
 
   const pinnedFolderShortcuts = db.prepare(`
     SELECT folder_path
@@ -148,15 +137,14 @@ export async function getConfig(): Promise<Config> {
     ORDER BY position ASC
   `).all() as Array<{ folder_path: string }>;
 
-  const repoSettingsRows = db.prepare(`
+  const projectSettingsRows = db.prepare(`
     SELECT
-      repo_path, agent_provider, agent_model, startup_script, dev_server_script,
-      last_branch, credential_id, credential_preference, alias
-    FROM app_config_repo_settings
-  `).all() as RepoSettingsRow[];
+      project_path, agent_provider, agent_model, startup_script, dev_server_script, alias
+    FROM app_config_project_settings
+  `).all() as ProjectSettingsRow[];
 
-  const repoSettings = Object.fromEntries(
-    repoSettingsRows.map((row) => [row.repo_path, toRepoSettings(row)]),
+  const projectSettings = Object.fromEntries(
+    projectSettingsRows.map((row) => [row.project_path, toProjectSettings(row)]),
   );
 
   return {
@@ -164,9 +152,11 @@ export async function getConfig(): Promise<Config> {
     defaultRoot: configRow?.default_root ?? DEFAULT_CONFIG.defaultRoot,
     selectedIde: configRow?.selected_ide ?? DEFAULT_CONFIG.selectedIde,
     agentWidth: configRow?.agent_width ?? DEFAULT_CONFIG.agentWidth,
-    recentRepos: recentRepos.map((entry) => entry.repo_path),
+    recentProjects: recentProjects.map((entry) => entry.project_path),
+    recentRepos: recentProjects.map((entry) => entry.project_path),
     pinnedFolderShortcuts: pinnedFolderShortcuts.map((entry) => entry.folder_path),
-    repoSettings,
+    projectSettings,
+    repoSettings: projectSettings,
   };
 }
 
@@ -181,29 +171,76 @@ export async function saveConfig(config: Config): Promise<void> {
 
 export async function updateConfig(updates: Partial<Config>): Promise<Config> {
   const currentConfig = await getConfig();
-  const newConfig = { ...currentConfig, ...updates };
+  const normalizedUpdates = { ...updates };
+  if (normalizedUpdates.recentRepos && !normalizedUpdates.recentProjects) {
+    normalizedUpdates.recentProjects = normalizedUpdates.recentRepos;
+  }
+  if (normalizedUpdates.repoSettings && !normalizedUpdates.projectSettings) {
+    normalizedUpdates.projectSettings = normalizedUpdates.repoSettings;
+  }
+
+  const newConfig = { ...currentConfig, ...normalizedUpdates };
+  newConfig.recentRepos = newConfig.recentProjects;
+  newConfig.repoSettings = newConfig.projectSettings;
   await saveConfig(newConfig);
   return newConfig;
 }
 
-export async function getRepoAlias(repoPath: string): Promise<string | null> {
+export async function getProjectAlias(projectPath: string): Promise<string | null> {
   const config = await getConfig();
-  const alias = config.repoSettings[repoPath]?.alias?.trim();
+  const alias = config.projectSettings[projectPath]?.alias?.trim();
   return alias || null;
 }
 
-export async function updateRepoSettings(repoPath: string, updates: Partial<RepoSettings>): Promise<Config> {
+export async function updateProjectSettings(projectPath: string, updates: Partial<ProjectSettings>): Promise<Config> {
   const currentConfig = await getConfig();
-  const currentRepoSettings = currentConfig.repoSettings[repoPath] || {};
+  const currentProjectSettings = currentConfig.projectSettings[projectPath] || {};
 
   const newConfig: Config = {
     ...currentConfig,
-    repoSettings: {
-      ...currentConfig.repoSettings,
-      [repoPath]: { ...currentRepoSettings, ...updates },
+    projectSettings: {
+      ...currentConfig.projectSettings,
+      [projectPath]: { ...currentProjectSettings, ...updates },
     },
   };
 
   await saveConfig(newConfig);
   return newConfig;
+}
+
+export async function getGitRepoCredential(repoPath: string): Promise<string | null> {
+  const db = getLocalDb();
+  const row = db.prepare(`
+    SELECT credential_id
+    FROM git_repo_credentials
+    WHERE repo_path = ?
+  `).get(repoPath) as { credential_id: string | null } | undefined;
+
+  return row?.credential_id ?? null;
+}
+
+export async function setGitRepoCredential(repoPath: string, credentialId: string | null): Promise<void> {
+  const db = getLocalDb();
+  const normalizedCredentialId = credentialId?.trim() || null;
+
+  if (!normalizedCredentialId) {
+    db.prepare('DELETE FROM git_repo_credentials WHERE repo_path = ?').run(repoPath);
+    return;
+  }
+
+  db.prepare(`
+    INSERT OR REPLACE INTO git_repo_credentials (repo_path, credential_id)
+    VALUES (?, ?)
+  `).run(repoPath, normalizedCredentialId);
+}
+
+// Backward-compatible wrappers while callers migrate.
+export type RepoSettings = ProjectSettings;
+
+export async function getRepoAlias(repoPath: string): Promise<string | null> {
+  return getProjectAlias(repoPath);
+}
+
+export async function updateRepoSettings(repoPath: string, updates: Partial<RepoSettings>): Promise<Config> {
+  return updateProjectSettings(repoPath, updates);
 }

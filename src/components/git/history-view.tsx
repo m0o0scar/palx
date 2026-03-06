@@ -39,6 +39,12 @@ const MIN_COMMIT_DETAILS_MESSAGE_RATIO = 0.15;
 const MAX_COMMIT_DETAILS_MESSAGE_RATIO = 0.75;
 const DEFAULT_COMMIT_DETAILS_MESSAGE_RATIO = 0.28;
 type MergeConflictStatus = 'checking' | 'no-conflict' | 'has-conflicts';
+type RepoCredentialOption = {
+  id: string;
+  type: 'github' | 'gitlab';
+  username: string;
+  serverUrl?: string;
+};
 
 type ConflictAgentOperation =
   | {
@@ -172,6 +178,20 @@ function toRemoteRepositoryWebUrl(remoteUrl: string): string | null {
   } catch {
     return null;
   }
+}
+
+function formatRepoCredentialOptionLabel(credential: RepoCredentialOption): string {
+  if (credential.type === 'github') {
+    return `GitHub - ${credential.username}`;
+  }
+
+  let host = credential.serverUrl || 'gitlab';
+  try {
+    host = new URL(credential.serverUrl || '').host;
+  } catch {
+    // Keep fallback host.
+  }
+  return `GitLab - ${credential.username} @ ${host}`;
 }
 
 // File status icon component
@@ -980,7 +1000,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
   const sessionByBranchName = useMemo(() => {
     const map = new Map<string, SessionMetadata>();
     for (const session of sessionsForRepo) {
-      const branchName = session.branchName.trim();
+      const branchName = session.branchName?.trim() || '';
       // listSessions() is sorted by timestamp desc, so keep the first match.
       if (!branchName || map.has(branchName)) continue;
       map.set(branchName, session);
@@ -993,6 +1013,10 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
 
   const repository = useRepository(repoPath);
   const updateRepository = useUpdateRepository();
+  const [credentialOptions, setCredentialOptions] = useState<RepoCredentialOption[]>([]);
+  const [repoCredentialSelection, setRepoCredentialSelection] = useState<'auto' | string>('auto');
+  const [isLoadingRepoCredential, setIsLoadingRepoCredential] = useState(false);
+  const [isSavingRepoCredential, setIsSavingRepoCredential] = useState(false);
 
   // Group expanded state (for "Branches", "Remotes", and "Worktrees" group headers)
   const [localGroupExpanded, setLocalGroupExpanded] = useState(true);
@@ -1041,6 +1065,79 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
       if (repository.visibilityMap) setVisibilityMap(repository.visibilityMap as VisibilityMap);
     }
   }, [repository]);
+
+  useEffect(() => {
+    if (!repoPath) return;
+    let cancelled = false;
+
+    const loadRepoCredentialState = async () => {
+      setIsLoadingRepoCredential(true);
+      try {
+        const [credentialOptionsResponse, repoCredentialResponse] = await Promise.all([
+          fetch('/api/credentials', { cache: 'no-store' }),
+          fetch(`/api/git/repo-credentials?path=${encodeURIComponent(repoPath)}`, { cache: 'no-store' }),
+        ]);
+
+        if (!credentialOptionsResponse.ok || !repoCredentialResponse.ok) {
+          throw new Error('Failed to load repository credentials.');
+        }
+
+        const credentialOptionsPayload = await credentialOptionsResponse.json() as RepoCredentialOption[];
+        const repoCredentialPayload = await repoCredentialResponse.json() as { credentialId?: string | null };
+
+        if (cancelled) return;
+
+        setCredentialOptions(Array.isArray(credentialOptionsPayload) ? credentialOptionsPayload : []);
+        const selectedCredentialId = repoCredentialPayload?.credentialId?.trim();
+        setRepoCredentialSelection(selectedCredentialId || 'auto');
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load repo credential state:', error);
+          setCredentialOptions([]);
+          setRepoCredentialSelection('auto');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingRepoCredential(false);
+        }
+      }
+    };
+
+    void loadRepoCredentialState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [repoPath]);
+
+  const handleRepoCredentialSelectionChange = useCallback(async (nextSelection: string) => {
+    const nextCredentialId = nextSelection === 'auto' ? null : nextSelection;
+    const previousSelection = repoCredentialSelection;
+    setRepoCredentialSelection(nextSelection === 'auto' ? 'auto' : nextSelection);
+    setIsSavingRepoCredential(true);
+
+    try {
+      const response = await fetch('/api/git/repo-credentials', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoPath, credentialId: nextCredentialId }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.error || 'Failed to save repository credential mapping.');
+      }
+    } catch (error) {
+      setRepoCredentialSelection(previousSelection);
+      toast({
+        type: 'error',
+        title: 'Credential Mapping Failed',
+        description: error instanceof Error ? error.message : 'Failed to save repository credential mapping.',
+      });
+    } finally {
+      setIsSavingRepoCredential(false);
+    }
+  }, [repoCredentialSelection, repoPath]);
 
   useEffect(() => {
     let isDisposed = false;
@@ -4607,6 +4704,30 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                 )}
                 <span className={headerActionLabelClass}>Push</span>
               </button>
+            </div>
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 dark:border-[#30363d] dark:bg-[#0d1117]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                Credential
+              </span>
+              <select
+                className="h-7 min-w-[210px] rounded border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-[#30363d] dark:bg-[#161b22] dark:text-slate-200"
+                value={repoCredentialSelection}
+                onChange={(event) => {
+                  void handleRepoCredentialSelectionChange(event.target.value);
+                }}
+                disabled={isLoadingRepoCredential || isSavingRepoCredential}
+                title="Select a credential override for this repository"
+              >
+                <option value="auto">Auto (remote-based)</option>
+                {credentialOptions.map((credential) => (
+                  <option key={credential.id} value={credential.id}>
+                    {formatRepoCredentialOptionLabel(credential)}
+                  </option>
+                ))}
+              </select>
+              {(isLoadingRepoCredential || isSavingRepoCredential) && (
+                <span className="loading loading-spinner loading-xs"></span>
+              )}
             </div>
             <div className="h-5 w-px bg-slate-200 dark:bg-[#30363d]" aria-hidden="true" />
             <div className="flex flex-wrap items-center gap-2">

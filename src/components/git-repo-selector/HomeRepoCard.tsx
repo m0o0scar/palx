@@ -1,57 +1,173 @@
 import { ChevronRight, FolderGit2, Settings, X, GitBranch as GitBranchIcon } from 'lucide-react';
-import Image from 'next/image';
-import type { MouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { getBaseName } from '@/lib/path';
 import { getStableRepoCardGradient } from '@/lib/repo-card-gradient';
 
 export type HomeRepoCardProps = {
-  repo: string;
-  repoDisplayName?: string;
+  project: string;
+  projectDisplayName?: string;
   isDarkThemeActive: boolean;
-  credentialLabel: string;
   runningSessionCount: number;
   draftCount: number;
-  repoIconPath: string | null;
-  showRepoIcon: boolean;
-  onSelectRepo: (repo: string) => void | Promise<boolean>;
-  onOpenGitWorkspace: (repo: string) => void;
-  onOpenRepoSettings: (event: MouseEvent, repo: string) => void | Promise<void>;
-  onRemoveRecent: (event: MouseEvent, repo: string) => void;
-  onRepoIconError: (repo: string) => void;
-  onMouseMove: (event: MouseEvent<HTMLDivElement>) => void;
-  onMouseLeave: (event: MouseEvent<HTMLDivElement>) => void;
+  projectIconPath: string | null;
+  showProjectIcon: boolean;
+  projectGitRepos?: string[];
+  isDiscoveringProjectGitRepos: boolean;
+  onSelectProject: (project: string) => void | Promise<boolean>;
+  onOpenGitWorkspace: (project: string, repoPath?: string) => void;
+  onOpenProjectSettings: (event: ReactMouseEvent, project: string) => void | Promise<void>;
+  onRemoveRecent: (event: ReactMouseEvent, project: string) => void;
+  onProjectIconError: (project: string) => void;
+  onMouseMove: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  onMouseLeave: (event: ReactMouseEvent<HTMLDivElement>) => void;
 };
 
+const thumbnailObjectUrlCache = new Map<string, string>();
+const thumbnailObjectUrlPromiseCache = new Map<string, Promise<string>>();
+
+async function getCachedThumbnailObjectUrl(sourceUrl: string): Promise<string> {
+  const cachedUrl = thumbnailObjectUrlCache.get(sourceUrl);
+  if (cachedUrl) {
+    return cachedUrl;
+  }
+
+  const pendingRequest = thumbnailObjectUrlPromiseCache.get(sourceUrl);
+  if (pendingRequest) {
+    return pendingRequest;
+  }
+
+  const nextRequest = fetch(sourceUrl, { cache: 'force-cache' })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Failed to load thumbnail: ${response.status}`);
+      }
+
+      const imageBlob = await response.blob();
+      const objectUrl = URL.createObjectURL(imageBlob);
+      thumbnailObjectUrlCache.set(sourceUrl, objectUrl);
+      return objectUrl;
+    })
+    .finally(() => {
+      thumbnailObjectUrlPromiseCache.delete(sourceUrl);
+    });
+
+  thumbnailObjectUrlPromiseCache.set(sourceUrl, nextRequest);
+  return nextRequest;
+}
+
+function normalizePathForComparison(pathValue: string): string {
+  return pathValue.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function toProjectRelativeRepoPath(projectPath: string, repoPath: string): string {
+  const normalizedProjectPath = normalizePathForComparison(projectPath);
+  const normalizedRepoPath = normalizePathForComparison(repoPath);
+
+  if (!normalizedProjectPath || !normalizedRepoPath) return repoPath;
+  if (normalizedRepoPath === normalizedProjectPath) return '.';
+
+  const projectPrefix = `${normalizedProjectPath}/`;
+  if (normalizedRepoPath.startsWith(projectPrefix)) {
+    return normalizedRepoPath.slice(projectPrefix.length);
+  }
+
+  return repoPath;
+}
+
 export function HomeRepoCard({
-  repo,
-  repoDisplayName,
+  project,
+  projectDisplayName,
   isDarkThemeActive,
-  credentialLabel,
   runningSessionCount,
   draftCount,
-  repoIconPath,
-  showRepoIcon,
-  onSelectRepo,
+  projectIconPath,
+  showProjectIcon,
+  projectGitRepos,
+  isDiscoveringProjectGitRepos,
+  onSelectProject,
   onOpenGitWorkspace,
-  onOpenRepoSettings,
+  onOpenProjectSettings,
   onRemoveRecent,
-  onRepoIconError,
+  onProjectIconError,
   onMouseMove,
   onMouseLeave,
 }: HomeRepoCardProps) {
-  const repoName = repoDisplayName || getBaseName(repo);
-  const cardGradient = getStableRepoCardGradient(repoName);
-  const repoIconUrl = repoIconPath
-    ? `/api/file-thumbnail?path=${encodeURIComponent(repoIconPath)}`
+  const projectName = projectDisplayName || getBaseName(project);
+  const cardGradient = getStableRepoCardGradient(projectName);
+  const [isGitRepoMenuOpen, setIsGitRepoMenuOpen] = useState(false);
+  const gitRepoMenuRef = useRef<HTMLDivElement | null>(null);
+  const projectIconUrl = projectIconPath
+    ? `/api/file-thumbnail?path=${encodeURIComponent(projectIconPath)}`
     : null;
+  const immediateCachedProjectIconUrl = projectIconUrl
+    ? thumbnailObjectUrlCache.get(projectIconUrl) ?? null
+    : null;
+  const [loadedProjectIconState, setLoadedProjectIconState] = useState<{
+    sourceUrl: string;
+    objectUrl: string;
+  } | null>(() => (
+    projectIconUrl && immediateCachedProjectIconUrl
+      ? { sourceUrl: projectIconUrl, objectUrl: immediateCachedProjectIconUrl }
+      : null
+  ));
+  const discoveredProjectGitRepos = projectGitRepos ?? [];
+  const hasDiscoveredGitRepos = Array.isArray(projectGitRepos);
+  const hasGitRepos = discoveredProjectGitRepos.length > 0;
+  const hasMultipleGitRepos = discoveredProjectGitRepos.length > 1;
+  const displayedProjectIconUrl = immediateCachedProjectIconUrl
+    ?? (loadedProjectIconState?.sourceUrl === projectIconUrl ? loadedProjectIconState.objectUrl : null);
+
+  useEffect(() => {
+    if (!isGitRepoMenuOpen) return;
+    const handleDocumentClick = (event: globalThis.MouseEvent) => {
+      if (gitRepoMenuRef.current?.contains(event.target as Node)) return;
+      setIsGitRepoMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleDocumentClick);
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentClick);
+    };
+  }, [isGitRepoMenuOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!showProjectIcon || !projectIconUrl) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (immediateCachedProjectIconUrl) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void getCachedThumbnailObjectUrl(projectIconUrl)
+      .then((objectUrl) => {
+        if (!cancelled) {
+          setLoadedProjectIconState({ sourceUrl: projectIconUrl, objectUrl });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          onProjectIconError(project);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [immediateCachedProjectIconUrl, onProjectIconError, project, projectIconUrl, showProjectIcon]);
 
   return (
     <div
-      onClick={() => void onSelectRepo(repo)}
+      onClick={() => void onSelectProject(project)}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          void onSelectRepo(repo);
+          void onSelectProject(project);
         }
       }}
       onMouseMove={onMouseMove}
@@ -69,15 +185,13 @@ export function HomeRepoCard({
           <div className="flex items-start justify-between gap-3">
             <div className="relative flex items-center">
               <div className="repo-card-tilt-icon flex h-10 w-10 items-center justify-center rounded-xl bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm dark:border dark:border-white/15 dark:bg-white/10 dark:text-slate-200">
-                {showRepoIcon && repoIconUrl ? (
-                  <Image
-                    src={repoIconUrl}
-                    alt={`${repoName} icon`}
-                    width={24}
-                    height={24}
+                {showProjectIcon && displayedProjectIconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={displayedProjectIconUrl}
+                    alt={`${projectName} icon`}
                     className="h-6 w-6 rounded-md object-cover"
-                    unoptimized
-                    onError={() => onRepoIconError(repo)}
+                    onError={() => onProjectIconError(project)}
                   />
                 ) : (
                   <FolderGit2 className="h-5 w-5" />
@@ -104,27 +218,64 @@ export function HomeRepoCard({
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <div className="relative" ref={gitRepoMenuRef}>
+                <button
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (isDiscoveringProjectGitRepos) return;
+                    if (hasDiscoveredGitRepos && !hasGitRepos) return;
+                    if (!hasMultipleGitRepos) {
+                      onOpenGitWorkspace(project);
+                      return;
+                    }
+                    setIsGitRepoMenuOpen((previous) => !previous);
+                  }}
+                  className="btn btn-circle btn-xs border-0 bg-white/50 text-slate-600 opacity-0 shadow-none backdrop-blur-sm transition-opacity hover:bg-white/80 hover:text-slate-900 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-80 disabled:hover:bg-white/50 dark:bg-white/10 dark:text-slate-300 dark:hover:bg-white/20 dark:hover:text-white dark:disabled:hover:bg-white/10"
+                  title={isDiscoveringProjectGitRepos
+                    ? 'Discovering repositories...'
+                    : hasDiscoveredGitRepos && !hasGitRepos
+                      ? 'No Git repositories found in this project'
+                    : hasMultipleGitRepos
+                        ? 'Select a repository'
+                        : 'Open Git Workspace'}
+                  disabled={isDiscoveringProjectGitRepos || (hasDiscoveredGitRepos && !hasGitRepos)}
+                >
+                  <GitBranchIcon className="h-3.5 w-3.5" />
+                </button>
+                {hasMultipleGitRepos && isGitRepoMenuOpen && (
+                  <div className="absolute right-0 top-8 z-30 max-h-56 w-52 overflow-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-[#30363d] dark:bg-[#161b22]">
+                    {discoveredProjectGitRepos.map((repoPath) => {
+                      const relativeRepoPath = toProjectRelativeRepoPath(project, repoPath);
+                      return (
+                        <button
+                          key={repoPath}
+                          type="button"
+                          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-[#30363d]/70"
+                          title={repoPath}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setIsGitRepoMenuOpen(false);
+                            onOpenGitWorkspace(project, repoPath);
+                          }}
+                        >
+                          <span className="truncate">{relativeRepoPath}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
               <button
                 onClick={(event) => {
-                  event.stopPropagation();
-                  onOpenGitWorkspace(repo);
+                  void onOpenProjectSettings(event, project);
                 }}
                 className="btn btn-circle btn-xs border-0 bg-white/50 text-slate-600 opacity-0 shadow-none backdrop-blur-sm transition-opacity hover:bg-white/80 hover:text-slate-900 group-hover:opacity-100 dark:bg-white/10 dark:text-slate-300 dark:hover:bg-white/20 dark:hover:text-white"
-                title="Open Git Workspace"
-              >
-                <GitBranchIcon className="h-3.5 w-3.5" />
-              </button>
-              <button
-                onClick={(event) => {
-                  void onOpenRepoSettings(event, repo);
-                }}
-                className="btn btn-circle btn-xs border-0 bg-white/50 text-slate-600 opacity-0 shadow-none backdrop-blur-sm transition-opacity hover:bg-white/80 hover:text-slate-900 group-hover:opacity-100 dark:bg-white/10 dark:text-slate-300 dark:hover:bg-white/20 dark:hover:text-white"
-                title="Repository settings"
+                title="Project settings"
               >
                 <Settings className="h-3.5 w-3.5" />
               </button>
               <button
-                onClick={(event) => onRemoveRecent(event, repo)}
+                onClick={(event) => onRemoveRecent(event, project)}
                 className="btn btn-circle btn-xs border-0 bg-white/50 text-slate-500 opacity-0 shadow-none backdrop-blur-sm transition-opacity hover:bg-white/80 hover:text-rose-600 group-hover:opacity-100 dark:bg-white/10 dark:text-slate-400 dark:hover:bg-white/20 dark:hover:text-rose-300"
                 title="Remove from history"
               >
@@ -135,16 +286,13 @@ export function HomeRepoCard({
 
           <div className="space-y-1.5">
             <h3 className="truncate text-lg font-bold text-slate-900 dark:text-white">
-              {repoName}
+              {projectName}
             </h3>
-            <p className="truncate font-mono text-xs text-slate-600 dark:text-slate-300">{repo}</p>
-            <p className="truncate text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              Credential: {credentialLabel}
-            </p>
+            <p className="truncate font-mono text-xs text-slate-600 dark:text-slate-300">{project}</p>
           </div>
 
           <div className="flex items-center justify-between text-sm font-semibold text-slate-700 dark:text-slate-200">
-            <span>Open repository</span>
+            <span>Open project</span>
             <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </div>
         </div>

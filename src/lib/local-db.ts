@@ -33,6 +33,21 @@ function createSchema(db: Database.Database): void {
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS projects (
+      path TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      display_name TEXT,
+      icon_path TEXT,
+      last_opened_at TEXT,
+      expanded_folders_json TEXT,
+      visibility_map_json TEXT,
+      local_group_expanded INTEGER,
+      remotes_group_expanded INTEGER,
+      worktrees_group_expanded INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS repositories (
       path TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -65,6 +80,11 @@ function createSchema(db: Database.Database): void {
       repo_path TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS app_config_recent_projects (
+      position INTEGER PRIMARY KEY,
+      project_path TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS app_config_pinned_folder_shortcuts (
       position INTEGER PRIMARY KEY,
       folder_path TEXT NOT NULL
@@ -80,6 +100,20 @@ function createSchema(db: Database.Database): void {
       credential_id TEXT,
       credential_preference TEXT,
       alias TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS app_config_project_settings (
+      project_path TEXT PRIMARY KEY,
+      agent_provider TEXT,
+      agent_model TEXT,
+      startup_script TEXT,
+      dev_server_script TEXT,
+      alias TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS git_repo_credentials (
+      repo_path TEXT PRIMARY KEY,
+      credential_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS credentials_metadata (
@@ -102,9 +136,13 @@ function createSchema(db: Database.Database): void {
 
     CREATE TABLE IF NOT EXISTS sessions (
       session_name TEXT PRIMARY KEY,
-      repo_path TEXT NOT NULL,
-      worktree_path TEXT NOT NULL,
-      branch_name TEXT NOT NULL,
+      project_path TEXT NOT NULL DEFAULT '',
+      workspace_path TEXT NOT NULL DEFAULT '',
+      workspace_mode TEXT NOT NULL DEFAULT 'folder',
+      active_repo_path TEXT,
+      repo_path TEXT,
+      worktree_path TEXT,
+      branch_name TEXT,
       base_branch TEXT,
       agent TEXT NOT NULL,
       model TEXT NOT NULL,
@@ -112,6 +150,16 @@ function createSchema(db: Database.Database): void {
       dev_server_script TEXT,
       initialized INTEGER,
       timestamp TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS session_git_repos (
+      session_name TEXT NOT NULL,
+      source_repo_path TEXT NOT NULL,
+      relative_repo_path TEXT NOT NULL,
+      worktree_path TEXT NOT NULL,
+      branch_name TEXT NOT NULL,
+      base_branch TEXT,
+      PRIMARY KEY (session_name, source_repo_path)
     );
 
     CREATE TABLE IF NOT EXISTS session_launch_contexts (
@@ -131,8 +179,10 @@ function createSchema(db: Database.Database): void {
 
     CREATE TABLE IF NOT EXISTS drafts (
       id TEXT PRIMARY KEY,
-      repo_path TEXT NOT NULL,
-      branch_name TEXT NOT NULL,
+      project_path TEXT,
+      repo_path TEXT,
+      branch_name TEXT,
+      git_contexts_json TEXT,
       message TEXT NOT NULL,
       attachment_paths_json TEXT NOT NULL,
       agent_provider TEXT NOT NULL,
@@ -143,11 +193,6 @@ function createSchema(db: Database.Database): void {
       dev_server_script TEXT NOT NULL,
       session_mode TEXT NOT NULL
     );
-
-    CREATE INDEX IF NOT EXISTS sessions_repo_path_idx ON sessions(repo_path);
-    CREATE INDEX IF NOT EXISTS sessions_timestamp_idx ON sessions(timestamp);
-    CREATE INDEX IF NOT EXISTS drafts_repo_path_idx ON drafts(repo_path);
-    CREATE INDEX IF NOT EXISTS drafts_timestamp_idx ON drafts(timestamp);
   `);
 }
 
@@ -617,12 +662,223 @@ function migrateLegacyData(db: Database.Database): void {
   migration();
 }
 
+function tableExists(db: Database.Database, tableName: string): boolean {
+  const row = db.prepare(`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+  `).get(tableName) as { name: string } | undefined;
+  return Boolean(row?.name);
+}
+
+function getColumnNames(db: Database.Database, tableName: string): Set<string> {
+  if (!tableExists(db, tableName)) return new Set();
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return new Set(columns.map((column) => column.name));
+}
+
+function addColumnIfMissing(db: Database.Database, tableName: string, columnSql: string): void {
+  if (!tableExists(db, tableName)) return;
+  const columnName = columnSql.trim().split(/\s+/)[0];
+  if (!columnName) return;
+  const columns = getColumnNames(db, tableName);
+  if (columns.has(columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql}`);
+}
+
+function createIndexIfColumnsExist(
+  db: Database.Database,
+  tableName: string,
+  indexName: string,
+  columns: string[],
+): void {
+  if (!tableExists(db, tableName)) return;
+  if (columns.length === 0) return;
+  const existingColumns = getColumnNames(db, tableName);
+  if (!columns.every((column) => existingColumns.has(column))) return;
+  db.exec(`CREATE INDEX IF NOT EXISTS ${indexName} ON ${tableName}(${columns.join(', ')})`);
+}
+
+function isPathWithin(parentPath: string, candidatePath: string): boolean {
+  const normalizedParent = path.resolve(parentPath);
+  const normalizedCandidate = path.resolve(candidatePath);
+  if (normalizedParent === normalizedCandidate) return true;
+  const relativePath = path.relative(normalizedParent, normalizedCandidate);
+  return relativePath !== '' && !relativePath.startsWith('..') && !path.isAbsolute(relativePath);
+}
+
+function normalizeRelativePath(absolutePath: string, basePath: string | null): string {
+  if (!basePath) return '';
+  if (!isPathWithin(basePath, absolutePath)) return '';
+  const relativePath = path.relative(basePath, absolutePath);
+  return relativePath === '.' ? '' : relativePath;
+}
+
 function runSchemaMigrations(db: Database.Database): void {
-  const columns = db.prepare(`PRAGMA table_info(app_config_repo_settings)`).all() as Array<{ name: string }>;
-  const columnNames = new Set(columns.map((c) => c.name));
-  if (!columnNames.has('alias')) {
-    db.exec(`ALTER TABLE app_config_repo_settings ADD COLUMN alias TEXT`);
+  if (tableExists(db, 'app_config_repo_settings')) {
+    addColumnIfMissing(db, 'app_config_repo_settings', 'alias TEXT');
   }
+
+  addColumnIfMissing(db, 'projects', 'icon_path TEXT');
+  addColumnIfMissing(db, 'projects', 'created_at TEXT');
+  addColumnIfMissing(db, 'projects', 'updated_at TEXT');
+
+  addColumnIfMissing(db, 'sessions', 'project_path TEXT');
+  addColumnIfMissing(db, 'sessions', 'workspace_path TEXT');
+  addColumnIfMissing(db, 'sessions', 'workspace_mode TEXT');
+  addColumnIfMissing(db, 'sessions', 'active_repo_path TEXT');
+  addColumnIfMissing(db, 'drafts', 'project_path TEXT');
+  addColumnIfMissing(db, 'drafts', 'git_contexts_json TEXT');
+
+  if (tableExists(db, 'repositories') && getRowCount(db, 'projects') === 0) {
+    db.prepare(`
+      INSERT OR IGNORE INTO projects (
+        path, name, display_name, icon_path, last_opened_at,
+        expanded_folders_json, visibility_map_json, local_group_expanded,
+        remotes_group_expanded, worktrees_group_expanded, created_at, updated_at
+      )
+      SELECT
+        path, name, display_name, NULL, last_opened_at,
+        expanded_folders_json, visibility_map_json, local_group_expanded,
+        remotes_group_expanded, worktrees_group_expanded, datetime('now'), datetime('now')
+      FROM repositories
+    `).run();
+  }
+
+  if (tableExists(db, 'app_config_recent_repos') && getRowCount(db, 'app_config_recent_projects') === 0) {
+    db.prepare(`
+      INSERT INTO app_config_recent_projects (position, project_path)
+      SELECT position, repo_path
+      FROM app_config_recent_repos
+      ORDER BY position ASC
+    `).run();
+  }
+
+  if (tableExists(db, 'app_config_repo_settings') && getRowCount(db, 'app_config_project_settings') === 0) {
+    db.prepare(`
+      INSERT OR REPLACE INTO app_config_project_settings (
+        project_path, agent_provider, agent_model, startup_script, dev_server_script, alias
+      )
+      SELECT
+        repo_path, agent_provider, agent_model, startup_script, dev_server_script, alias
+      FROM app_config_repo_settings
+    `).run();
+  }
+
+  if (tableExists(db, 'app_config_repo_settings') && getRowCount(db, 'git_repo_credentials') === 0) {
+    db.prepare(`
+      INSERT OR REPLACE INTO git_repo_credentials (repo_path, credential_id)
+      SELECT repo_path, credential_id
+      FROM app_config_repo_settings
+      WHERE credential_id IS NOT NULL AND TRIM(credential_id) <> ''
+    `).run();
+  }
+
+  if (tableExists(db, 'sessions')) {
+    db.prepare(`
+      UPDATE sessions
+      SET
+        project_path = COALESCE(NULLIF(project_path, ''), repo_path),
+        workspace_path = COALESCE(NULLIF(workspace_path, ''), worktree_path, repo_path),
+        workspace_mode = CASE
+          WHEN workspace_mode IN ('single_worktree', 'multi_repo_worktree', 'folder') THEN workspace_mode
+          WHEN COALESCE(repo_path, '') <> '' AND COALESCE(worktree_path, '') <> '' THEN 'single_worktree'
+          ELSE 'folder'
+        END,
+        active_repo_path = COALESCE(NULLIF(active_repo_path, ''), repo_path)
+    `).run();
+  }
+
+  if (tableExists(db, 'session_git_repos') && getRowCount(db, 'session_git_repos') === 0 && tableExists(db, 'sessions')) {
+    const rows = db.prepare(`
+      SELECT session_name, project_path, repo_path, worktree_path, branch_name, base_branch
+      FROM sessions
+      WHERE
+        repo_path IS NOT NULL
+        AND TRIM(repo_path) <> ''
+        AND worktree_path IS NOT NULL
+        AND TRIM(worktree_path) <> ''
+        AND branch_name IS NOT NULL
+        AND TRIM(branch_name) <> ''
+    `).all() as Array<{
+      session_name: string;
+      project_path: string | null;
+      repo_path: string;
+      worktree_path: string;
+      branch_name: string;
+      base_branch: string | null;
+    }>;
+
+    const insert = db.prepare(`
+      INSERT OR REPLACE INTO session_git_repos (
+        session_name, source_repo_path, relative_repo_path, worktree_path, branch_name, base_branch
+      ) VALUES (
+        @sessionName, @sourceRepoPath, @relativeRepoPath, @worktreePath, @branchName, @baseBranch
+      )
+    `);
+
+    for (const row of rows) {
+      const projectPath = row.project_path?.trim() || null;
+      insert.run({
+        sessionName: row.session_name,
+        sourceRepoPath: row.repo_path,
+        relativeRepoPath: normalizeRelativePath(row.repo_path, projectPath),
+        worktreePath: row.worktree_path,
+        branchName: row.branch_name,
+        baseBranch: row.base_branch ?? null,
+      });
+    }
+  }
+
+  if (tableExists(db, 'drafts')) {
+    db.prepare(`
+      UPDATE drafts
+      SET project_path = COALESCE(NULLIF(project_path, ''), repo_path)
+    `).run();
+
+    const rows = db.prepare(`
+      SELECT id, project_path, repo_path, branch_name, git_contexts_json
+      FROM drafts
+    `).all() as Array<{
+      id: string;
+      project_path: string | null;
+      repo_path: string | null;
+      branch_name: string | null;
+      git_contexts_json: string | null;
+    }>;
+
+    const updateDraftGitContexts = db.prepare(`
+      UPDATE drafts
+      SET git_contexts_json = @gitContextsJson
+      WHERE id = @id
+    `);
+
+    for (const row of rows) {
+      if (row.git_contexts_json && row.git_contexts_json.trim()) continue;
+      if (!row.repo_path || !row.branch_name) continue;
+
+      const projectPath = row.project_path?.trim() || null;
+      const gitContexts = [{
+        sourceRepoPath: row.repo_path,
+        relativeRepoPath: normalizeRelativePath(row.repo_path, projectPath),
+        worktreePath: '',
+        branchName: row.branch_name,
+      }];
+
+      updateDraftGitContexts.run({
+        id: row.id,
+        gitContextsJson: JSON.stringify(gitContexts),
+      });
+    }
+  }
+
+  createIndexIfColumnsExist(db, 'sessions', 'sessions_repo_path_idx', ['repo_path']);
+  createIndexIfColumnsExist(db, 'sessions', 'sessions_project_path_idx', ['project_path']);
+  createIndexIfColumnsExist(db, 'sessions', 'sessions_timestamp_idx', ['timestamp']);
+  createIndexIfColumnsExist(db, 'drafts', 'drafts_repo_path_idx', ['repo_path']);
+  createIndexIfColumnsExist(db, 'drafts', 'drafts_project_path_idx', ['project_path']);
+  createIndexIfColumnsExist(db, 'drafts', 'drafts_timestamp_idx', ['timestamp']);
+  createIndexIfColumnsExist(db, 'session_git_repos', 'session_git_repos_session_idx', ['session_name']);
 }
 
 function initializeDb(): Database.Database {
@@ -636,8 +892,8 @@ function initializeDb(): Database.Database {
   db.pragma('synchronous = NORMAL');
 
   createSchema(db);
-  runSchemaMigrations(db);
   migrateLegacyData(db);
+  runSchemaMigrations(db);
   return db;
 }
 

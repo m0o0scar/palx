@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { GitService } from '@/lib/git';
-import { getRepositories } from '@/lib/store';
 import { getCredentialById, getCredentialToken, findCredentialForRemote } from '@/lib/credentials';
+import { getGitRepoCredential } from '@/app/actions/config';
 import { getImageMimeType, isImageFile } from '@/lib/utils';
 import { handleGitError } from '@/lib/api-utils';
 import { runCodexCliNonInteractive } from '@/lib/codex-cli';
@@ -15,12 +15,10 @@ const actionSchema = z.object({
 });
 
 async function resolveCredentials(repoPath: string, git: GitService, remoteName?: string) {
-  const repos = getRepositories();
-  const repoConfig = repos.find(r => r.path === repoPath);
-  
-  // 1. Check for explicitly associated credential
-  if (repoConfig?.credentialId) {
-    const cred = await getCredentialById(repoConfig.credentialId);
+  // 1. Check explicit per-repo credential mapping.
+  const mappedCredentialId = await getGitRepoCredential(repoPath);
+  if (mappedCredentialId) {
+    const cred = await getCredentialById(mappedCredentialId);
     if (cred) {
       const token = await getCredentialToken(cred.id);
       if (token) {

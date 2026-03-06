@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { SessionView } from '@/components/SessionView';
-import { consumeSessionLaunchContext, getSessionMetadata, SessionMetadata, markSessionInitialized } from '@/app/actions/session';
-import { getSessionTerminalSources, resolveRepoCardIcon, startTtydProcess } from '@/app/actions/git';
-import { getRepoAlias } from '@/app/actions/config';
+import { markSessionInitialized, SessionMetadata } from '@/app/actions/session';
+import { getSessionPageBootstrap, type SessionPageBootstrapResult } from '@/app/actions/session-page';
 import { clearPendingSessionNavigation } from '@/lib/session-navigation';
 
 type SessionNotificationPayload = {
@@ -19,6 +18,8 @@ type SessionNotificationPayload = {
 const SESSION_FALLBACK_FAVICON_PATH = '/repo-generic-icon.svg';
 const APP_DEFAULT_FAVICON_PATH = '/palx-icon.png';
 const SESSION_FAVICON_DATA_ATTR = 'data-viba-session-favicon';
+const sessionBootstrapResultCache = new Map<string, Extract<SessionPageBootstrapResult, { success: true }>>();
+const sessionBootstrapPromiseCache = new Map<string, Promise<SessionPageBootstrapResult>>();
 
 function withFaviconCacheBuster(href: string, key: string): string {
     const separator = href.includes('?') ? '&' : '?';
@@ -60,6 +61,32 @@ function restoreAppFavicon(): void {
     }
 }
 
+function loadSessionPageBootstrapCached(sessionId: string): Promise<SessionPageBootstrapResult> {
+    const cached = sessionBootstrapResultCache.get(sessionId);
+    if (cached) {
+        return Promise.resolve(cached);
+    }
+
+    const inFlight = sessionBootstrapPromiseCache.get(sessionId);
+    if (inFlight) {
+        return inFlight;
+    }
+
+    const request = getSessionPageBootstrap(sessionId)
+        .then((result) => {
+            if (result.success) {
+                sessionBootstrapResultCache.set(sessionId, result);
+            }
+            return result;
+        })
+        .finally(() => {
+            sessionBootstrapPromiseCache.delete(sessionId);
+        });
+
+    sessionBootstrapPromiseCache.set(sessionId, request);
+    return request;
+}
+
 export default function SessionPage() {
     const params = useParams<{ sessionId: string }>();
     const sessionIdParam = params.sessionId;
@@ -81,6 +108,7 @@ export default function SessionPage() {
     const [contextAgentProvider, setContextAgentProvider] = useState<string | undefined>(undefined);
     const [contextSessionMode, setContextSessionMode] = useState<'fast' | 'plan' | undefined>(undefined);
     const [contextAttachmentPaths, setContextAttachmentPaths] = useState<string[]>([]);
+    const [projectGitRepoRelativePaths, setProjectGitRepoRelativePaths] = useState<string[]>([]);
 
     // True = send --resume to agent; False = send fresh start params
     const [isResume, setIsResume] = useState<boolean>(true);
@@ -248,89 +276,34 @@ export default function SessionPage() {
                 setSessionFaviconHref(SESSION_FALLBACK_FAVICON_PATH);
                 setTerminalSources(null);
 
-                // Ensure ttyd is running
-                const ttydResult = await startTtydProcess();
-                if (!ttydResult.success) {
-                    if (cancelled) return;
-                    setError('Failed to start terminal service');
-                    setLoading(false);
-                    return;
-                }
+                const bootstrap = await loadSessionPageBootstrapCached(sessionId);
                 if (cancelled) return;
-                setTerminalPersistenceMode(ttydResult.persistenceMode === 'tmux' ? 'tmux' : 'shell');
-
-                const data = await getSessionMetadata(sessionId);
-                if (!data) {
-                    if (cancelled) return;
-                    setError('Session not found');
+                if (!bootstrap.success) {
+                    setError(bootstrap.error);
                     setLoading(false);
                     return;
                 }
 
-                try {
-                    const iconResult = await resolveRepoCardIcon(data.repoPath);
-                    if (!cancelled && iconResult.success && iconResult.iconPath) {
-                        setSessionFaviconHref(`/api/file-thumbnail?path=${encodeURIComponent(iconResult.iconPath)}`);
-                    }
-                } catch {
-                    if (!cancelled) {
-                        setSessionFaviconHref(SESSION_FALLBACK_FAVICON_PATH);
-                    }
-                }
+                setTerminalPersistenceMode(bootstrap.terminalPersistenceMode);
+                setMetadata(bootstrap.metadata);
+                setRepoDisplayName(bootstrap.repoDisplayName || undefined);
+                setTerminalSources(bootstrap.terminalSources);
+                setProjectGitRepoRelativePaths(bootstrap.projectGitRepoRelativePaths);
+                setIsResume(bootstrap.isResume);
 
-                if (cancelled) return;
-                setMetadata(data);
-                const alias = await getRepoAlias(data.repoPath);
-                if (cancelled) return;
-                if (alias) {
-                    setRepoDisplayName(alias);
-                }
-                const resolvedTerminalSources = await getSessionTerminalSources(
-                    data.sessionName,
-                    data.repoPath,
-                    data.agent,
-                );
-                if (cancelled) return;
-                setTerminalSources(resolvedTerminalSources);
-
-                // Determine fresh start vs resume purely from the initialized flag:
-                // - initialized === false  → first open, send startup params
-                // - initialized === true   → already started before, resume
-                // - initialized === undefined → legacy session (no flag), treat as resume
-                const isFirstOpen = data.initialized === false;
-
-                if (isFirstOpen) {
-                    // Consume the launch context (startup params) written by GitRepoSelector
-                    const contextResult = await consumeSessionLaunchContext(sessionId);
-                    if (cancelled) return;
-                    if (contextResult.success && contextResult.context) {
-                        const ctx = contextResult.context;
-                        setInitialMessage(ctx.initialMessage);
-                        setStartupScript(ctx.startupScript);
-                        setContextTitle(ctx.title);
-                        setContextAgentProvider(ctx.agentProvider);
-                        setContextSessionMode(ctx.sessionMode);
-                        const launchAttachmentPaths = (ctx.attachmentPaths || [])
-                            .map((entry) => entry.trim())
-                            .filter(Boolean);
-                        const resolvedAttachmentPaths = launchAttachmentPaths.length > 0
-                            ? Array.from(new Set(launchAttachmentPaths))
-                            : Array.from(
-                                new Set(
-                                    (ctx.attachmentNames || [])
-                                        .map((name) => name.trim())
-                                        .filter(Boolean)
-                                        .map((name) => `${data.worktreePath}-attachments/${name}`)
-                                )
-                            );
-                        setContextAttachmentPaths(resolvedAttachmentPaths);
-                    }
-                    // Whether or not we got context, this is a fresh start
-                    setIsResume(false);
+                if (bootstrap.sessionIconPath) {
+                    setSessionFaviconHref(`/api/file-thumbnail?path=${encodeURIComponent(bootstrap.sessionIconPath)}`);
                 } else {
-                    // Already initialized (or legacy) — resume
-                    setIsResume(true);
+                    setSessionFaviconHref(SESSION_FALLBACK_FAVICON_PATH);
                 }
+
+                const launchContext = bootstrap.launchContext;
+                setInitialMessage(launchContext?.initialMessage);
+                setStartupScript(launchContext?.startupScript);
+                setContextTitle(launchContext?.title);
+                setContextAgentProvider(launchContext?.agentProvider);
+                setContextSessionMode(launchContext?.sessionMode);
+                setContextAttachmentPaths(launchContext?.attachmentPaths || []);
 
                 if (cancelled) return;
                 setLoading(false);
@@ -404,17 +377,21 @@ export default function SessionPage() {
 
     return (
         <SessionView
-            repo={metadata.repoPath}
+            repo={metadata.projectPath}
             repoDisplayName={repoDisplayName}
-            worktree={metadata.worktreePath}
-            branch={metadata.branchName}
+            worktree={metadata.workspacePath}
+            branch={metadata.branchName || ''}
             baseBranch={metadata.baseBranch}
+            workspaceMode={metadata.workspaceMode}
+            activeRepoPath={metadata.activeRepoPath}
+            gitRepos={metadata.gitRepos}
             sessionName={metadata.sessionName}
             agent={contextAgentProvider || metadata.agent}
             startupScript={startupScript}
             devServerScript={metadata.devServerScript}
             initialMessage={initialMessage}
             attachmentPaths={contextAttachmentPaths}
+            projectGitRepoRelativePaths={projectGitRepoRelativePaths}
             title={contextTitle || metadata.title}
             sessionMode={contextSessionMode}
             onExit={handleExit}

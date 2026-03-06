@@ -125,7 +125,7 @@ async function loadJulesPredefinedPrompts(): Promise<PredefinedPrompt[]> {
 
 type NewSessionPageProps = {
   searchParams: Promise<{
-    repo?: string | string[];
+    project?: string | string[];
     from?: string | string[];
     prefillFromSession?: string | string[];
   }>;
@@ -136,21 +136,21 @@ export default async function NewSessionPage({
 }: NewSessionPageProps) {
   const params = await searchParams;
   const predefinedPrompts = await loadJulesPredefinedPrompts();
-  const repoParam = params.repo;
+  const projectParam = params.project;
   const fromParam = params.from;
   const prefillParam = params.prefillFromSession;
-  const repoPathFromParam = Array.isArray(repoParam) ? repoParam[0] : repoParam;
+  const projectPathFromParam = Array.isArray(projectParam) ? projectParam[0] : projectParam;
   const fromName = Array.isArray(fromParam) ? fromParam[0] : fromParam;
   const prefillFromSession = Array.isArray(prefillParam)
     ? prefillParam[0]
     : prefillParam;
-  const repoPath = repoPathFromParam;
+  const projectPath = projectPathFromParam;
 
   return (
     <main className="flex min-h-screen flex-col items-center bg-[#f6f6f8] p-4 md:p-8 dark:bg-[#0d1117]">
       <GitRepoSelector
         mode="new"
-        repoPath={repoPath ?? null}
+        projectPath={projectPath ?? null}
         fromRepoName={fromName ?? null}
         prefillFromSession={prefillFromSession ?? null}
         predefinedPrompts={predefinedPrompts}

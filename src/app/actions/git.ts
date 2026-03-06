@@ -4,7 +4,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import simpleGit from 'simple-git';
-import { getConfig } from '@/app/actions/config';
+import { getGitRepoCredential } from '@/app/actions/config';
 import { getAgentApiCredentialSecret } from '@/lib/agent-api-credentials';
 import { getAllCredentials, getCredentialById, getCredentialToken } from '@/lib/credentials';
 import type { Credential } from '@/lib/credentials';
@@ -16,6 +16,8 @@ import {
   TerminalSessionEnvironment,
   TerminalSessionRole,
 } from '@/lib/terminal-session';
+import { listRepoEntries } from '@/lib/repo-entry-list';
+import { getProjects } from '@/lib/store';
 
 export type FileSystemItem = {
   name: string;
@@ -752,11 +754,9 @@ function toAgentTerminalSessionEnvironments(
 }
 
 async function resolveGitTerminalSessionEnvironments(repoPath: string): Promise<TerminalSessionEnvironment[]> {
-  const config = await getConfig();
-  const repoSettings = config.repoSettings?.[repoPath];
-
-  if (repoSettings?.credentialId) {
-    const selectedCredential = await getCredentialById(repoSettings.credentialId);
+  const credentialId = await getGitRepoCredential(repoPath);
+  if (credentialId) {
+    const selectedCredential = await getCredentialById(credentialId);
     if (selectedCredential) {
       const token = await getCredentialToken(selectedCredential.id);
       if (token) {
@@ -1008,6 +1008,46 @@ export async function setTmuxSessionStatusVisibility(
   }
 }
 
+export async function terminateTmuxSessionRole(
+  sessionName: string,
+  role: TerminalSessionRole,
+): Promise<{ success: boolean; removed: boolean; error?: string }> {
+  try {
+    const { spawnSync } = await import('child_process');
+    const tmuxExists =
+      spawnSync('which', ['tmux'], {
+        stdio: 'ignore',
+        env: process.env,
+      }).status === 0;
+
+    if (!tmuxExists) return { success: true, removed: false };
+
+    const tmuxSession = getTmuxSessionName(sessionName, role);
+    const hasSessionResult = spawnSync('tmux', ['has-session', '-t', tmuxSession], {
+      stdio: 'ignore',
+      env: process.env,
+    });
+
+    if (typeof hasSessionResult.status === 'number' && hasSessionResult.status !== 0) {
+      return { success: true, removed: false };
+    }
+
+    const result = spawnSync('tmux', ['kill-session', '-t', tmuxSession], {
+      stdio: 'ignore',
+      env: process.env,
+    });
+
+    if (typeof result.status === 'number' && result.status !== 0) {
+      return { success: false, removed: false, error: `tmux exited with status ${result.status}` };
+    }
+
+    return { success: true, removed: true };
+  } catch (error) {
+    console.error('Failed to terminate tmux session role:', error);
+    return { success: false, removed: false, error: 'Failed to terminate tmux session role.' };
+  }
+}
+
 export async function terminateSessionTerminalSessions(sessionName: string): Promise<void> {
   try {
     const { spawnSync } = await import('child_process');
@@ -1019,9 +1059,20 @@ export async function terminateSessionTerminalSessions(sessionName: string): Pro
 
     if (!tmuxExists) return;
 
-    const roles: TerminalSessionRole[] = ['agent', 'terminal'];
-    for (const role of roles) {
-      const tmuxSession = getTmuxSessionName(sessionName, role);
+    const prefixRole = '__viba_session_role__';
+    const prefix = getTmuxSessionName(sessionName, prefixRole).replace(prefixRole, '');
+    const listedSessions = spawnSync('tmux', ['list-sessions', '-F', '#S'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: process.env,
+      encoding: 'utf-8',
+    });
+
+    const sessions = typeof listedSessions.stdout === 'string'
+      ? listedSessions.stdout.split('\n').map((value) => value.trim()).filter(Boolean)
+      : [];
+
+    for (const tmuxSession of sessions) {
+      if (!tmuxSession.startsWith(prefix)) continue;
       spawnSync('tmux', ['kill-session', '-t', tmuxSession], {
         stdio: 'ignore',
         env: process.env,
@@ -1121,93 +1172,41 @@ export async function removeWorktree(repoPath: string, worktreePath: string, bra
 }
 
 export async function getStartupScript(repoPath: string): Promise<string> {
-  try {
-    const files = await fs.readdir(repoPath);
-    if (files.includes('package-lock.json')) return 'npm install';
-    if (files.includes('pnpm-lock.yaml')) return 'pnpm install';
-    if (files.includes('yarn.lock')) return 'yarn install';
-    return '';
-  } catch (error) {
-    console.error('Error determining startup script:', error);
-    return '';
-  }
+  void repoPath;
+  return '';
 }
 
 export async function getDefaultDevServerScript(repoPath: string): Promise<string> {
-  try {
-    const packageJsonPath = path.join(repoPath, 'package.json');
-    const packageJsonContent = await fs.readFile(packageJsonPath, 'utf-8');
-    const packageJson = JSON.parse(packageJsonContent) as { scripts?: Record<string, unknown> };
-    const scripts = packageJson.scripts;
-
-    if (!scripts || typeof scripts !== 'object') return '';
-    if (typeof scripts.dev === 'string' && scripts.dev.trim()) return 'npm run dev';
-    if (typeof scripts.watch === 'string' && scripts.watch.trim()) return 'npm run watch';
-    if (typeof scripts.start === 'string' && scripts.start.trim()) return 'npm run start';
-
-    return '';
-  } catch (error: unknown) {
-    const errorCode =
-      typeof error === 'object' && error !== null && 'code' in error
-        ? (error as { code?: string }).code
-        : undefined;
-
-    if (errorCode !== 'ENOENT') {
-      console.error('Error determining default dev server script:', error);
-    }
-    return '';
-  }
+  void repoPath;
+  return '';
 }
 
 export async function resolveRepoCardIcon(repoPath: string): Promise<ResolveRepoCardIconResult> {
   if (!repoPath || !path.isAbsolute(repoPath)) {
-    return { success: false, iconPath: null, error: 'Invalid repository path.' };
+    return { success: false, iconPath: null, error: 'Invalid project path.' };
   }
 
   try {
-    const repoStats = await fs.stat(repoPath);
-    if (!repoStats.isDirectory()) {
-      return { success: false, iconPath: null, error: 'Repository path must be a directory.' };
-    }
-  } catch {
-    return { success: false, iconPath: null, error: 'Repository path does not exist.' };
-  }
+    const projects = getProjects();
+    const project = projects.find((entry) => path.resolve(entry.path) === path.resolve(repoPath));
+    const iconPath = project?.iconPath?.trim() || null;
+    if (!iconPath) return { success: true, iconPath: null };
 
-  try {
-    const commonIconPath = await pickFirstExistingRepoCardIcon(repoPath, REPO_CARD_ICON_CANDIDATE_RELATIVE_PATHS);
-    if (commonIconPath) {
-      return { success: true, iconPath: commonIconPath };
-    }
+    const iconStats = await fs.stat(iconPath);
+    if (!iconStats.isFile()) return { success: true, iconPath: null };
 
-    const manifestIconPath = await resolveManifestRepoCardIcon(repoPath);
-    if (manifestIconPath) {
-      return { success: true, iconPath: manifestIconPath };
-    }
-
-    const fallbackIconPath = await resolveFallbackRepoCardIcon(repoPath);
-    if (fallbackIconPath) {
-      return { success: true, iconPath: fallbackIconPath };
-    }
-
-    return { success: true, iconPath: null };
+    return { success: true, iconPath };
   } catch (error) {
-    console.error('Failed to resolve repository card icon:', error);
-    return { success: false, iconPath: null, error: 'Failed to resolve repository icon.' };
+    console.error('Failed to resolve project card icon:', error);
+    return { success: false, iconPath: null, error: 'Failed to resolve project icon.' };
   }
 }
 
 export async function listRepoFiles(repoPath: string, query: string = ''): Promise<string[]> {
   try {
-    const git = simpleGit(repoPath);
-    const result = await git.raw(['ls-files']);
-    const allFiles = result.split('\n').filter(Boolean);
-
-    if (!query) return allFiles.slice(0, 50);
-
-    const lowerQuery = query.toLowerCase();
-    return allFiles.filter(f => f.toLowerCase().includes(lowerQuery)).slice(0, 50);
+    return await listRepoEntries(repoPath, query);
   } catch (error) {
-    console.error('Failed to list repo files:', error);
+    console.error('Failed to list project files and folders:', error);
     return [];
   }
 }

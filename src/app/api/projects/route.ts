@@ -1,30 +1,26 @@
-
 import { NextResponse } from 'next/server';
-import { getRepositories, addRepository, updateRepository, removeRepository } from '@/lib/store';
-import { GitService } from '@/lib/git';
+import { getProjects, addProject, updateProject, removeProject } from '@/lib/store';
 import { z } from 'zod';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
 export async function GET() {
-  const repos = getRepositories();
-  return NextResponse.json(repos);
+  const projects = getProjects();
+  return NextResponse.json(projects);
 }
 
-const addRepoSchema = z.object({
+const addProjectSchema = z.object({
   path: z.string().min(1),
   name: z.string().optional(),
   displayName: z.string().nullable().optional(),
-  initializeIfNeeded: z.boolean().optional().default(false),
 });
 
-const updateRepoSchema = z.object({
+const updateProjectSchema = z.object({
   path: z.string().min(1),
   updates: z.object({
     name: z.string().optional(),
     displayName: z.string().nullable().optional(),
+    iconPath: z.string().nullable().optional(),
     lastOpenedAt: z.string().optional(),
-    credentialId: z.string().optional().nullable(),
     expandedFolders: z.array(z.string()).optional(),
     visibilityMap: z.record(z.string(), z.enum(['visible', 'hidden'])).optional(),
     localGroupExpanded: z.boolean().optional(),
@@ -36,31 +32,19 @@ const updateRepoSchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { path: repoPath, name, displayName, initializeIfNeeded } = addRepoSchema.parse(body);
+    const { path: projectPath, name, displayName } = addProjectSchema.parse(body);
 
-    if (initializeIfNeeded) {
-      const stat = await fs.stat(repoPath);
-      if (!stat.isDirectory()) {
-        return NextResponse.json({ error: 'Path is not a directory' }, { status: 400 });
-      }
-
-      let isGitRepo = false;
-      try {
-        await fs.access(path.join(repoPath, '.git'));
-        isGitRepo = true;
-      } catch {}
-
-      if (!isGitRepo) {
-        await GitService.initializeRepository(repoPath);
-      }
+    const stat = await fs.stat(projectPath);
+    if (!stat.isDirectory()) {
+      return NextResponse.json({ error: 'Path is not a directory' }, { status: 400 });
     }
 
-    const repo = addRepository(repoPath, name, displayName);
-    return NextResponse.json(repo);
+    const project = addProject(projectPath, name, displayName);
+    return NextResponse.json(project);
   } catch (error) {
-     if (error instanceof z.ZodError) {
-        return NextResponse.json({ error: error.issues }, { status: 400 });
-     }
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: error.issues }, { status: 400 });
+    }
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 }
@@ -68,18 +52,18 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   try {
     const body = await request.json();
-    const { path, updates } = updateRepoSchema.parse(body);
-    const repo = updateRepository(path, updates);
-    return NextResponse.json(repo);
+    const { path, updates } = updateProjectSchema.parse(body);
+    const project = updateProject(path, updates);
+    return NextResponse.json(project);
   } catch (error) {
-     if (error instanceof z.ZodError) {
-        return NextResponse.json({ error: error.issues }, { status: 400 });
-     }
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: error.issues }, { status: 400 });
+    }
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 }
 
-const deleteRepoSchema = z.object({
+const deleteProjectSchema = z.object({
   path: z.string().min(1),
   deleteLocalFolder: z.boolean().optional().default(false),
 });
@@ -87,8 +71,8 @@ const deleteRepoSchema = z.object({
 export async function DELETE(request: Request) {
   try {
     const body = await request.json();
-    const { path, deleteLocalFolder } = deleteRepoSchema.parse(body);
-    removeRepository(path, { deleteLocalFolder });
+    const { path, deleteLocalFolder } = deleteProjectSchema.parse(body);
+    removeProject(path, { deleteLocalFolder });
     return NextResponse.json({ success: true });
   } catch (error) {
     if (error instanceof z.ZodError) {

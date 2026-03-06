@@ -1,15 +1,18 @@
-export interface Repository {
+export interface Project {
   path: string;
   name: string;
   displayName?: string | null;
+  iconPath?: string | null;
   lastOpenedAt?: string;
-  credentialId?: string | null;
   expandedFolders?: string[];
   visibilityMap?: Record<string, 'visible' | 'hidden'>;
   localGroupExpanded?: boolean;
   remotesGroupExpanded?: boolean;
   worktreesGroupExpanded?: boolean;
 }
+
+// TODO: remove once all callers are migrated.
+export type Repository = Project;
 
 export interface GitWorktree {
   path: string;
@@ -96,4 +99,14 @@ export interface GitConflictState {
   conflictedFiles: string[];
   hasConflicts: boolean;
   canContinue: boolean;
+}
+
+export type SessionWorkspaceMode = 'single_worktree' | 'multi_repo_worktree' | 'folder';
+
+export interface SessionGitRepoContext {
+  sourceRepoPath: string;
+  relativeRepoPath: string;
+  worktreePath: string;
+  branchName: string;
+  baseBranch?: string;
 }

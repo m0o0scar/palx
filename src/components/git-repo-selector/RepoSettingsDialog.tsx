@@ -1,73 +1,75 @@
-import { X } from 'lucide-react';
-import type { Credential } from '@/lib/credentials';
-import { getCredentialOptionLabel, type RepoCredentialSelection } from './types';
+import { useState } from 'react';
+import { ImagePlus, Trash2, X } from 'lucide-react';
+import SessionFileBrowser from '@/components/SessionFileBrowser';
 
 export type RepoSettingsDialogProps = {
   isOpen: boolean;
-  repoForSettings: string | null;
-  repoAlias: string;
-  repoCredentialSelection: RepoCredentialSelection;
-  repoStartupCommand: string;
-  repoDevServerCommand: string;
-  defaultRepoStartupCommand: string;
-  defaultRepoDevServerCommand: string;
-  credentialOptions: Credential[];
-  isSavingRepoSettings: boolean;
-  isLoadingCredentialOptions: boolean;
-  repoSettingsError: string | null;
+  projectForSettings: string | null;
+  projectAlias: string;
+  projectStartupCommand: string;
+  projectDevServerCommand: string;
+  defaultProjectStartupCommand: string;
+  defaultProjectDevServerCommand: string;
+  projectIconPath: string | null;
+  isSavingProjectSettings: boolean;
+  isUploadingProjectIcon: boolean;
+  projectSettingsError: string | null;
   onAliasChange: (value: string) => void;
-  onCredentialChange: (value: RepoCredentialSelection) => void;
   onStartupCommandChange: (value: string) => void;
   onDevServerCommandChange: (value: string) => void;
+  onUploadIcon: (iconPath: string) => void;
+  onRemoveIcon: () => void;
   onClose: () => void;
   onSave: () => void;
 };
 
 export function RepoSettingsDialog({
   isOpen,
-  repoForSettings,
-  repoAlias,
-  repoCredentialSelection,
-  repoStartupCommand,
-  repoDevServerCommand,
-  defaultRepoStartupCommand,
-  defaultRepoDevServerCommand,
-  credentialOptions,
-  isSavingRepoSettings,
-  isLoadingCredentialOptions,
-  repoSettingsError,
+  projectForSettings,
+  projectAlias,
+  projectStartupCommand,
+  projectDevServerCommand,
+  defaultProjectStartupCommand,
+  defaultProjectDevServerCommand,
+  projectIconPath,
+  isSavingProjectSettings,
+  isUploadingProjectIcon,
+  projectSettingsError,
   onAliasChange,
-  onCredentialChange,
   onStartupCommandChange,
   onDevServerCommandChange,
+  onUploadIcon,
+  onRemoveIcon,
   onClose,
   onSave,
 }: RepoSettingsDialogProps) {
-  if (!isOpen || !repoForSettings) return null;
+  const [isIconBrowserOpen, setIsIconBrowserOpen] = useState(false);
+
+  if (!isOpen || !projectForSettings) return null;
+
+  const iconPreviewUrl = projectIconPath
+    ? `/api/file-thumbnail?path=${encodeURIComponent(projectIconPath)}`
+    : null;
 
   return (
     <div className="fixed inset-0 z-[1002] flex items-center justify-center bg-slate-900/35 p-4 backdrop-blur-sm">
       <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-[#151b26]">
         <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/70 px-5 py-4 md:px-6 dark:border-white/10 dark:bg-[#1e2532]/75">
-          <h3 className="text-lg font-bold text-slate-900 dark:text-white">Repository Settings</h3>
+          <h3 className="text-lg font-bold text-slate-900 dark:text-white">Project Settings</h3>
           <button
             className="btn btn-circle btn-ghost btn-sm text-slate-500 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
             onClick={onClose}
-            disabled={isSavingRepoSettings}
+            disabled={isSavingProjectSettings || isUploadingProjectIcon}
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="space-y-4 p-5 md:p-6">
-          <p className="text-sm text-slate-600 dark:text-slate-300">
-            Choose which credential this repository should use for authenticated Git operations.
-          </p>
-
           <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Repository</label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project</label>
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 break-all font-mono text-xs text-slate-700 dark:border-slate-700 dark:bg-[#1e2532] dark:text-slate-200">
-              {repoForSettings}
+              {projectForSettings}
             </div>
           </div>
 
@@ -75,73 +77,90 @@ export function RepoSettingsDialog({
             <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Alias</label>
             <input
               className="input w-full border-slate-200 bg-slate-50 text-sm text-slate-800 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-[#1e2532] dark:text-slate-200"
-              value={repoAlias}
+              value={projectAlias}
               onChange={(event) => onAliasChange(event.target.value)}
-              placeholder="Optional display name for this repository"
-              disabled={isSavingRepoSettings}
+              placeholder="Optional display name for this project"
+              disabled={isSavingProjectSettings || isUploadingProjectIcon}
             />
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Credential</label>
-            <select
-              className="select w-full border-slate-200 bg-slate-50 text-slate-700 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-[#1e2532] dark:text-slate-200"
-              value={repoCredentialSelection}
-              onChange={(event) => onCredentialChange(event.target.value)}
-              disabled={isSavingRepoSettings}
-            >
-              <option value="auto">Auto (match repository remote)</option>
-              {credentialOptions.map((credential) => (
-                <option key={credential.id} value={credential.id}>
-                  {getCredentialOptionLabel(credential)}
-                </option>
-              ))}
-            </select>
-            {credentialOptions.length === 0 && !isLoadingCredentialOptions && (
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                No credentials found. Add credentials from the Credentials page.
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Icon</label>
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-[#1e2532]">
+                {iconPreviewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={iconPreviewUrl} alt="Project icon" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-[10px] text-slate-500">No Icon</span>
+                )}
               </div>
-            )}
+              <button
+                type="button"
+                className="btn btn-sm gap-2"
+                disabled={isUploadingProjectIcon || isSavingProjectSettings}
+                onClick={() => setIsIconBrowserOpen(true)}
+              >
+                <ImagePlus className="h-4 w-4" />
+                Choose Icon
+              </button>
+              {projectIconPath && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm gap-2 text-red-600"
+                  disabled={isUploadingProjectIcon || isSavingProjectSettings}
+                  onClick={onRemoveIcon}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remove
+                </button>
+              )}
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              Supported: png, jpg, jpeg, webp, svg, ico. Max 2MB.
+            </div>
           </div>
 
           <div className="space-y-2">
             <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start Up Command</label>
-            <input
-              className="input w-full border-slate-200 bg-slate-50 font-mono text-sm text-slate-800 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-[#1e2532] dark:text-slate-200"
-              value={repoStartupCommand}
+            <textarea
+              className="textarea w-full border-slate-200 bg-slate-50 font-mono text-sm text-slate-800 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-[#1e2532] dark:text-slate-200"
+              rows={3}
+              value={projectStartupCommand}
               onChange={(event) => onStartupCommandChange(event.target.value)}
-              placeholder={defaultRepoStartupCommand}
-              disabled={isSavingRepoSettings}
+              placeholder={defaultProjectStartupCommand}
+              disabled={isSavingProjectSettings || isUploadingProjectIcon}
             />
             <div className="text-xs text-slate-500 dark:text-slate-400">
-              Default: <span className="font-mono">{defaultRepoStartupCommand}</span>
+              Multi-line commands are supported.
             </div>
           </div>
 
           <div className="space-y-2">
             <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Dev Server Command</label>
-            <input
-              className="input w-full border-slate-200 bg-slate-50 font-mono text-sm text-slate-800 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-[#1e2532] dark:text-slate-200"
-              value={repoDevServerCommand}
+            <textarea
+              className="textarea w-full border-slate-200 bg-slate-50 font-mono text-sm text-slate-800 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-[#1e2532] dark:text-slate-200"
+              rows={3}
+              value={projectDevServerCommand}
               onChange={(event) => onDevServerCommandChange(event.target.value)}
-              placeholder={defaultRepoDevServerCommand}
-              disabled={isSavingRepoSettings}
+              placeholder={defaultProjectDevServerCommand}
+              disabled={isSavingProjectSettings || isUploadingProjectIcon}
             />
             <div className="text-xs text-slate-500 dark:text-slate-400">
-              Default: <span className="font-mono">{defaultRepoDevServerCommand}</span>
+              Multi-line commands are supported.
             </div>
           </div>
 
-          {isLoadingCredentialOptions && (
+          {(isUploadingProjectIcon || isSavingProjectSettings) && (
             <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
               <span className="loading loading-spinner loading-xs"></span>
-              Loading credentials...
+              {isUploadingProjectIcon ? 'Uploading icon...' : 'Saving project settings...'}
             </div>
           )}
 
-          {repoSettingsError && (
+          {projectSettingsError && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {repoSettingsError}
+              {projectSettingsError}
             </div>
           )}
 
@@ -149,21 +168,40 @@ export function RepoSettingsDialog({
             <button
               className="btn btn-ghost text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
               onClick={onClose}
-              disabled={isSavingRepoSettings}
+              disabled={isSavingProjectSettings || isUploadingProjectIcon}
             >
               Cancel
             </button>
             <button
               className="btn btn-primary"
               onClick={onSave}
-              disabled={isSavingRepoSettings || isLoadingCredentialOptions}
+              disabled={isSavingProjectSettings || isUploadingProjectIcon}
             >
-              {isSavingRepoSettings ? <span className="loading loading-spinner loading-xs"></span> : null}
               Save
             </button>
           </div>
         </div>
       </div>
+
+      {isIconBrowserOpen && (
+        <SessionFileBrowser
+          title="Choose Project Icon"
+          initialPath={projectForSettings}
+          onConfirm={async (paths) => {
+            const selectedPath = paths[0];
+            if (!selectedPath) return;
+            onUploadIcon(selectedPath);
+            setIsIconBrowserOpen(false);
+          }}
+          onCancel={() => setIsIconBrowserOpen(false)}
+          confirmLabel="Use Selected Icon"
+          defaultViewMode="grid"
+          viewModeStorageKey={null}
+          selectionMode="single"
+          allowedFileExtensions={['.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico']}
+          zIndexClassName="z-[1003]"
+        />
+      )}
     </div>
   );
 }

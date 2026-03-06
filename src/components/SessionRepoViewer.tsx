@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useGitAction, useGitBranches, useGitLog, useGitMergeBase, useGitStatus } from '@/hooks/use-git';
@@ -51,6 +51,7 @@ type SessionRepoViewerProps = {
   repoPath: string;
   branchHint?: string;
   baseBranchHint?: string;
+  repoOptions?: SessionRepoViewerOption[];
 };
 
 type CommitSelectionState =
@@ -58,7 +59,45 @@ type CommitSelectionState =
   | { mode: 'manual'; hash: string }
   | { mode: 'unselected'; hash: null };
 
-export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: SessionRepoViewerProps) {
+export type SessionRepoViewerOption = {
+  path: string;
+  label: string;
+  branchHint?: string;
+  baseBranchHint?: string;
+};
+
+export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint, repoOptions = [] }: SessionRepoViewerProps) {
+  const normalizedRepoOptions = useMemo<SessionRepoViewerOption[]>(() => {
+    const explicitOptions = repoOptions
+      .map((option) => ({
+        path: option.path.trim(),
+        label: option.label.trim(),
+        branchHint: option.branchHint?.trim() || undefined,
+        baseBranchHint: option.baseBranchHint?.trim() || undefined,
+      }))
+      .filter((option) => option.path);
+
+    if (explicitOptions.length > 0) return explicitOptions;
+
+    const fallbackRepoPath = repoPath.trim();
+    if (!fallbackRepoPath) return [];
+    return [{
+      path: fallbackRepoPath,
+      label: fallbackRepoPath,
+      branchHint: branchHint?.trim() || undefined,
+      baseBranchHint: baseBranchHint?.trim() || undefined,
+    }];
+  }, [baseBranchHint, branchHint, repoOptions, repoPath]);
+  const [selectedRepoPath, setSelectedRepoPath] = useState<string>(
+    () => normalizedRepoOptions[0]?.path || repoPath.trim(),
+  );
+  const selectedRepoOption = useMemo(() => {
+    if (normalizedRepoOptions.length === 0) return null;
+    return normalizedRepoOptions.find((option) => option.path === selectedRepoPath) || normalizedRepoOptions[0];
+  }, [normalizedRepoOptions, selectedRepoPath]);
+  const effectiveRepoPath = selectedRepoOption?.path || repoPath;
+  const effectiveBranchHint = selectedRepoOption?.branchHint || branchHint;
+  const effectiveBaseBranchHint = selectedRepoOption?.baseBranchHint || baseBranchHint;
   const [selection, setSelection] = useState<CommitSelectionState>({ mode: 'auto', hash: null });
   const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
   const [commitDialogOpen, setCommitDialogOpen] = useState(false);
@@ -67,8 +106,8 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
   const [isRefreshingLocalChanges, setIsRefreshingLocalChanges] = useState(false);
   const queryClient = useQueryClient();
   const action = useGitAction();
-  const { data: branchData } = useGitBranches(repoPath);
-  const { data: statusData } = useGitStatus(repoPath);
+  const { data: branchData } = useGitBranches(effectiveRepoPath);
+  const { data: statusData } = useGitStatus(effectiveRepoPath);
   const {
     data: log,
     isLoading,
@@ -76,14 +115,14 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
     isError,
     error,
     refetch,
-  } = useGitLog(repoPath, 200, { scope: 'current' });
+  } = useGitLog(effectiveRepoPath, 200, { scope: 'current' });
   const allCommits = useMemo(() => log?.all ?? [], [log]);
-  const currentBranch = branchData?.current?.trim() || branchHint?.trim() || 'unknown';
-  const currentBranchRef = branchData?.current?.trim() || branchHint?.trim() || null;
-  const baseBranchRef = baseBranchHint?.trim() || null;
-  const { data: mergeBaseHash } = useGitMergeBase(repoPath, baseBranchRef, currentBranchRef);
+  const currentBranch = branchData?.current?.trim() || effectiveBranchHint?.trim() || 'unknown';
+  const currentBranchRef = branchData?.current?.trim() || effectiveBranchHint?.trim() || null;
+  const baseBranchRef = effectiveBaseBranchHint?.trim() || null;
+  const { data: mergeBaseHash } = useGitMergeBase(effectiveRepoPath, baseBranchRef, currentBranchRef);
   const baseBranchTags = useMemo(() => {
-    const hintedBranches = parseBranchHintList(baseBranchHint);
+    const hintedBranches = parseBranchHintList(effectiveBaseBranchHint);
     if (!mergeBaseHash) return hintedBranches;
 
     const localBranches = branchData?.branches ?? [];
@@ -97,7 +136,7 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
     });
 
     return Array.from(new Set([...hintedBranches, ...branchNamesAtMergeBase])).sort((a, b) => a.localeCompare(b));
-  }, [baseBranchHint, branchData?.branchCommits, branchData?.branches, currentBranchRef, mergeBaseHash]);
+  }, [branchData?.branchCommits, branchData?.branches, currentBranchRef, effectiveBaseBranchHint, mergeBaseHash]);
   const commits = useMemo(() => {
     if (!mergeBaseHash) return allCommits;
     const normalizedMergeBase = mergeBaseHash.trim();
@@ -125,13 +164,30 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
   );
   const hasAnyChanges = (statusData?.files?.length ?? 0) > 0;
 
+  useEffect(() => {
+    if (normalizedRepoOptions.length === 0) {
+      setSelectedRepoPath(repoPath.trim());
+      return;
+    }
+
+    setSelectedRepoPath((previous) => (
+      normalizedRepoOptions.some((option) => option.path === previous)
+        ? previous
+        : normalizedRepoOptions[0].path
+    ));
+  }, [normalizedRepoOptions, repoPath]);
+
+  useEffect(() => {
+    setSelection({ mode: 'auto', hash: null });
+  }, [effectiveRepoPath]);
+
   const closeCommitDialog = () => {
     setCommitDialogOpen(false);
     setCommitMessageError(null);
   };
 
   const handleDiscard = async () => {
-    await action.mutateAsync({ repoPath, action: 'discard', data: { includeUntracked: true } });
+    await action.mutateAsync({ repoPath: effectiveRepoPath, action: 'discard', data: { includeUntracked: true } });
     setDiscardDialogOpen(false);
     setSelection({ mode: 'auto', hash: null });
   };
@@ -144,7 +200,7 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
     }
 
     await action.mutateAsync({
-      repoPath,
+      repoPath: effectiveRepoPath,
       action: 'commit',
       data: { message: normalizedMessage, files: ['.'] },
     });
@@ -175,10 +231,10 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
     setIsRefreshingLocalChanges(true);
     try {
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ['git', repoPath, 'status'], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ['git', repoPath, 'diff'], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ['git', repoPath, 'commit-diff'], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ['git', repoPath, 'commit-file-diff'], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'status'], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'diff'], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'commit-diff'], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'commit-file-diff'], type: 'active' }),
       ]);
     } finally {
       setIsRefreshingLocalChanges(false);
@@ -195,6 +251,20 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
             <span className="truncate opacity-70 normal-case" title={currentBranch}>
               {currentBranch}
             </span>
+            {normalizedRepoOptions.length > 1 && (
+              <select
+                className="select select-xs h-6 min-h-6 max-w-[220px] rounded border-slate-300 bg-white text-[10px] font-medium normal-case text-slate-700 focus:outline-none dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-300"
+                value={selectedRepoOption?.path || effectiveRepoPath}
+                onChange={(event) => setSelectedRepoPath(event.target.value)}
+                title="Select repository"
+              >
+                {normalizedRepoOptions.map((option) => (
+                  <option key={option.path} value={option.path}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span className="text-[10px] opacity-70">
@@ -236,7 +306,7 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint }: Sess
         </div>
         <div className="min-h-0 flex-1">
           <CommitChangesView
-            repoPath={repoPath}
+            repoPath={effectiveRepoPath}
             commitHash={selectedCommitHash}
             showWorkingTreeWhenNoCommit
             fileListWidthClass="w-52"

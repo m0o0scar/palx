@@ -14,9 +14,9 @@ export type CloneRemoteDialogProps = {
   onClose: () => void;
   onRemoteRepoUrlChange: (value: string) => void;
   onCloneCredentialSelectionChange: (value: RepoCredentialSelection) => void;
-  onBrowseLocalRepository: () => void;
+  onBrowseLocalFolder: () => void;
   onSetDefaultFolder: () => void;
-  onCloneRepository: () => void;
+  onCloneProject: () => void;
 };
 
 export function CloneRemoteDialog({
@@ -31,9 +31,9 @@ export function CloneRemoteDialog({
   onClose,
   onRemoteRepoUrlChange,
   onCloneCredentialSelectionChange,
-  onBrowseLocalRepository,
+  onBrowseLocalFolder,
   onSetDefaultFolder,
-  onCloneRepository,
+  onCloneProject,
 }: CloneRemoteDialogProps) {
   if (!isOpen) return null;
 
@@ -42,7 +42,7 @@ export function CloneRemoteDialog({
       <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-[#151b26]">
         <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/60 px-5 py-4 md:px-6 dark:border-white/10 dark:bg-[#1e2532]/75">
           <div>
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white">Add New Repository</h3>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">Add New Project</h3>
             <p className="text-sm text-slate-500 dark:text-slate-400">Connect a local folder or clone from URL</p>
           </div>
           <button className="btn btn-circle btn-ghost btn-sm text-slate-500 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white" onClick={onClose} disabled={isCloningRemote}>
@@ -54,7 +54,7 @@ export function CloneRemoteDialog({
           <div className="flex-1 space-y-4 border-b border-slate-100 p-5 md:border-r md:border-b-0 md:p-6 dark:border-white/10">
             <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Browse Local</h4>
             <p className="text-sm text-slate-600 dark:text-slate-300">
-              Select an existing Git repository folder from your local machine.
+              Select any local folder to use as a project.
             </p>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-[#1e2532] dark:text-slate-300">
               Default root: <span className="font-mono">{defaultRoot || '~'}</span>
@@ -62,10 +62,10 @@ export function CloneRemoteDialog({
             <div className="flex flex-wrap gap-2">
               <button
                 className="btn btn-primary btn-sm gap-2"
-                onClick={onBrowseLocalRepository}
+                onClick={onBrowseLocalFolder}
               >
                 <FolderGit2 className="h-4 w-4" />
-                Browse Local Repository
+                Browse Local Folder
               </button>
               <button
                 className="btn btn-ghost btn-sm gap-2 text-slate-700 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
@@ -146,11 +146,11 @@ export function CloneRemoteDialog({
               </button>
               <button
                 className="btn btn-primary gap-2"
-                onClick={onCloneRepository}
+                onClick={onCloneProject}
                 disabled={isCloningRemote || !remoteRepoUrl.trim() || isLoadingCloneCredentialOptions}
               >
                 {isCloningRemote ? <span className="loading loading-spinner loading-xs"></span> : <CloudDownload className="h-4 w-4" />}
-                Clone Repository
+                Clone Project
               </button>
             </div>
           </div>

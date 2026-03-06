@@ -12,25 +12,26 @@ export type HomeDashboardProps = {
   themeModeLabel: string;
   nextThemeModeLabel: string;
   ThemeModeIcon: ComponentType<{ className?: string }>;
-  filteredRecentRepos: string[];
+  filteredRecentProjects: string[];
   isDarkThemeActive: boolean;
-  runningSessionCountByRepo: Map<string, number>;
-  draftCountByRepo: Map<string, number>;
-  repoCardIconByRepo: Record<string, string | null>;
-  brokenRepoCardIcons: Record<string, boolean>;
-  getRepoCredentialLabel: (repo: string) => string;
-  getRepoDisplayName: (repo: string) => string;
+  runningSessionCountByProject: Map<string, number>;
+  draftCountByProject: Map<string, number>;
+  projectCardIconByPath: Record<string, string | null>;
+  brokenProjectCardIcons: Record<string, boolean>;
+  projectGitReposByPath: Record<string, string[]>;
+  discoveringProjectGitRepos: Record<string, boolean>;
+  getProjectDisplayName: (project: string) => string;
   onHomeSearchQueryChange: (value: string) => void;
   onOpenCredentials: () => void;
   onCycleThemeMode: () => void;
-  onSelectRepo: (repo: string) => void | Promise<boolean>;
-  onOpenGitWorkspace: (repo: string) => void;
-  onOpenRepoSettings: (event: MouseEvent, repo: string) => void | Promise<void>;
-  onRemoveRecent: (event: MouseEvent, repo: string) => void;
-  onRepoIconError: (repo: string) => void;
+  onSelectProject: (project: string) => void | Promise<boolean>;
+  onOpenGitWorkspace: (project: string, repoPath?: string) => void;
+  onOpenProjectSettings: (event: MouseEvent, project: string) => void | Promise<void>;
+  onRemoveRecent: (event: MouseEvent, project: string) => void;
+  onProjectIconError: (project: string) => void;
   onRepoCardMouseMove: (event: MouseEvent<HTMLDivElement>) => void;
   onRepoCardMouseLeave: (event: MouseEvent<HTMLDivElement>) => void;
-  onAddRepository: () => void;
+  onAddProject: () => void;
 };
 
 export function HomeDashboard({
@@ -42,25 +43,26 @@ export function HomeDashboard({
   themeModeLabel,
   nextThemeModeLabel,
   ThemeModeIcon,
-  filteredRecentRepos,
+  filteredRecentProjects,
   isDarkThemeActive,
-  runningSessionCountByRepo,
-  draftCountByRepo,
-  repoCardIconByRepo,
-  brokenRepoCardIcons,
-  getRepoCredentialLabel,
-  getRepoDisplayName,
+  runningSessionCountByProject,
+  draftCountByProject,
+  projectCardIconByPath,
+  brokenProjectCardIcons,
+  projectGitReposByPath,
+  discoveringProjectGitRepos,
+  getProjectDisplayName,
   onHomeSearchQueryChange,
   onOpenCredentials,
   onCycleThemeMode,
-  onSelectRepo,
+  onSelectProject,
   onOpenGitWorkspace,
-  onOpenRepoSettings,
+  onOpenProjectSettings,
   onRemoveRecent,
-  onRepoIconError,
+  onProjectIconError,
   onRepoCardMouseMove,
   onRepoCardMouseLeave,
-  onAddRepository,
+  onAddProject,
 }: HomeDashboardProps) {
   return (
     <div className="w-full max-w-7xl">
@@ -81,7 +83,7 @@ export function HomeDashboard({
             <input
               type="text"
               className="grow text-sm placeholder:text-slate-400 dark:placeholder:text-slate-500"
-              placeholder="Search repositories..."
+              placeholder="Search projects..."
               value={homeSearchQuery}
               onChange={(event) => onHomeSearchQueryChange(event.target.value)}
             />
@@ -138,52 +140,53 @@ export function HomeDashboard({
           <div className="flex h-56 items-center justify-center rounded-2xl border border-white/40 bg-white/25 backdrop-blur-lg dark:border-white/10 dark:bg-white/5">
             <span className="loading loading-spinner loading-md text-primary"></span>
           </div>
-        ) : filteredRecentRepos.length === 0 ? (
+        ) : filteredRecentProjects.length === 0 ? (
           <div className="flex h-56 flex-col items-center justify-center rounded-2xl border border-white/40 bg-white/25 text-center backdrop-blur-lg dark:border-white/10 dark:bg-white/5">
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              {homeSearchQuery.trim() ? 'No repositories match your search.' : 'No recent repositories found.'}
+              {homeSearchQuery.trim() ? 'No projects match your search.' : 'No recent projects found.'}
             </p>
             {!homeSearchQuery.trim() && (
-              <button className="btn btn-primary btn-sm mt-3 gap-2" onClick={onAddRepository}>
+              <button className="btn btn-primary btn-sm mt-3 gap-2" onClick={onAddProject}>
                 <Plus className="h-4 w-4" />
-                Add your first repository
+                Add your first project
               </button>
             )}
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {filteredRecentRepos.map((repo) => (
+            {filteredRecentProjects.map((project) => (
               <HomeRepoCard
-                key={repo}
-                repo={repo}
-                repoDisplayName={getRepoDisplayName(repo)}
+                key={project}
+                project={project}
+                projectDisplayName={getProjectDisplayName(project)}
                 isDarkThemeActive={isDarkThemeActive}
-                credentialLabel={getRepoCredentialLabel(repo)}
-                runningSessionCount={runningSessionCountByRepo.get(repo) ?? 0}
-                draftCount={draftCountByRepo.get(repo) ?? 0}
-                repoIconPath={repoCardIconByRepo[repo] ?? null}
-                showRepoIcon={!!repoCardIconByRepo[repo] && !brokenRepoCardIcons[repo]}
-                onSelectRepo={onSelectRepo}
+                runningSessionCount={runningSessionCountByProject.get(project) ?? 0}
+                draftCount={draftCountByProject.get(project) ?? 0}
+                projectIconPath={projectCardIconByPath[project] ?? null}
+                showProjectIcon={!!projectCardIconByPath[project] && !brokenProjectCardIcons[project]}
+                projectGitRepos={projectGitReposByPath[project]}
+                isDiscoveringProjectGitRepos={!!discoveringProjectGitRepos[project]}
+                onSelectProject={onSelectProject}
                 onOpenGitWorkspace={onOpenGitWorkspace}
-                onOpenRepoSettings={onOpenRepoSettings}
+                onOpenProjectSettings={onOpenProjectSettings}
                 onRemoveRecent={onRemoveRecent}
-                onRepoIconError={onRepoIconError}
+                onProjectIconError={onProjectIconError}
                 onMouseMove={onRepoCardMouseMove}
                 onMouseLeave={onRepoCardMouseLeave}
               />
             ))}
 
             <button
-              onClick={onAddRepository}
+              onClick={onAddProject}
               className="group flex h-[248px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-white/50 bg-white/25 text-slate-600 backdrop-blur-lg backdrop-saturate-150 transition-all duration-200 hover:-translate-y-1 hover:border-primary/50 hover:bg-white/45 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 dark:hover:border-white/20 dark:hover:bg-white/10"
             >
               <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/70 shadow-sm backdrop-blur-sm transition-transform group-hover:scale-105 dark:border dark:border-white/10 dark:bg-white/10">
                 <Plus className="h-7 w-7 text-slate-400 transition-colors group-hover:text-primary" />
               </span>
               <span className="text-lg font-semibold transition-colors group-hover:text-primary">
-                Add Repository
+                Add Project
               </span>
-              <span className="text-sm text-slate-400 dark:text-slate-500">Import from local or git URL</span>
+              <span className="text-sm text-slate-400 dark:text-slate-500">Import from local folder or git URL</span>
             </button>
           </div>
         )}

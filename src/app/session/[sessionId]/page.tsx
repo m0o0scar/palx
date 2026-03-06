@@ -9,7 +9,7 @@ type SessionRouteProps = {
 
 type SessionRouteContext = {
   title?: string;
-  repoPath?: string;
+  projectPath?: string;
 };
 
 const SESSION_FALLBACK_FAVICON_PATH = '/repo-generic-icon.svg';
@@ -18,30 +18,30 @@ async function readSessionRouteContext(sessionId: string): Promise<SessionRouteC
   try {
     const db = getLocalDb();
     const row = db.prepare(`
-      SELECT title, repo_path
+      SELECT title, project_path
       FROM sessions
       WHERE session_name = ?
-    `).get(sessionId) as { title: string | null; repo_path: string | null } | undefined;
+    `).get(sessionId) as { title: string | null; project_path: string | null } | undefined;
 
     const trimmedTitle = row?.title?.trim();
-    const trimmedRepoPath = row?.repo_path?.trim();
+    const trimmedProjectPath = row?.project_path?.trim();
 
     return {
       title: trimmedTitle || undefined,
-      repoPath: trimmedRepoPath || undefined,
+      projectPath: trimmedProjectPath || undefined,
     };
   } catch {
     return {};
   }
 }
 
-async function resolveSessionFavicon(repoPath?: string): Promise<string> {
-  if (!repoPath) {
+async function resolveSessionFavicon(projectPath?: string): Promise<string> {
+  if (!projectPath) {
     return SESSION_FALLBACK_FAVICON_PATH;
   }
 
   try {
-    const iconResolution = await resolveRepoCardIcon(repoPath);
+    const iconResolution = await resolveRepoCardIcon(projectPath);
     if (iconResolution.success && iconResolution.iconPath) {
       return `/api/file-thumbnail?path=${encodeURIComponent(iconResolution.iconPath)}`;
     }
@@ -55,7 +55,7 @@ async function resolveSessionFavicon(repoPath?: string): Promise<string> {
 export async function generateMetadata({ params }: SessionRouteProps): Promise<Metadata> {
   const { sessionId } = await params;
   const sessionContext = await readSessionRouteContext(sessionId);
-  const sessionFavicon = await resolveSessionFavicon(sessionContext.repoPath);
+  const sessionFavicon = await resolveSessionFavicon(sessionContext.projectPath);
 
   const metadata: Metadata = {
     icons: {

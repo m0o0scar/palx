@@ -77,6 +77,21 @@ describe('buildTtydTerminalSrc', () => {
       'viba-session-1-agent',
     ]);
   });
+
+  it('includes tmux working directory when provided', () => {
+    const url = buildTtydTerminalSrc('session-1', 'agent', null, {
+      workingDirectory: '/tmp/viba workspace',
+    });
+    const params = new URLSearchParams(url.split('?')[1] || '');
+    assert.deepStrictEqual(params.getAll('arg'), [
+      'new-session',
+      '-c',
+      '/tmp/viba workspace',
+      '-A',
+      '-s',
+      'viba-session-1-agent',
+    ]);
+  });
 });
 
 describe('parseTerminalSessionEnvironmentsFromSrc', () => {

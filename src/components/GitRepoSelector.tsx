@@ -4,29 +4,31 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { FolderGit2, Plus, X, ChevronRight, ChevronDown, Bot, Trash2, ExternalLink, CloudDownload, Monitor, Sun, Moon } from 'lucide-react';
 import FileBrowser from './FileBrowser';
 import {
-  checkIsGitRepo,
-  getBranches,
   GitBranch,
   startTtydProcess,
-  getStartupScript,
-  getDefaultDevServerScript,
   listRepoFiles,
   checkAgentCliInstalled,
   installAgentCli,
   SupportedAgentCli,
   resolveRepoCardIcon,
 } from '@/app/actions/git';
-import { cloneRemoteRepository, resolveRepositoryByName } from '@/app/actions/repository';
+import {
+  cloneRemoteProject,
+  discoverProjectGitRepos,
+  discoverProjectGitReposWithBranches,
+  getProjectActivity,
+  resolveProjectByName,
+} from '@/app/actions/project';
 import { createSession, deleteSession, getSessionPrefillContext, listSessions, saveSessionLaunchContext, SessionMetadata } from '@/app/actions/session';
 import { deleteDraft, listDrafts, saveDraft, DraftMetadata } from '@/app/actions/draft';
-import { getConfig, updateConfig, updateRepoSettings, Config } from '@/app/actions/config';
+import { getConfig, updateConfig, updateProjectSettings, Config } from '@/app/actions/config';
 import { listAgentApiCredentials, listCredentials } from '@/app/actions/credentials';
 import type { Credential } from '@/lib/credentials';
 import { useRouter } from 'next/navigation';
 import { getBaseName } from '@/lib/path';
-import { resolveInitialBaseBranchSelection } from '@/lib/base-branch-selection';
 import { notifySessionsUpdated, subscribeToSessionsUpdated } from '@/lib/session-updates';
 import { consumePendingSessionNavigationRetry, recordPendingSessionNavigation } from '@/lib/session-navigation';
+import { hasStartupTaskDescription } from '@/lib/agent-startup-prompt';
 import {
   applyThemeToTerminalIframe,
   applyThemeToTerminalWindow,
@@ -41,12 +43,12 @@ import SessionFileBrowser from './SessionFileBrowser';
 import { HomeDashboard } from './git-repo-selector/HomeDashboard';
 import { RepoSettingsDialog } from './git-repo-selector/RepoSettingsDialog';
 import { CloneRemoteDialog } from './git-repo-selector/CloneRemoteDialog';
-import { getCredentialOptionLabel, type RepoCredentialSelection } from './git-repo-selector/types';
+import { type RepoCredentialSelection } from './git-repo-selector/types';
 
 type SessionMode = 'fast' | 'plan';
 type ThemeMode = 'auto' | 'light' | 'dark';
-const DEFAULT_REPO_STARTUP_COMMAND = 'npm install';
-const DEFAULT_REPO_DEV_SERVER_COMMAND = 'npm run dev';
+const DEFAULT_PROJECT_STARTUP_COMMAND = '';
+const DEFAULT_PROJECT_DEV_SERVER_COMMAND = '';
 const THEME_MODE_SEQUENCE: ThemeMode[] = ['auto', 'light', 'dark'];
 
 const SESSION_MODE_STORAGE_KEY = 'viba:new-session-mode';
@@ -73,6 +75,7 @@ type PredefinedPrompt = {
 
 type GitRepoSelectorProps = {
   mode?: 'home' | 'new';
+  projectPath?: string | null;
   repoPath?: string | null;
   fromRepoName?: string | null;
   prefillFromSession?: string | null;
@@ -91,15 +94,41 @@ function deriveSessionTitleFromTaskDescription(taskDescription: string): string 
   return firstNonEmptyLine.slice(0, SESSION_TITLE_MAX_LENGTH);
 }
 
+function normalizePathForComparison(pathValue: string): string {
+  return pathValue.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function toProjectRelativeRepoPath(projectPath: string, repoPath: string): string {
+  const normalizedProjectPath = normalizePathForComparison(projectPath);
+  const normalizedRepoPath = normalizePathForComparison(repoPath);
+
+  if (!normalizedProjectPath || !normalizedRepoPath) return repoPath;
+  if (normalizedRepoPath === normalizedProjectPath) return '.';
+
+  const projectPrefix = `${normalizedProjectPath}/`;
+  if (normalizedRepoPath.startsWith(projectPrefix)) {
+    return normalizedRepoPath.slice(projectPrefix.length);
+  }
+
+  return repoPath;
+}
+
+function arePathListsEqual(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
 export default function GitRepoSelector({
   mode = 'home',
-  repoPath = null,
+  projectPath = null,
+  repoPath: legacyRepoPath = null,
   fromRepoName = null,
   prefillFromSession = null,
   predefinedPrompts = [],
   showLogout = false,
   logoutEnabled = true,
 }: GitRepoSelectorProps) {
+  const repoPath = projectPath ?? legacyRepoPath;
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [isSelectingRoot, setIsSelectingRoot] = useState(false);
   const [isRepoSettingsDialogOpen, setIsRepoSettingsDialogOpen] = useState(false);
@@ -117,15 +146,19 @@ export default function GitRepoSelector({
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [repoForSettings, setRepoForSettings] = useState<string | null>(null);
   const [repoAlias, setRepoAlias] = useState<string>('');
-  const [repoCredentialSelection, setRepoCredentialSelection] = useState<RepoCredentialSelection>('auto');
-  const [repoStartupCommand, setRepoStartupCommand] = useState<string>(DEFAULT_REPO_STARTUP_COMMAND);
-  const [repoDevServerCommand, setRepoDevServerCommand] = useState<string>(DEFAULT_REPO_DEV_SERVER_COMMAND);
+  const [repoStartupCommand, setRepoStartupCommand] = useState<string>(DEFAULT_PROJECT_STARTUP_COMMAND);
+  const [repoDevServerCommand, setRepoDevServerCommand] = useState<string>(DEFAULT_PROJECT_DEV_SERVER_COMMAND);
+  const [projectIconPathForSettings, setProjectIconPathForSettings] = useState<string | null>(null);
   const [credentialOptions, setCredentialOptions] = useState<Credential[]>([]);
 
   const router = useRouter();
 
-  const [branches, setBranches] = useState<GitBranch[]>([]);
   const [currentBranchName, setCurrentBranchName] = useState<string>('');
+  const [projectGitRepos, setProjectGitRepos] = useState<string[]>([]);
+  const [branchesByRepo, setBranchesByRepo] = useState<Record<string, GitBranch[]>>({});
+  const [baseBranchByRepo, setBaseBranchByRepo] = useState<Record<string, string>>({});
+  const [isLoadingProjectGitRepos, setIsLoadingProjectGitRepos] = useState(false);
+  const [isProjectGitReposTruncated, setIsProjectGitReposTruncated] = useState(false);
   const [existingSessions, setExistingSessions] = useState<SessionMetadata[]>([]);
   const [allSessions, setAllSessions] = useState<SessionMetadata[]>([]);
   const [existingDrafts, setExistingDrafts] = useState<DraftMetadata[]>([]);
@@ -156,11 +189,19 @@ export default function GitRepoSelector({
   const [loginCommandInjected, setLoginCommandInjected] = useState(false);
   const [loginModalError, setLoginModalError] = useState<string | null>(null);
   const [repoSettingsError, setRepoSettingsError] = useState<string | null>(null);
-  const [isLoadingCredentialOptions, setIsLoadingCredentialOptions] = useState(false);
+  const [isUploadingProjectIcon, setIsUploadingProjectIcon] = useState(false);
   const [isSavingRepoSettings, setIsSavingRepoSettings] = useState(false);
   const [repoCardIconByRepo, setRepoCardIconByRepo] = useState<Record<string, string | null>>({});
   const [brokenRepoCardIcons, setBrokenRepoCardIcons] = useState<Record<string, boolean>>({});
+  const [projectGitReposByPath, setProjectGitReposByPath] = useState<Record<string, string[]>>({});
+  const [discoveringHomeProjectGitRepos, setDiscoveringHomeProjectGitRepos] = useState<Record<string, boolean>>({});
+  const [homeProjectGitSelector, setHomeProjectGitSelector] = useState<{
+    projectPath: string;
+    repos: string[];
+  } | null>(null);
   const repoCardIconResolutionsInFlightRef = useRef<Set<string>>(new Set());
+  const selectedProjectLoadRequestRef = useRef(0);
+  const pendingProjectRouteSyncRef = useRef<string | null>(null);
   const loginTerminalRef = useRef<HTMLIFrameElement>(null);
 
   const [isSavingDraft, setIsSavingDraft] = useState(false);
@@ -172,72 +213,99 @@ export default function GitRepoSelector({
     notifySessionsUpdated();
   }, []);
 
+  const isActiveSelectedProjectLoad = useCallback((requestId: number) => {
+    return selectedProjectLoadRequestRef.current === requestId;
+  }, []);
+
+  const resetSelectedProjectState = useCallback((projectPath: string) => {
+    setSelectedRepo(projectPath);
+    setRepoFilesCache([]);
+    setProjectGitRepos([]);
+    setBranchesByRepo({});
+    setBaseBranchByRepo({});
+    setCurrentBranchName('');
+    setIsProjectGitReposTruncated(false);
+    setExistingSessions([]);
+    setExistingDrafts([]);
+    setStartupScript('');
+    setDevServerScript('');
+  }, []);
+
+  const beginSelectedProjectLoad = useCallback((projectPath: string) => {
+    const requestId = selectedProjectLoadRequestRef.current + 1;
+    selectedProjectLoadRequestRef.current = requestId;
+    resetSelectedProjectState(projectPath);
+    return requestId;
+  }, [resetSelectedProjectState]);
+
   const navigateToSession = useCallback((sessionName: string) => {
+    const targetPath = `/session/${encodeURIComponent(sessionName)}`;
     sessionNavigationCommittedRef.current = true;
     recordPendingSessionNavigation(sessionName);
-    router.push(`/session/${encodeURIComponent(sessionName)}`);
-  }, [router]);
+    // Use a hard navigation here. App Router transitions out of /new can be interrupted
+    // by pending server actions and iframe teardown, which can briefly land on /session
+    // and then snap back to /new. A full replace avoids that rollback path.
+    window.location.replace(targetPath);
+  }, []);
 
-  const refreshSessionData = useCallback(async (repo: string | null = selectedRepo) => {
+  const refreshSessionData = useCallback(async (
+    repo: string | null = selectedRepo,
+    options?: { includeGlobal?: boolean },
+    selectedProjectRequestId?: number,
+  ) => {
+    const includeGlobal = options?.includeGlobal ?? mode === 'home';
+
     try {
+      if (!includeGlobal && repo) {
+        const activity = await getProjectActivity(repo);
+        if (
+          selectedProjectRequestId !== undefined
+          && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+        ) {
+          return;
+        }
+        setExistingSessions(activity.sessions);
+        setExistingDrafts(activity.drafts);
+        return;
+      }
+
       const [allSess, repoSess, allD, repoD] = await Promise.all([
-        listSessions(),
+        includeGlobal ? listSessions() : Promise.resolve(null),
         repo ? listSessions(repo) : Promise.resolve([] as SessionMetadata[]),
-        listDrafts(),
+        includeGlobal ? listDrafts() : Promise.resolve(null),
         repo ? listDrafts(repo) : Promise.resolve([] as DraftMetadata[]),
       ]);
-      setAllSessions(allSess);
-      setAllDrafts(allD);
+
+      if (allSess) {
+        setAllSessions(allSess);
+      }
+      if (allD) {
+        setAllDrafts(allD);
+      }
       if (repo) {
+        if (
+          selectedProjectRequestId !== undefined
+          && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+        ) {
+          return;
+        }
         setExistingSessions(repoSess);
         setExistingDrafts(repoD);
       }
     } catch (e) {
       console.error('Failed to refresh sessions and drafts', e);
     }
-  }, [selectedRepo]);
-
-  const resolveRepoCredentialSelection = useCallback((repo: string, credentials: Credential[] = credentialOptions): RepoCredentialSelection => {
-    const repoSettings = config?.repoSettings?.[repo];
-    if (!repoSettings) return 'auto';
-
-    if (repoSettings.credentialId) {
-      return repoSettings.credentialId;
-    }
-
-    const legacyPreference = repoSettings.credentialPreference;
-    if (legacyPreference === 'github' || legacyPreference === 'gitlab') {
-      const matched = credentials.find((credential) => credential.type === legacyPreference);
-      if (matched) return matched.id;
-    }
-
-    return 'auto';
-  }, [config, credentialOptions]);
-
-  const getRepoCredentialLabel = useCallback((repo: string): string => {
-    const repoSettings = config?.repoSettings?.[repo];
-    if (!repoSettings) return 'Auto';
-
-    if (repoSettings.credentialId) {
-      const matched = credentialOptions.find((credential) => credential.id === repoSettings.credentialId);
-      return matched ? getCredentialOptionLabel(matched) : 'Selected credential';
-    }
-
-    if (repoSettings.credentialPreference === 'github') return 'GitHub (legacy)';
-    if (repoSettings.credentialPreference === 'gitlab') return 'GitLab (legacy)';
-
-    return 'Auto';
-  }, [config, credentialOptions]);
+  }, [isActiveSelectedProjectLoad, mode, selectedRepo]);
 
   const dismissRepoSettingsDialog = useCallback(() => {
     if (isSavingRepoSettings) return;
     setIsRepoSettingsDialogOpen(false);
     setRepoForSettings(null);
-    setRepoCredentialSelection('auto');
-    setRepoStartupCommand(DEFAULT_REPO_STARTUP_COMMAND);
-    setRepoDevServerCommand(DEFAULT_REPO_DEV_SERVER_COMMAND);
+    setRepoStartupCommand(DEFAULT_PROJECT_STARTUP_COMMAND);
+    setRepoDevServerCommand(DEFAULT_PROJECT_DEV_SERVER_COMMAND);
+    setProjectIconPathForSettings(null);
     setRepoSettingsError(null);
-    setIsLoadingCredentialOptions(false);
+    setIsUploadingProjectIcon(false);
   }, [isSavingRepoSettings]);
 
   const openCloneRemoteDialog = useCallback(() => {
@@ -274,30 +342,40 @@ export default function GitRepoSelector({
     setIsLoadingCloneCredentialOptions(false);
   }, [isCloningRemote]);
 
-  // Load config and all sessions on mount
+  // Load home dashboard data on mount. The /new route loads project-specific data lazily.
   useEffect(() => {
+    if (mode !== 'home') {
+      setIsLoaded(true);
+      return;
+    }
+
+    let cancelled = false;
+
     const loadData = async () => {
       try {
-        const [cfg, sessions, drafts, credentialsResult] = await Promise.all([
+        const [cfg, sessions, drafts] = await Promise.all([
           getConfig(),
           listSessions(),
           listDrafts(),
-          listCredentials(),
         ]);
+        if (cancelled) return;
         setConfig(cfg);
         setAllSessions(sessions);
         setAllDrafts(drafts);
-        if (credentialsResult.success) {
-          setCredentialOptions(credentialsResult.credentials);
-        }
       } catch (e) {
         console.error('Failed to load data', e);
       } finally {
-        setIsLoaded(true);
+        if (!cancelled) {
+          setIsLoaded(true);
+        }
       }
     };
-    loadData();
-  }, []);
+    void loadData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
 
   useEffect(() => {
     try {
@@ -367,44 +445,152 @@ export default function GitRepoSelector({
   }, [mode]);
 
   useEffect(() => {
+    if (mode === 'new' && !selectedRepo) {
+      return;
+    }
+
     const refresh = () => {
       const repoForList = mode === 'new' ? selectedRepo : null;
-      void refreshSessionData(repoForList);
+      void refreshSessionData(repoForList, { includeGlobal: mode === 'home' });
     };
 
     const unsubscribeSessionsUpdated = subscribeToSessionsUpdated(refresh);
-    refresh();
+    if (mode === 'home') {
+      refresh();
+    }
 
     return () => {
       unsubscribeSessionsUpdated();
     };
   }, [mode, refreshSessionData, selectedRepo]);
 
-  const loadSelectedRepoData = async (path: string) => {
-    setSelectedRepo(path);
-    setRepoFilesCache([]);
-
-    // Load saved session scripts
-    await loadSavedAgentSettings(path);
-
-    // Load branches
-    await loadBranches(path);
-
-    await refreshSessionData(path);
-  };
-
-  const handleSelectRepo = async (path: string) => {
-    setLoading(true);
-    setError(null);
+  const loadProjectGitRepos = async (projectPath: string, selectedProjectRequestId?: number) => {
+    setIsLoadingProjectGitRepos(true);
     try {
-      const isValid = await checkIsGitRepo(path);
-      if (!isValid) {
-        setError('Selected directory is not a valid git repository.');
-        return false;
+      const discovery = await discoverProjectGitReposWithBranches(projectPath);
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return;
+      }
+      const repoPaths = discovery.repos.map((repo) => repo.repoPath);
+      setProjectGitRepos(repoPaths);
+      setIsProjectGitReposTruncated(discovery.truncated);
+
+      const nextBranchesByRepo: Record<string, GitBranch[]> = {};
+      const nextBaseBranchByRepo: Record<string, string> = {};
+      for (const repoPath of repoPaths) {
+        const repoBranches = discovery.branchesByRepo[repoPath] ?? [];
+        nextBranchesByRepo[repoPath] = repoBranches;
+        const currentBranch = repoBranches.find((branch) => branch.current)?.name;
+        if (currentBranch) {
+          nextBaseBranchByRepo[repoPath] = currentBranch;
+        } else if (repoBranches[0]?.name) {
+          nextBaseBranchByRepo[repoPath] = repoBranches[0].name;
+        }
       }
 
+      setBranchesByRepo(nextBranchesByRepo);
+      setBaseBranchByRepo(nextBaseBranchByRepo);
+
+      const primaryRepo = repoPaths[0] || '';
+      setCurrentBranchName(primaryRepo ? (nextBaseBranchByRepo[primaryRepo] || '') : '');
+    } catch (loadError) {
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return;
+      }
+      console.error('Failed to discover project git repositories:', loadError);
+      setProjectGitRepos([]);
+      setBranchesByRepo({});
+      setBaseBranchByRepo({});
+      setCurrentBranchName('');
+      setIsProjectGitReposTruncated(false);
+    } finally {
+      if (
+        selectedProjectRequestId === undefined
+        || isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        setIsLoadingProjectGitRepos(false);
+      }
+    }
+  };
+
+  const loadSelectedRepoData = async (
+    path: string,
+    resolvedConfig?: Config,
+    selectedProjectRequestId?: number,
+  ) => {
+    // Load saved session scripts
+    await loadSavedAgentSettings(path, resolvedConfig, selectedProjectRequestId);
+    if (
+      selectedProjectRequestId !== undefined
+      && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+    ) {
+      return;
+    }
+
+    await Promise.all([
+      loadProjectGitRepos(path, selectedProjectRequestId),
+      refreshSessionData(path, { includeGlobal: false }, selectedProjectRequestId),
+    ]);
+  };
+
+  const getRepoDisplayPath = useCallback((repoPath: string, totalRepos: number): string => {
+    if (!selectedRepo) return repoPath;
+    if (totalRepos === 1) {
+      return getBaseName(selectedRepo) || selectedRepo;
+    }
+    return toProjectRelativeRepoPath(selectedRepo, repoPath);
+  }, [selectedRepo]);
+
+  const ensureProjectRegistered = useCallback(async (projectPath: string) => {
+    try {
+      const response = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: projectPath, name: getBaseName(projectPath) }),
+      });
+
+      if (response.ok) return;
+
+      const payload = await response.json().catch(() => null) as { error?: unknown } | null;
+      const errorMessage = typeof payload?.error === 'string' ? payload.error : '';
+      if (/already exists/i.test(errorMessage)) return;
+      if (response.status === 500 && !errorMessage) return;
+
+      console.warn('Failed to ensure project registration:', errorMessage || response.statusText);
+    } catch (error) {
+      console.warn('Failed to ensure project registration:', error);
+    }
+  }, []);
+
+  const handleSelectRepo = async (
+    path: string,
+    options?: { navigateToNewInHome?: boolean },
+  ) => {
+    setLoading(true);
+    setError(null);
+    const selectedProjectRequestId = mode === 'new'
+      ? beginSelectedProjectLoad(path)
+      : undefined;
+    try {
+      await ensureProjectRegistered(path);
+
       const currentConfig = config || await getConfig();
-      let newRecent = [...currentConfig.recentRepos];
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return false;
+      }
+      if (!config) {
+        setConfig(currentConfig);
+      }
+      let newRecent = [...currentConfig.recentProjects];
       if (!newRecent.includes(path)) {
         newRecent.unshift(path);
       } else {
@@ -412,25 +598,52 @@ export default function GitRepoSelector({
         newRecent = [path, ...newRecent.filter(r => r !== path)];
       }
 
-      // Update config
-      const newConfig = await updateConfig({ recentRepos: newRecent });
-      setConfig(newConfig);
+      const nextConfig = arePathListsEqual(newRecent, currentConfig.recentProjects)
+        ? currentConfig
+        : await updateConfig({ recentProjects: newRecent });
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return false;
+      }
+      setConfig(nextConfig);
 
       setIsBrowsing(false);
 
-      if (mode === 'home') {
-        router.push(`/new?repo=${encodeURIComponent(path)}`);
+      if (mode === 'home' && options?.navigateToNewInHome !== false) {
+        router.push(`/new?project=${encodeURIComponent(path)}`);
         return true;
       }
 
-      await loadSelectedRepoData(path);
+      if (mode === 'home') {
+        return true;
+      }
+
+      await loadSelectedRepoData(path, nextConfig, selectedProjectRequestId);
+      if (
+        selectedProjectRequestId !== undefined
+        && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        return false;
+      }
       return true;
     } catch (err) {
       console.error(err);
-      setError('Failed to open repository.');
+      if (
+        selectedProjectRequestId === undefined
+        || isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        setError('Failed to open project.');
+      }
       return false;
     } finally {
-      setLoading(false);
+      if (
+        selectedProjectRequestId === undefined
+        || isActiveSelectedProjectLoad(selectedProjectRequestId)
+      ) {
+        setLoading(false);
+      }
     }
   };
 
@@ -439,7 +652,7 @@ export default function GitRepoSelector({
 
     const trimmedRemoteUrl = remoteRepoUrl.trim();
     if (!trimmedRemoteUrl) {
-      setCloneRemoteError('Please enter a remote repository URL.');
+      setCloneRemoteError('Please enter a remote project URL.');
       return;
     }
 
@@ -448,19 +661,19 @@ export default function GitRepoSelector({
     setError(null);
 
     try {
-      const result = await cloneRemoteRepository(
+      const result = await cloneRemoteProject(
         trimmedRemoteUrl,
         cloneCredentialSelection === 'auto' ? null : cloneCredentialSelection,
       );
 
-      if (!result.success || !result.repoPath) {
-        setCloneRemoteError(result.error || 'Failed to clone repository.');
+      if (!result.success || !result.projectPath) {
+        setCloneRemoteError(result.error || 'Failed to clone project.');
         return;
       }
 
-      const opened = await handleSelectRepo(result.repoPath);
+      const opened = await handleSelectRepo(result.projectPath, { navigateToNewInHome: false });
       if (!opened) {
-        setCloneRemoteError('Repository was cloned, but failed to open it.');
+        setCloneRemoteError('Project was cloned, but failed to open it.');
         return;
       }
 
@@ -470,7 +683,7 @@ export default function GitRepoSelector({
       setCloneRemoteError(null);
     } catch (error) {
       console.error(error);
-      setCloneRemoteError('Failed to clone repository.');
+      setCloneRemoteError('Failed to clone project.');
     } finally {
       setIsCloningRemote(false);
     }
@@ -482,12 +695,19 @@ export default function GitRepoSelector({
     const nextRepo = e.target.value;
     if (!nextRepo || nextRepo === selectedRepo) return;
 
+    pendingProjectRouteSyncRef.current = nextRepo;
     const changed = await handleSelectRepo(nextRepo);
-    if (!changed) return;
-    if (sessionNavigationCommittedRef.current) return;
+    if (!changed) {
+      pendingProjectRouteSyncRef.current = null;
+      return;
+    }
+    if (sessionNavigationCommittedRef.current) {
+      pendingProjectRouteSyncRef.current = null;
+      return;
+    }
 
     const params = new URLSearchParams();
-    params.set('repo', nextRepo);
+    params.set('project', nextRepo);
     if (prefillFromSession) {
       params.set('prefillFromSession', prefillFromSession);
     }
@@ -510,11 +730,19 @@ export default function GitRepoSelector({
     if (mode !== 'new') return;
 
     if (!repoPath) {
+      pendingProjectRouteSyncRef.current = null;
       setSelectedRepo(null);
       setExistingSessions([]);
-      setBranches([]);
       setCurrentBranchName('');
       return;
+    }
+
+    const pendingProjectRouteSync = pendingProjectRouteSyncRef.current;
+    if (pendingProjectRouteSync) {
+      if (repoPath !== pendingProjectRouteSync) {
+        return;
+      }
+      pendingProjectRouteSyncRef.current = null;
     }
 
     if (repoPath === selectedRepo) return;
@@ -547,7 +775,7 @@ export default function GitRepoSelector({
       setError(null);
       setIsResolvingRepoFromName(true);
 
-      const result = await resolveRepositoryByName(trimmedFromRepoName);
+      const result = await resolveProjectByName(trimmedFromRepoName);
       if (isCancelled) return;
 
       if (!result.success) {
@@ -556,14 +784,14 @@ export default function GitRepoSelector({
         return;
       }
 
-      if (!result.repoPath) {
-        setError(`Could not find a matching repository for "${trimmedFromRepoName}".`);
+      if (!result.projectPath) {
+        setError(`Could not find a matching project for "${trimmedFromRepoName}".`);
         setIsResolvingRepoFromName(false);
         return;
       }
 
       const params = new URLSearchParams();
-      params.set('repo', result.repoPath);
+      params.set('project', result.projectPath);
       if (prefillFromSession) {
         params.set('prefillFromSession', prefillFromSession);
       }
@@ -623,14 +851,24 @@ export default function GitRepoSelector({
     };
   }, [hasAppliedPrefill, mode, prefillFromSession, selectedRepo]);
 
-  const loadSavedAgentSettings = async (repoPath: string) => {
+  const loadSavedAgentSettings = async (
+    repoPath: string,
+    resolvedConfig?: Config,
+    selectedProjectRequestId?: number,
+  ) => {
     // Refresh config to ensure we have latest settings?
     // We can just rely on current config state if we assume single user or minimal concurrency.
     // Or we can refetch.
-    const currentConfig = config || await getConfig();
-    if (!config) setConfig(currentConfig);
+    const currentConfig = resolvedConfig || config || await getConfig();
+    if (
+      selectedProjectRequestId !== undefined
+      && !isActiveSelectedProjectLoad(selectedProjectRequestId)
+    ) {
+      return;
+    }
+    if (!config && currentConfig) setConfig(currentConfig);
 
-    const settings = currentConfig.repoSettings[repoPath] || {};
+    const settings = currentConfig.projectSettings[repoPath] || {};
 
     const savedStartupScript = settings.startupScript;
     const savedDevServerScript = settings.devServerScript;
@@ -638,16 +876,13 @@ export default function GitRepoSelector({
     if (savedStartupScript !== undefined && savedStartupScript !== null) {
       setStartupScript(savedStartupScript);
     } else {
-      // Determine default based on repo content
-      const defaultScript = await getStartupScript(repoPath);
-      setStartupScript(defaultScript);
+      setStartupScript('');
     }
 
     if (savedDevServerScript !== undefined && savedDevServerScript !== null) {
       setDevServerScript(savedDevServerScript);
     } else {
-      const defaultDevServerScript = await getDefaultDevServerScript(repoPath);
-      setDevServerScript(defaultDevServerScript);
+      setDevServerScript('');
     }
   };
 
@@ -657,38 +892,13 @@ export default function GitRepoSelector({
     setIsSelectingRoot(false);
   };
 
-  const loadBranches = async (repoPath: string) => {
-    try {
-      const data = await getBranches(repoPath);
-      setBranches(data);
+  const handleBranchChange = (repoPath: string, newBranch: string) => {
+    if (!repoPath) return;
+    setBaseBranchByRepo((previous) => ({ ...previous, [repoPath]: newBranch }));
 
-      const currentConfig = config || await getConfig();
-      const settings = currentConfig.repoSettings[repoPath] || {};
-      const lastPicked = settings.lastBranch;
-
-      // Check current checked out branch
-      const currentCheckedOut = data.find(b => b.current)?.name;
-      setCurrentBranchName(resolveInitialBaseBranchSelection(data, lastPicked, currentCheckedOut));
-    } catch (e) {
-      console.error("Failed to load branches", e);
-      setError("Failed to load branches.");
-    }
-  };
-
-  const handleBranchChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newBranch = e.target.value;
-    if (!selectedRepo) return;
-
-    setLoading(true);
-    try {
+    const primaryRepo = projectGitRepos[0];
+    if (primaryRepo === repoPath) {
       setCurrentBranchName(newBranch);
-
-      const newConfig = await updateRepoSettings(selectedRepo, { lastBranch: newBranch });
-      setConfig(newConfig);
-    } catch {
-      setError(`Failed to save base branch ${newBranch}`);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -703,7 +913,7 @@ export default function GitRepoSelector({
     }
   };
 
-  const handleStartupScriptChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleStartupScriptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const script = e.target.value;
     setStartupScript(script);
     // Debounce saving? Or just save on blur/change?
@@ -719,18 +929,18 @@ export default function GitRepoSelector({
 
   const saveStartupScript = async () => {
     if (selectedRepo) {
-      const newConfig = await updateRepoSettings(selectedRepo, { startupScript });
+      const newConfig = await updateProjectSettings(selectedRepo, { startupScript });
       setConfig(newConfig);
     }
   }
 
-  const handleDevServerScriptChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDevServerScriptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDevServerScript(e.target.value);
   };
 
   const saveDevServerScriptValue = async (script: string) => {
     if (selectedRepo) {
-      const newConfig = await updateRepoSettings(selectedRepo, { devServerScript: script });
+      const newConfig = await updateProjectSettings(selectedRepo, { devServerScript: script });
       setConfig(newConfig);
     }
   };
@@ -894,84 +1104,116 @@ export default function GitRepoSelector({
   const handleRemoveRecent = async (e: React.MouseEvent, repo: string) => {
     e.stopPropagation();
     if (config) {
-      const newRecent = config.recentRepos.filter(r => r !== repo);
-      const newConfig = await updateConfig({ recentRepos: newRecent });
+      const newRecent = config.recentProjects.filter((project) => project !== repo);
+      const newConfig = await updateConfig({ recentProjects: newRecent });
       setConfig(newConfig);
     }
   };
 
   const handleOpenRepoSettings = async (e: React.MouseEvent, repo: string) => {
     e.stopPropagation();
+    await ensureProjectRegistered(repo);
 
-    const settings = config?.repoSettings?.[repo];
+    const settings = config?.projectSettings?.[repo];
     setRepoForSettings(repo);
     setRepoAlias(settings?.alias?.trim() || '');
-    setRepoCredentialSelection(resolveRepoCredentialSelection(repo));
-    setRepoStartupCommand(settings?.startupScript?.trim() ? settings.startupScript : DEFAULT_REPO_STARTUP_COMMAND);
-    setRepoDevServerCommand(settings?.devServerScript?.trim() ? settings.devServerScript : DEFAULT_REPO_DEV_SERVER_COMMAND);
+    setRepoStartupCommand(settings?.startupScript ?? DEFAULT_PROJECT_STARTUP_COMMAND);
+    setRepoDevServerCommand(settings?.devServerScript ?? DEFAULT_PROJECT_DEV_SERVER_COMMAND);
+    setProjectIconPathForSettings(repoCardIconByRepo[repo] ?? null);
     setRepoSettingsError(null);
     setIsRepoSettingsDialogOpen(true);
-    setIsLoadingCredentialOptions(true);
-
-    try {
-      const result = await listCredentials();
-      if (!result.success) {
-        setRepoSettingsError(result.error);
-        setCredentialOptions([]);
-      } else {
-        setCredentialOptions(result.credentials);
-        setRepoCredentialSelection(resolveRepoCredentialSelection(repo, result.credentials));
-      }
-    } catch (err) {
-      console.error(err);
-      setRepoSettingsError('Failed to load credentials.');
-      setCredentialOptions([]);
-    } finally {
-      setIsLoadingCredentialOptions(false);
-    }
   };
 
   const handleSaveRepoSettings = async () => {
     if (!repoForSettings) return;
-    const credentialId = repoCredentialSelection === 'auto' ? null : repoCredentialSelection;
-    const startupCommandToSave = repoStartupCommand.trim() || DEFAULT_REPO_STARTUP_COMMAND;
-    const devServerCommandToSave = repoDevServerCommand.trim() || DEFAULT_REPO_DEV_SERVER_COMMAND;
-
-    if (credentialId && !credentialOptions.some((credential) => credential.id === credentialId)) {
-      setRepoSettingsError('Selected credential no longer exists. Please choose another credential.');
-      return;
-    }
+    const startupCommandToSave = repoStartupCommand.trim() || DEFAULT_PROJECT_STARTUP_COMMAND;
+    const devServerCommandToSave = repoDevServerCommand.trim() || DEFAULT_PROJECT_DEV_SERVER_COMMAND;
 
     setIsSavingRepoSettings(true);
     setRepoSettingsError(null);
     try {
       const aliasToSave = repoAlias.trim() || null;
-      const newConfig = await updateRepoSettings(repoForSettings, {
-        credentialId,
+      const newConfig = await updateProjectSettings(repoForSettings, {
         startupScript: startupCommandToSave,
         devServerScript: devServerCommandToSave,
-        credentialPreference: undefined,
         alias: aliasToSave,
       });
       setConfig(newConfig);
 
-      // Sync alias to Repository.displayName so sidebar/command-palette/repo-list pick it up
       try {
-        await fetch('/api/repos', {
+        await fetch('/api/projects', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: repoForSettings, updates: { displayName: aliasToSave } }),
         });
       } catch {
-        // Non-critical: repo may not exist in the repositories table yet
+        // Non-critical if project is temporarily unavailable.
       }
 
       dismissRepoSettingsDialog();
     } catch (err) {
       console.error(err);
-      setRepoSettingsError('Failed to save repository settings.');
+      setRepoSettingsError('Failed to save project settings.');
     } finally {
       setIsSavingRepoSettings(false);
+    }
+  };
+
+  const handleUploadProjectIcon = async (iconPath: string) => {
+    if (!repoForSettings || isUploadingProjectIcon) return;
+    setRepoSettingsError(null);
+    setIsUploadingProjectIcon(true);
+
+    try {
+      const response = await fetch('/api/projects/icon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectPath: repoForSettings,
+          iconPath,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to upload project icon.');
+      }
+
+      const uploadedIconPath = typeof payload?.iconPath === 'string' ? payload.iconPath : null;
+      setProjectIconPathForSettings(uploadedIconPath);
+      setRepoCardIconByRepo((previous) => ({ ...previous, [repoForSettings]: uploadedIconPath }));
+      setBrokenRepoCardIcons((previous) => ({ ...previous, [repoForSettings]: false }));
+    } catch (error) {
+      console.error(error);
+      setRepoSettingsError(error instanceof Error ? error.message : 'Failed to upload project icon.');
+    } finally {
+      setIsUploadingProjectIcon(false);
+    }
+  };
+
+  const handleRemoveProjectIcon = async () => {
+    if (!repoForSettings || isUploadingProjectIcon) return;
+    setRepoSettingsError(null);
+    setIsUploadingProjectIcon(true);
+
+    try {
+      const response = await fetch('/api/projects/icon', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectPath: repoForSettings }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to remove project icon.');
+      }
+
+      setProjectIconPathForSettings(null);
+      setRepoCardIconByRepo((previous) => ({ ...previous, [repoForSettings]: null }));
+      setBrokenRepoCardIcons((previous) => ({ ...previous, [repoForSettings]: false }));
+    } catch (error) {
+      console.error(error);
+      setRepoSettingsError(error instanceof Error ? error.message : 'Failed to remove project icon.');
+    } finally {
+      setIsUploadingProjectIcon(false);
     }
   };
 
@@ -1084,15 +1326,7 @@ export default function GitRepoSelector({
         }
       }
 
-      const trimmedDevServerScript = devServerScript.trim();
-      let resolvedDevServerScript = trimmedDevServerScript;
-
-      if (!resolvedDevServerScript) {
-        resolvedDevServerScript = await getDefaultDevServerScript(selectedRepo);
-        if (resolvedDevServerScript) {
-          setDevServerScript(resolvedDevServerScript);
-        }
-      }
+      const resolvedDevServerScript = devServerScript.trim();
 
       // Also save startup script if changed
       await saveStartupScript();
@@ -1106,19 +1340,21 @@ export default function GitRepoSelector({
         return;
       }
 
-      // 2. Create Session Worktree
-      // Use current selected branch as base
-      const baseBranch = currentBranchName || 'main'; // Fallback to main if empty, though shouldn't happen
+      // 2. Create session workspace (single/multi/folder mode decided by server runtime discovery).
       const derivedTitle = deriveSessionTitleFromTaskDescription(initialMessage);
+      const gitContexts = projectGitRepos.map((repoPath) => ({
+        repoPath,
+        baseBranch: baseBranchByRepo[repoPath]?.trim() || undefined,
+      }));
 
-      const wtResult = await createSession(selectedRepo, baseBranch, {
+      const wtResult = await createSession(selectedRepo, gitContexts, {
         agent: 'codex',
         model: '',
         title: derivedTitle,
         devServerScript: resolvedDevServerScript || undefined
       });
 
-      if (wtResult.success && wtResult.sessionName && wtResult.worktreePath && wtResult.branchName) {
+      if (wtResult.success && wtResult.sessionName && wtResult.workspacePath) {
         const allAttachmentPaths = Array.from(
           new Set(
             [...attachments, ...prefilledAttachmentPaths]
@@ -1138,23 +1374,28 @@ export default function GitRepoSelector({
 
         // Process initial message mentions
         const trimmedInitialMessage = initialMessage.trim();
+        const hasTaskDescription = hasStartupTaskDescription(trimmedInitialMessage);
         let processedMessage = trimmedInitialMessage;
 
-        // Helper to match replacement
-        processedMessage = processedMessage.replace(/@(\S+)/g, (match, name) => {
-          const attachmentPath = attachmentPathByName.get(name);
-          if (attachmentPath) {
-            return attachmentPath;
-          }
-          // Assume repo file - keep relative path as we run in worktree root
-          return name;
-        });
+        if (hasTaskDescription) {
+          // Helper to match replacement
+          processedMessage = processedMessage.replace(/@(\S+)/g, (match, name) => {
+            const attachmentPath = attachmentPathByName.get(name);
+            if (attachmentPath) {
+              return attachmentPath;
+            }
+            // Assume repo file - keep relative path as we run in worktree root
+            return name;
+          });
+        }
+
+        const launchInitialMessage = hasTaskDescription ? processedMessage : '';
 
         // 3. Persist launch context for the new session
         const launchContextResult = await saveSessionLaunchContext(wtResult.sessionName, {
           title: derivedTitle,
-          initialMessage: processedMessage || undefined,
-          rawInitialMessage: trimmedInitialMessage || undefined,
+          initialMessage: launchInitialMessage || undefined,
+          rawInitialMessage: hasTaskDescription ? trimmedInitialMessage : undefined,
           startupScript: startupScript || undefined,
           attachmentPaths: allAttachmentPaths,
           attachmentNames: allAttachmentNames,
@@ -1176,7 +1417,7 @@ export default function GitRepoSelector({
 
         // No need to refresh sessions as we are navigating away
       } else {
-        setError(wtResult.error || "Failed to create session worktree");
+        setError(wtResult.error || "Failed to create session workspace");
         setLoading(false);
       }
 
@@ -1198,10 +1439,26 @@ export default function GitRepoSelector({
     try {
       const draftId = Date.now().toString();
       const messageTitle = initialMessage.split('\n')[0].trim() || 'Untitled Draft';
+      const draftGitContexts = projectGitRepos.map((repoPath) => {
+        const fallbackBranch = branchesByRepo[repoPath]?.find((branch) => branch.current)?.name
+          || branchesByRepo[repoPath]?.[0]?.name
+          || '';
+        const baseBranch = baseBranchByRepo[repoPath]?.trim() || fallbackBranch;
+        return {
+          sourceRepoPath: repoPath,
+          relativeRepoPath: '',
+          worktreePath: '',
+          branchName: baseBranch,
+          baseBranch: baseBranch || undefined,
+        };
+      }).filter((context) => context.branchName.trim().length > 0);
+      const firstGitContext = draftGitContexts[0];
       const draft: DraftMetadata = {
         id: draftId,
+        projectPath: selectedRepo,
+        gitContexts: draftGitContexts,
         repoPath: selectedRepo,
-        branchName: currentBranchName,
+        branchName: firstGitContext?.branchName || currentBranchName || undefined,
         message: initialMessage,
         attachmentPaths: [...attachments, ...prefilledAttachmentPaths],
         agentProvider: 'codex',
@@ -1231,7 +1488,21 @@ export default function GitRepoSelector({
     setInitialMessage(draft.message);
     setAttachments(draft.attachmentPaths);
     setPrefilledAttachmentPaths([]);
-    setCurrentBranchName(draft.branchName);
+    if (draft.gitContexts.length > 0) {
+      const nextBaseBranchByRepo: Record<string, string> = {};
+      draft.gitContexts.forEach((context) => {
+        const resolvedBaseBranch = context.baseBranch?.trim() || context.branchName.trim();
+        if (resolvedBaseBranch) {
+          nextBaseBranchByRepo[context.sourceRepoPath] = resolvedBaseBranch;
+        }
+      });
+      setProjectGitRepos(draft.gitContexts.map((context) => context.sourceRepoPath));
+      setBaseBranchByRepo((previous) => ({ ...previous, ...nextBaseBranchByRepo }));
+      const firstContext = draft.gitContexts[0];
+      setCurrentBranchName(nextBaseBranchByRepo[firstContext.sourceRepoPath] || firstContext.branchName || '');
+    } else {
+      setCurrentBranchName(draft.branchName || '');
+    }
     setStartupScript(draft.startupScript || '');
     setDevServerScript(draft.devServerScript || '');
     setSessionMode(draft.sessionMode || 'fast');
@@ -1309,7 +1580,7 @@ export default function GitRepoSelector({
 
   const handleNewAttemptFromSession = (session: SessionMetadata) => {
     if (!selectedRepo) return;
-    const nextUrl = `/new?repo=${encodeURIComponent(selectedRepo)}&prefillFromSession=${encodeURIComponent(session.sessionName)}`;
+    const nextUrl = `/new?project=${encodeURIComponent(selectedRepo)}&prefillFromSession=${encodeURIComponent(session.sessionName)}`;
     router.push(nextUrl);
   };
 
@@ -1331,13 +1602,8 @@ export default function GitRepoSelector({
         return;
       }
 
-      const sessions = await listSessions(selectedRepo);
-      setExistingSessions(sessions);
-
-      // Also refresh all sessions
-      const allSess = await listSessions();
-      setAllSessions(allSess);
-      notifySessionsChanged();
+      setExistingSessions((previous) => previous.filter((item) => item.sessionName !== session.sessionName));
+      setAllSessions((previous) => previous.filter((item) => item.sessionName !== session.sessionName));
     } catch (e) {
       console.error(e);
       setError('Failed to delete session');
@@ -1346,45 +1612,112 @@ export default function GitRepoSelector({
     }
   };
 
-  const runningSessionCountByRepo = useMemo(() => {
+  const runningSessionCountByProject = useMemo(() => {
     const counts = new Map<string, number>();
     for (const session of allSessions) {
-      counts.set(session.repoPath, (counts.get(session.repoPath) ?? 0) + 1);
+      const projectKey = session.projectPath || session.repoPath;
+      if (!projectKey) continue;
+      counts.set(projectKey, (counts.get(projectKey) ?? 0) + 1);
     }
     return counts;
   }, [allSessions]);
 
-  const draftCountByRepo = useMemo(() => {
+  const draftCountByProject = useMemo(() => {
     const counts = new Map<string, number>();
     for (const draft of allDrafts) {
-      counts.set(draft.repoPath, (counts.get(draft.repoPath) ?? 0) + 1);
+      const projectKey = draft.projectPath || draft.repoPath;
+      if (!projectKey) continue;
+      counts.set(projectKey, (counts.get(projectKey) ?? 0) + 1);
     }
     return counts;
   }, [allDrafts]);
 
-  const recentRepos = useMemo(() => config?.recentRepos ?? [], [config?.recentRepos]);
+  const recentProjects = useMemo(() => config?.recentProjects ?? [], [config?.recentProjects]);
 
-  const getRepoDisplayName = useCallback((repoPath: string): string => {
-    const alias = config?.repoSettings?.[repoPath]?.alias?.trim();
-    return alias || getBaseName(repoPath);
-  }, [config?.repoSettings]);
+  const getProjectDisplayName = useCallback((projectPath: string): string => {
+    const alias = config?.projectSettings?.[projectPath]?.alias?.trim();
+    return alias || getBaseName(projectPath);
+  }, [config?.projectSettings]);
 
-  const filteredRecentRepos = useMemo(() => {
+  const filteredRecentProjects = useMemo(() => {
     const normalizedQuery = homeSearchQuery.trim().toLowerCase();
-    if (!normalizedQuery) return recentRepos;
+    if (!normalizedQuery) return recentProjects;
 
-    return recentRepos.filter((repo) => {
-      const displayName = getRepoDisplayName(repo).toLowerCase();
-      return displayName.includes(normalizedQuery) || repo.toLowerCase().includes(normalizedQuery);
+    return recentProjects.filter((projectPath) => {
+      const displayName = getProjectDisplayName(projectPath).toLowerCase();
+      return displayName.includes(normalizedQuery) || projectPath.toLowerCase().includes(normalizedQuery);
     });
-  }, [homeSearchQuery, recentRepos, getRepoDisplayName]);
-  const selectableRepos = selectedRepo
-    ? (recentRepos.includes(selectedRepo) ? recentRepos : [selectedRepo, ...recentRepos])
-    : recentRepos;
+  }, [homeSearchQuery, recentProjects, getProjectDisplayName]);
+
+  const selectableProjects = selectedRepo
+    ? (recentProjects.includes(selectedRepo) ? recentProjects : [selectedRepo, ...recentProjects])
+    : recentProjects;
+
+  const discoverHomeProjectRepos = useCallback(async (
+    projectPath: string,
+    options: { force?: boolean } = {},
+  ): Promise<string[]> => {
+    const cached = projectGitReposByPath[projectPath];
+    if (cached && !options.force) {
+      return cached;
+    }
+
+    setDiscoveringHomeProjectGitRepos((previous) => ({ ...previous, [projectPath]: true }));
+    try {
+      const discovery = await discoverProjectGitRepos(projectPath);
+      const repos = discovery.repos.map((entry) => entry.repoPath);
+      setProjectGitReposByPath((previous) => ({ ...previous, [projectPath]: repos }));
+      return repos;
+    } catch (discoverError) {
+      console.error('Failed to discover project git repos:', discoverError);
+      setProjectGitReposByPath((previous) => ({ ...previous, [projectPath]: [] }));
+      return [];
+    } finally {
+      setDiscoveringHomeProjectGitRepos((previous) => ({ ...previous, [projectPath]: false }));
+    }
+  }, [projectGitReposByPath]);
+
+  const handleOpenProjectGitWorkspace = useCallback(async (projectPath: string, sourceRepoPath?: string) => {
+    if (sourceRepoPath?.trim()) {
+      router.push(`/git?path=${encodeURIComponent(sourceRepoPath)}`);
+      return;
+    }
+
+    const repos = await discoverHomeProjectRepos(projectPath);
+    if (repos.length === 0) {
+      setError('No Git repositories were found in this project.');
+      return;
+    }
+    if (repos.length === 1) {
+      router.push(`/git?path=${encodeURIComponent(repos[0])}`);
+      return;
+    }
+    setHomeProjectGitSelector({ projectPath, repos });
+  }, [discoverHomeProjectRepos, router]);
 
   useEffect(() => {
+    if (mode !== 'home' || recentProjects.length === 0) return;
+    const projectsToDiscover = recentProjects.filter((projectPath) => !(projectPath in projectGitReposByPath));
+    if (projectsToDiscover.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      for (const projectPath of projectsToDiscover.slice(0, 24)) {
+        if (cancelled) return;
+        await discoverHomeProjectRepos(projectPath);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [discoverHomeProjectRepos, mode, projectGitReposByPath, recentProjects]);
+
+  useEffect(() => {
+    if (mode !== 'home') return;
+
     const inFlightResolutions = repoCardIconResolutionsInFlightRef.current;
-    const reposToResolve = recentRepos.filter((repo) => (
+    const reposToResolve = recentProjects.filter((repo) => (
       !(repo in repoCardIconByRepo)
       && !inFlightResolutions.has(repo)
     ));
@@ -1402,7 +1735,7 @@ export default function GitRepoSelector({
           const result = await resolveRepoCardIcon(repo);
           return [repo, result.success ? result.iconPath : null] as const;
         } catch (error) {
-          console.error('Failed to resolve repository icon:', error);
+          console.error('Failed to resolve project icon:', error);
           return [repo, null] as const;
         }
       }));
@@ -1428,7 +1761,7 @@ export default function GitRepoSelector({
         inFlightResolutions.delete(repo);
       });
     };
-  }, [recentRepos, repoCardIconByRepo]);
+  }, [mode, recentProjects, repoCardIconByRepo]);
 
   const currentThemeModeIndex = THEME_MODE_SEQUENCE.indexOf(themeMode);
   const nextThemeMode = THEME_MODE_SEQUENCE[(currentThemeModeIndex + 1) % THEME_MODE_SEQUENCE.length];
@@ -1493,48 +1826,52 @@ export default function GitRepoSelector({
           themeModeLabel={themeModeLabel}
           nextThemeModeLabel={nextThemeModeLabel}
           ThemeModeIcon={ThemeModeIcon}
-          filteredRecentRepos={filteredRecentRepos}
+          filteredRecentProjects={filteredRecentProjects}
           isDarkThemeActive={isDarkThemeActive}
-          runningSessionCountByRepo={runningSessionCountByRepo}
-          draftCountByRepo={draftCountByRepo}
-          repoCardIconByRepo={repoCardIconByRepo}
-          brokenRepoCardIcons={brokenRepoCardIcons}
-          getRepoCredentialLabel={getRepoCredentialLabel}
-          getRepoDisplayName={getRepoDisplayName}
+          runningSessionCountByProject={runningSessionCountByProject}
+          draftCountByProject={draftCountByProject}
+          projectCardIconByPath={repoCardIconByRepo}
+          brokenProjectCardIcons={brokenRepoCardIcons}
+          getProjectDisplayName={getProjectDisplayName}
+          projectGitReposByPath={projectGitReposByPath}
+          discoveringProjectGitRepos={discoveringHomeProjectGitRepos}
           onHomeSearchQueryChange={setHomeSearchQuery}
           onOpenCredentials={() => router.push('/credentials')}
           onCycleThemeMode={handleCycleThemeMode}
-          onSelectRepo={handleSelectRepo}
-          onOpenGitWorkspace={(repo) => {
-            router.push(`/git?path=${encodeURIComponent(repo)}`);
-          }}
-          onOpenRepoSettings={handleOpenRepoSettings}
+          onSelectProject={handleSelectRepo}
+          onOpenGitWorkspace={handleOpenProjectGitWorkspace}
+          onOpenProjectSettings={handleOpenRepoSettings}
           onRemoveRecent={handleRemoveRecent}
-          onRepoIconError={handleRepoIconError}
+          onProjectIconError={handleRepoIconError}
           onRepoCardMouseMove={handleRepoCardMouseMove}
           onRepoCardMouseLeave={handleRepoCardMouseLeave}
-          onAddRepository={openCloneRemoteDialog}
+          onAddProject={openCloneRemoteDialog}
         />
       )}
 
       {mode === 'home' && (
         <RepoSettingsDialog
+          key={`${repoForSettings ?? 'none'}:${isRepoSettingsDialogOpen ? 'open' : 'closed'}`}
           isOpen={isRepoSettingsDialogOpen}
-          repoForSettings={repoForSettings}
-          repoAlias={repoAlias}
-          repoCredentialSelection={repoCredentialSelection}
-          repoStartupCommand={repoStartupCommand}
-          repoDevServerCommand={repoDevServerCommand}
-          defaultRepoStartupCommand={DEFAULT_REPO_STARTUP_COMMAND}
-          defaultRepoDevServerCommand={DEFAULT_REPO_DEV_SERVER_COMMAND}
-          credentialOptions={credentialOptions}
-          isSavingRepoSettings={isSavingRepoSettings}
-          isLoadingCredentialOptions={isLoadingCredentialOptions}
-          repoSettingsError={repoSettingsError}
+          projectForSettings={repoForSettings}
+          projectAlias={repoAlias}
+          projectStartupCommand={repoStartupCommand}
+          projectDevServerCommand={repoDevServerCommand}
+          defaultProjectStartupCommand={DEFAULT_PROJECT_STARTUP_COMMAND}
+          defaultProjectDevServerCommand={DEFAULT_PROJECT_DEV_SERVER_COMMAND}
+          projectIconPath={projectIconPathForSettings}
+          isSavingProjectSettings={isSavingRepoSettings}
+          isUploadingProjectIcon={isUploadingProjectIcon}
+          projectSettingsError={repoSettingsError}
           onAliasChange={setRepoAlias}
-          onCredentialChange={setRepoCredentialSelection}
           onStartupCommandChange={setRepoStartupCommand}
           onDevServerCommandChange={setRepoDevServerCommand}
+          onUploadIcon={(iconPath) => {
+            void handleUploadProjectIcon(iconPath);
+          }}
+          onRemoveIcon={() => {
+            void handleRemoveProjectIcon();
+          }}
           onClose={dismissRepoSettingsDialog}
           onSave={() => {
             void handleSaveRepoSettings();
@@ -1555,7 +1892,7 @@ export default function GitRepoSelector({
           onClose={dismissCloneRemoteDialog}
           onRemoteRepoUrlChange={setRemoteRepoUrl}
           onCloneCredentialSelectionChange={setCloneCredentialSelection}
-          onBrowseLocalRepository={() => {
+          onBrowseLocalFolder={() => {
             dismissCloneRemoteDialog();
             setIsBrowsing(true);
           }}
@@ -1563,10 +1900,47 @@ export default function GitRepoSelector({
             dismissCloneRemoteDialog();
             setIsSelectingRoot(true);
           }}
-          onCloneRepository={() => {
+          onCloneProject={() => {
             void handleCloneRemoteRepo();
           }}
         />
+      )}
+
+      {mode === 'home' && homeProjectGitSelector && (
+        <div className="fixed inset-0 z-[1003] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-[#151b26]">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-white/10">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Select Git Repository</h3>
+              <button
+                className="btn btn-circle btn-ghost btn-sm"
+                onClick={() => setHomeProjectGitSelector(null)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3 p-5">
+              <p className="break-all font-mono text-xs text-slate-600 dark:text-slate-300">
+                {homeProjectGitSelector.projectPath}
+              </p>
+              <div className="max-h-80 space-y-2 overflow-y-auto">
+                {homeProjectGitSelector.repos.map((repoPath) => (
+                  <button
+                    key={repoPath}
+                    type="button"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50 dark:border-[#30363d] dark:text-slate-200 dark:hover:bg-[#30363d]/60"
+                    onClick={() => {
+                      setHomeProjectGitSelector(null);
+                      router.push(`/git?path=${encodeURIComponent(repoPath)}`);
+                    }}
+                    title={repoPath}
+                  >
+                    <span className="block truncate font-mono text-xs">{repoPath}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
       {mode === 'new' && selectedRepo && (
         <div className="w-full max-w-[1240px]">
@@ -1603,7 +1977,7 @@ export default function GitRepoSelector({
 
                 <div className="space-y-4">
                   <label className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Select Repository</span>
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Select Project</span>
                     <div className="relative">
                       <select
                         className="h-12 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
@@ -1611,42 +1985,72 @@ export default function GitRepoSelector({
                         onChange={(event) => {
                           void handleCurrentRepoChange(event);
                         }}
-                        disabled={loading || selectableRepos.length === 0}
+                        disabled={loading || selectableProjects.length === 0}
                       >
-                        {selectableRepos.map((repo) => (
-                          <option key={repo} value={repo}>
-                            {getRepoDisplayName(repo)}
+                        {selectableProjects.map((projectPath) => (
+                          <option key={projectPath} value={projectPath}>
+                            {getProjectDisplayName(projectPath)}
                           </option>
                         ))}
                       </select>
                       <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
                     </div>
-                    <span className="truncate font-mono text-[11px] text-slate-500 dark:text-slate-400" title={selectedRepo}>
+                    <span className="truncate font-mono text-[11px] text-slate-500 dark:text-slate-400" title={selectedRepo || ''}>
                       {selectedRepo}
                     </span>
                   </label>
 
-                  <label className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Base Branch</span>
-                    <div className="relative">
-                      <select
-                        className="h-12 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
-                        value={currentBranchName}
-                        onChange={handleBranchChange}
-                        disabled={loading}
-                      >
-                        {branches.map((branch) => (
-                          <option key={branch.name} value={branch.name}>
-                            {branch.name}
-                            {branch.current ? ' (checked out)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                      {loading
-                        ? <span className="loading loading-spinner loading-xs absolute right-3 top-1/2 -translate-y-1/2"></span>
-                        : <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />}
-                    </div>
-                  </label>
+                  <div className="flex flex-col gap-2">
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Git Repositories</span>
+                    {isLoadingProjectGitRepos ? (
+                      <div className="flex h-12 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-400">
+                        <span className="loading loading-spinner loading-xs mr-2"></span>
+                        Discovering repositories...
+                      </div>
+                    ) : projectGitRepos.length === 0 ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-400/40 dark:bg-amber-900/30 dark:text-amber-200">
+                        No Git repositories found. This session will run in folder mode.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {projectGitRepos.map((repoPath) => {
+                          const repoBranches = branchesByRepo[repoPath] ?? [];
+                          const selectedBaseBranch = baseBranchByRepo[repoPath] || '';
+                          const displayRepoPath = getRepoDisplayPath(repoPath, projectGitRepos.length);
+                          return (
+                            <div key={repoPath} className="rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-[#30363d] dark:bg-[#0d1117]/70">
+                              <div className="truncate font-mono text-[11px] text-slate-600 dark:text-slate-300" title={repoPath}>
+                                {displayRepoPath}
+                              </div>
+                              <div className="relative mt-2">
+                                <select
+                                  className="h-10 w-full appearance-none rounded-md border border-slate-300 bg-white px-2 pr-8 font-mono text-xs text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                                  value={selectedBaseBranch}
+                                  onChange={(event) => handleBranchChange(repoPath, event.target.value)}
+                                  disabled={loading || repoBranches.length === 0}
+                                >
+                                  {repoBranches.length === 0 ? (
+                                    <option value="">No local branches</option>
+                                  ) : repoBranches.map((branch) => (
+                                    <option key={branch.name} value={branch.name}>
+                                      {branch.name}
+                                      {branch.current ? ' (checked out)' : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {isProjectGitReposTruncated && (
+                      <div className="text-[11px] text-amber-700 dark:text-amber-300">
+                        Repository discovery was truncated due to scan limits.
+                      </div>
+                    )}
+                  </div>
 
                   <button
                     type="button"
@@ -1661,9 +2065,8 @@ export default function GitRepoSelector({
                     <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-[#30363d] dark:bg-[#0d1117]/55">
                       <label className="flex flex-col gap-2">
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start Up Command</span>
-                        <input
-                          type="text"
-                          className="h-10 rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                        <textarea
+                          className="min-h-[86px] rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
                           placeholder="npm install"
                           value={startupScript}
                           onChange={handleStartupScriptChange}
@@ -1680,9 +2083,8 @@ export default function GitRepoSelector({
 
                       <label className="flex flex-col gap-2">
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Dev Server Command</span>
-                        <input
-                          type="text"
-                          className="h-10 rounded-lg border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                        <textarea
+                          className="min-h-[86px] rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
                           placeholder="npm run dev"
                           value={devServerScript}
                           onChange={handleDevServerScriptChange}
@@ -1716,59 +2118,11 @@ export default function GitRepoSelector({
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
-                <h3 className="mb-4 text-lg font-bold text-slate-900 dark:text-white">Drafts</h3>
-                <div className="space-y-2">
-                  {existingDrafts.length === 0 && (
-                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
-                      No drafts for this repository.
-                    </div>
-                  )}
-
-                  {existingDrafts.map((draft) => (
-                    <div
-                      key={draft.id}
-                      className="group flex items-center gap-3 rounded-lg border border-transparent px-3 py-3 transition-colors hover:border-slate-100 hover:bg-slate-50 dark:hover:border-slate-700/70 dark:hover:bg-slate-800/50"
-                    >
-                      <div
-                        className={`h-2 w-2 flex-shrink-0 rounded-full bg-blue-500`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{draft.title}</p>
-                        <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                          {getRepoDisplayName(draft.repoPath)} • {draft.agentProvider}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
-                        <button
-                          type="button"
-                          className="rounded p-1 text-slate-400 transition-colors hover:text-primary dark:text-slate-400 dark:hover:text-primary"
-                          title="Open Draft"
-                          onClick={() => handleOpenDraft(draft)}
-                          disabled={loading || isSavingDraft}
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded p-1 text-slate-400 transition-colors hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400"
-                          title="Delete Draft"
-                          onClick={() => handleDeleteDraft(draft.id)}
-                          disabled={loading || isSavingDraft}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
                 <h3 className="mb-4 text-lg font-bold text-slate-900 dark:text-white">Ongoing Tasks</h3>
                 <div className="space-y-2">
                   {existingSessions.length === 0 && (
                     <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
-                      No ongoing sessions for this repository.
+                      No ongoing sessions for this project.
                     </div>
                   )}
 
@@ -1784,7 +2138,7 @@ export default function GitRepoSelector({
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{session.title || session.sessionName}</p>
                         <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                          {getRepoDisplayName(session.repoPath)} • {session.agent}
+                          {getProjectDisplayName(session.projectPath || session.repoPath || '')} • {session.agent}
                         </p>
                       </div>
                       <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
@@ -1812,6 +2166,54 @@ export default function GitRepoSelector({
                           title={deletingSessionName === session.sessionName ? 'Deleting...' : 'Delete'}
                           onClick={() => handleDeleteSession(session)}
                           disabled={loading || deletingSessionName === session.sessionName}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
+                <h3 className="mb-4 text-lg font-bold text-slate-900 dark:text-white">Drafts</h3>
+                <div className="space-y-2">
+                  {existingDrafts.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
+                      No drafts for this project.
+                    </div>
+                  )}
+
+                  {existingDrafts.map((draft) => (
+                    <div
+                      key={draft.id}
+                      className="group flex items-center gap-3 rounded-lg border border-transparent px-3 py-3 transition-colors hover:border-slate-100 hover:bg-slate-50 dark:hover:border-slate-700/70 dark:hover:bg-slate-800/50"
+                    >
+                      <div
+                        className={`h-2 w-2 flex-shrink-0 rounded-full bg-blue-500`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{draft.title}</p>
+                        <p className="truncate text-xs text-slate-500 dark:text-slate-400">
+                          {getProjectDisplayName(draft.projectPath || draft.repoPath || '')} • {draft.agentProvider}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                        <button
+                          type="button"
+                          className="rounded p-1 text-slate-400 transition-colors hover:text-primary dark:text-slate-400 dark:hover:text-primary"
+                          title="Open Draft"
+                          onClick={() => handleOpenDraft(draft)}
+                          disabled={loading || isSavingDraft}
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded p-1 text-slate-400 transition-colors hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400"
+                          title="Delete Draft"
+                          onClick={() => handleDeleteDraft(draft.id)}
+                          disabled={loading || isSavingDraft}
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -1860,7 +2262,7 @@ export default function GitRepoSelector({
                   <textarea
                     id="task-description"
                     className="h-full w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-5 font-mono text-sm leading-relaxed text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100 dark:placeholder:text-slate-500"
-                    placeholder={`Describe the task for the AI agent...\nExample:\n1. Create a new component for the user profile card.\n2. Ensure it fetches data from the /api/user endpoint.\n3. Add error handling for failed requests.\n\nTip: Type @ to mention files.`}
+                    placeholder={`Describe the task for the AI agent...\nExample:\n1. Create a new component for the user profile card.\n2. Ensure it fetches data from the /api/user endpoint.\n3. Add error handling for failed requests.\n\nTip: Type @ to mention files or folders.`}
                     value={initialMessage}
                     onChange={handleMessageChange}
                     onKeyDown={handleKeyDown}
@@ -1983,7 +2385,7 @@ export default function GitRepoSelector({
         <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
           <div className="flex flex-col items-center gap-3 text-center">
             <span className="loading loading-spinner loading-lg text-primary"></span>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Loading repository...</h2>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Loading project...</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400">Preparing your task workspace.</p>
           </div>
         </div>
@@ -2060,23 +2462,23 @@ export default function GitRepoSelector({
           <div className="card-body">
             <h2 className="card-title flex items-center gap-2">
               <FolderGit2 className="w-6 h-6 text-primary" />
-              Git Repository Selector
+              Project Selector
             </h2>
             {isResolvingRepoFromName ? (
               <div className="alert text-sm py-2 px-3 mt-2 flex items-center gap-2">
                 <span className="loading loading-spinner loading-sm"></span>
                 {fromRepoName
-                  ? `Searching for repository "${fromRepoName}"...`
-                  : 'Searching for repository...'}
+                  ? `Searching for project "${fromRepoName}"...`
+                  : 'Searching for project...'}
               </div>
             ) : error ? (
               <div className="alert alert-error text-sm py-2 px-3 mt-2">{error}</div>
             ) : (
-              <div className="text-sm opacity-70 mt-2">No repository specified.</div>
+              <div className="text-sm opacity-70 mt-2">No project specified.</div>
             )}
             <div className="mt-4">
               <button className="btn btn-primary btn-sm" onClick={() => router.push('/')}>
-                Choose Repository
+                Choose Project
               </button>
             </div>
           </div>
@@ -2099,9 +2501,8 @@ export default function GitRepoSelector({
       {mode === 'home' && isBrowsing && (
         <FileBrowser
           initialPath={config?.defaultRoot || undefined}
-          onSelect={handleSelectRepo}
+          onSelect={(path) => handleSelectRepo(path, { navigateToNewInHome: false })}
           onCancel={() => setIsBrowsing(false)}
-          checkRepo={checkIsGitRepo}
         />
       )}
 

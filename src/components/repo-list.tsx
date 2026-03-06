@@ -161,7 +161,7 @@ export function RepoList() {
         if (!selectedNonRepoPath) return;
 
         try {
-            await addRepo.mutateAsync({ path: selectedNonRepoPath, initializeIfNeeded: true });
+            await addRepo.mutateAsync({ path: selectedNonRepoPath });
             setInitRepoDialogOpen(false);
             setSelectedNonRepoPath(null);
             router.push(`/git?path=${encodeURIComponent(selectedNonRepoPath)}`);
