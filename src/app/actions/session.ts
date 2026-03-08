@@ -9,8 +9,22 @@ import { getErrorMessage } from '../../lib/error-utils';
 import { removeWorktree, terminateSessionTerminalSessions } from './git';
 import { discoverProjectGitRepos } from './project';
 import { getLocalDb } from '@/lib/local-db';
+import {
+  normalizeNullableProviderReasoningEffort,
+  normalizeProviderReasoningEffort,
+} from '@/lib/agent/reasoning';
 import { publishSessionListUpdated } from '@/lib/sessionNotificationServer';
-import type { SessionGitRepoContext, SessionWorkspaceMode } from '@/lib/types';
+import type {
+  AgentProvider,
+  HistoryEntry,
+  ReasoningEffort,
+  SessionAgentHistoryInput,
+  SessionAgentHistoryItem,
+  SessionAgentRunState,
+  SessionAgentRuntimeState,
+  SessionGitRepoContext,
+  SessionWorkspaceMode,
+} from '@/lib/types';
 
 export type SessionMetadata = {
   sessionName: string;
@@ -20,7 +34,14 @@ export type SessionMetadata = {
   activeRepoPath?: string;
   gitRepos: SessionGitRepoContext[];
   agent: string;
+  agentProvider?: AgentProvider;
   model: string;
+  reasoningEffort?: ReasoningEffort;
+  threadId?: string;
+  activeTurnId?: string;
+  runState?: SessionAgentRunState;
+  lastError?: string;
+  lastActivityAt?: string;
   title?: string;
   devServerScript?: string;
   initialized?: boolean;
@@ -40,8 +61,9 @@ export type SessionLaunchContext = {
   startupScript?: string;
   attachmentPaths?: string[];
   attachmentNames?: string[];
-  agentProvider?: string;
+  agentProvider?: AgentProvider;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   sessionMode?: 'fast' | 'plan';
   isResume?: boolean;
   timestamp: string;
@@ -53,10 +75,34 @@ export type SessionPrefillContext = {
   title?: string;
   initialMessage?: string;
   attachmentPaths: string[];
-  agentProvider: string;
+  agentProvider: AgentProvider;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   // Backward compatibility.
   repoPath?: string;
+};
+
+export type SessionAgentRuntimeUpdate = {
+  agentProvider?: AgentProvider;
+  model?: string;
+  reasoningEffort?: ReasoningEffort | null;
+  threadId?: string | null;
+  activeTurnId?: string | null;
+  runState?: SessionAgentRunState | null;
+  lastError?: string | null;
+  lastActivityAt?: string | null;
+};
+
+export type SessionAgentSnapshot = {
+  metadata: SessionMetadata;
+  runtime: SessionAgentRuntimeState;
+  history: SessionAgentHistoryItem[];
+};
+
+export type SessionAgentHistoryQuery = {
+  threadId?: string;
+  turnId?: string;
+  limit?: number;
 };
 
 export type SessionCreateGitContextInput = {
@@ -76,6 +122,12 @@ type SessionRow = {
   base_branch: string | null;
   agent: string;
   model: string;
+  reasoning_effort: string | null;
+  thread_id: string | null;
+  active_turn_id: string | null;
+  run_state: string | null;
+  last_error: string | null;
+  last_activity_at: string | null;
   title: string | null;
   dev_server_script: string | null;
   initialized: number | null;
@@ -101,9 +153,23 @@ type SessionLaunchContextRow = {
   attachment_names_json: string | null;
   agent_provider: string | null;
   model: string | null;
+  reasoning_effort: string | null;
   session_mode: string | null;
   is_resume: number | null;
   timestamp: string;
+};
+
+type SessionAgentHistoryRow = {
+  session_name: string;
+  item_id: string;
+  thread_id: string | null;
+  turn_id: string | null;
+  ordinal: number | null;
+  kind: string;
+  status: string | null;
+  payload_json: string;
+  created_at: string;
+  updated_at: string;
 };
 
 function parseStringArray(value: string | null): string[] | undefined {
@@ -115,6 +181,15 @@ function parseStringArray(value: string | null): string[] | undefined {
   } catch {
     return undefined;
   }
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizeNullableText(value: string | null | undefined): string | null {
+  return normalizeOptionalText(value) ?? null;
 }
 
 function toSessionGitRepoContext(row: SessionGitRepoRow): SessionGitRepoContext {
@@ -187,7 +262,14 @@ async function rowToSessionMetadata(row: SessionRow): Promise<SessionMetadata> {
     activeRepoPath: row.active_repo_path?.trim() || undefined,
     gitRepos,
     agent: row.agent,
+    agentProvider: row.agent as AgentProvider,
     model: row.model,
+    reasoningEffort: normalizeProviderReasoningEffort(row.agent, row.reasoning_effort),
+    threadId: normalizeOptionalText(row.thread_id),
+    activeTurnId: normalizeOptionalText(row.active_turn_id),
+    runState: normalizeOptionalText(row.run_state) as SessionAgentRunState | undefined,
+    lastError: normalizeOptionalText(row.last_error),
+    lastActivityAt: normalizeOptionalText(row.last_activity_at),
     title: row.title ?? undefined,
     devServerScript: row.dev_server_script ?? undefined,
     initialized: row.initialized === null ? undefined : Boolean(row.initialized),
@@ -201,6 +283,7 @@ async function rowToSessionMetadata(row: SessionRow): Promise<SessionMetadata> {
 }
 
 function rowToSessionLaunchContext(row: SessionLaunchContextRow): SessionLaunchContext {
+  const agentProvider = (row.agent_provider ?? undefined) as AgentProvider | undefined;
   return {
     sessionName: row.session_name,
     title: row.title ?? undefined,
@@ -209,12 +292,52 @@ function rowToSessionLaunchContext(row: SessionLaunchContextRow): SessionLaunchC
     startupScript: row.startup_script ?? undefined,
     attachmentPaths: parseStringArray(row.attachment_paths_json),
     attachmentNames: parseStringArray(row.attachment_names_json),
-    agentProvider: row.agent_provider ?? undefined,
+    agentProvider,
     model: row.model ?? undefined,
+    reasoningEffort: normalizeProviderReasoningEffort(agentProvider, row.reasoning_effort),
     sessionMode: row.session_mode === 'plan' ? 'plan' : (row.session_mode === 'fast' ? 'fast' : undefined),
     isResume: row.is_resume === null ? undefined : Boolean(row.is_resume),
     timestamp: row.timestamp,
   };
+}
+
+function toSessionAgentRuntimeState(metadata: SessionMetadata): SessionAgentRuntimeState {
+  return {
+    sessionName: metadata.sessionName,
+    agentProvider: (metadata.agentProvider ?? metadata.agent) as AgentProvider,
+    model: metadata.model,
+    reasoningEffort: metadata.reasoningEffort,
+    threadId: metadata.threadId ?? null,
+    activeTurnId: metadata.activeTurnId ?? null,
+    runState: metadata.runState ?? null,
+    lastError: metadata.lastError ?? null,
+    lastActivityAt: metadata.lastActivityAt ?? null,
+  };
+}
+
+function toSessionAgentHistoryItem(row: SessionAgentHistoryRow): SessionAgentHistoryItem | null {
+  try {
+    const parsed = JSON.parse(row.payload_json) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const payload = parsed as Record<string, unknown>;
+    if (payload.kind !== row.kind) return null;
+    if (typeof payload.id !== 'string' || !payload.id.trim()) {
+      payload.id = row.item_id;
+    }
+
+    return {
+      ...(payload as HistoryEntry),
+      sessionName: row.session_name,
+      threadId: normalizeNullableText(row.thread_id),
+      turnId: normalizeNullableText(row.turn_id),
+      ordinal: row.ordinal ?? 0,
+      itemStatus: normalizeNullableText(row.status),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function normalizePath(value: string): string {
@@ -409,15 +532,22 @@ export async function saveSessionMetadata(metadata: SessionMetadata): Promise<vo
   const compatibility = toCompatibilityFields(metadata);
 
   const transaction = db.transaction((nextMetadata: SessionMetadata) => {
+    const agentProvider = normalizeOptionalText(nextMetadata.agentProvider ?? nextMetadata.agent) ?? nextMetadata.agent;
+    const reasoningEffort = normalizeNullableProviderReasoningEffort(
+      agentProvider,
+      nextMetadata.reasoningEffort,
+    );
     db.prepare(`
       INSERT OR REPLACE INTO sessions (
         session_name, project_path, workspace_path, workspace_mode, active_repo_path,
         repo_path, worktree_path, branch_name, base_branch,
-        agent, model, title, dev_server_script, initialized, timestamp
+        agent, model, reasoning_effort, thread_id, active_turn_id, run_state,
+        last_error, last_activity_at, title, dev_server_script, initialized, timestamp
       ) VALUES (
         @sessionName, @projectPath, @workspacePath, @workspaceMode, @activeRepoPath,
         @repoPath, @worktreePath, @branchName, @baseBranch,
-        @agent, @model, @title, @devServerScript, @initialized, @timestamp
+        @agent, @model, @reasoningEffort, @threadId, @activeTurnId, @runState,
+        @lastError, @lastActivityAt, @title, @devServerScript, @initialized, @timestamp
       )
     `).run({
       sessionName: nextMetadata.sessionName,
@@ -429,8 +559,14 @@ export async function saveSessionMetadata(metadata: SessionMetadata): Promise<vo
       worktreePath: compatibility.worktreePath ?? null,
       branchName: compatibility.branchName ?? null,
       baseBranch: compatibility.baseBranch ?? null,
-      agent: nextMetadata.agent,
+      agent: agentProvider,
       model: nextMetadata.model,
+      reasoningEffort,
+      threadId: normalizeNullableText(nextMetadata.threadId),
+      activeTurnId: normalizeNullableText(nextMetadata.activeTurnId),
+      runState: normalizeNullableText(nextMetadata.runState),
+      lastError: normalizeNullableText(nextMetadata.lastError),
+      lastActivityAt: normalizeNullableText(nextMetadata.lastActivityAt),
       title: nextMetadata.title ?? null,
       devServerScript: nextMetadata.devServerScript ?? null,
       initialized: nextMetadata.initialized === undefined ? null : Number(nextMetadata.initialized),
@@ -486,15 +622,16 @@ export async function saveSessionLaunchContext(
       ...context,
       timestamp: new Date().toISOString(),
     };
+    const agentProvider = contextData.agentProvider;
     const db = getLocalDb();
     db.prepare(`
       INSERT OR REPLACE INTO session_launch_contexts (
         session_name, title, initial_message, raw_initial_message, startup_script,
-        attachment_paths_json, attachment_names_json, agent_provider, model,
+        attachment_paths_json, attachment_names_json, agent_provider, model, reasoning_effort,
         session_mode, is_resume, timestamp
       ) VALUES (
         @sessionName, @title, @initialMessage, @rawInitialMessage, @startupScript,
-        @attachmentPathsJson, @attachmentNamesJson, @agentProvider, @model,
+        @attachmentPathsJson, @attachmentNamesJson, @agentProvider, @model, @reasoningEffort,
         @sessionMode, @isResume, @timestamp
       )
     `).run({
@@ -505,8 +642,12 @@ export async function saveSessionLaunchContext(
       startupScript: contextData.startupScript ?? null,
       attachmentPathsJson: contextData.attachmentPaths ? JSON.stringify(contextData.attachmentPaths) : null,
       attachmentNamesJson: contextData.attachmentNames ? JSON.stringify(contextData.attachmentNames) : null,
-      agentProvider: contextData.agentProvider ?? null,
+      agentProvider: agentProvider ?? null,
       model: contextData.model ?? null,
+      reasoningEffort: normalizeNullableProviderReasoningEffort(
+        agentProvider,
+        contextData.reasoningEffort,
+      ),
       sessionMode: contextData.sessionMode ?? null,
       isResume: contextData.isResume === undefined ? null : Number(contextData.isResume),
       timestamp: contextData.timestamp,
@@ -526,7 +667,7 @@ export async function consumeSessionLaunchContext(
     const row = db.prepare(`
       SELECT
         session_name, title, initial_message, raw_initial_message, startup_script,
-        attachment_paths_json, attachment_names_json, agent_provider, model,
+        attachment_paths_json, attachment_names_json, agent_provider, model, reasoning_effort,
         session_mode, is_resume, timestamp
       FROM session_launch_contexts
       WHERE session_name = ?
@@ -547,7 +688,7 @@ async function getSessionLaunchContext(
     const row = db.prepare(`
       SELECT
         session_name, title, initial_message, raw_initial_message, startup_script,
-        attachment_paths_json, attachment_names_json, agent_provider, model,
+        attachment_paths_json, attachment_names_json, agent_provider, model, reasoning_effort,
         session_mode, is_resume, timestamp
       FROM session_launch_contexts
       WHERE session_name = ?
@@ -596,8 +737,9 @@ export async function getSessionPrefillContext(
     title: launchContext?.title || metadata.title,
     initialMessage: launchContext?.rawInitialMessage || launchContext?.initialMessage,
     attachmentPaths,
-    agentProvider: launchContext?.agentProvider || metadata.agent,
+    agentProvider: (launchContext?.agentProvider || metadata.agent) as AgentProvider,
     model: launchContext?.model || metadata.model,
+    reasoningEffort: launchContext?.reasoningEffort || metadata.reasoningEffort,
   };
 
   return { success: true, context: prefill };
@@ -671,7 +813,8 @@ export async function getSessionMetadata(sessionName: string): Promise<SessionMe
       SELECT
         session_name, project_path, workspace_path, workspace_mode, active_repo_path,
         repo_path, worktree_path, branch_name, base_branch,
-        agent, model, title, dev_server_script, initialized, timestamp
+        agent, model, reasoning_effort, thread_id, active_turn_id, run_state,
+        last_error, last_activity_at, title, dev_server_script, initialized, timestamp
       FROM sessions
       WHERE session_name = ?
     `).get(sessionName) as SessionRow | undefined;
@@ -691,7 +834,8 @@ export async function listSessions(projectPath?: string): Promise<SessionMetadat
         SELECT
           session_name, project_path, workspace_path, workspace_mode, active_repo_path,
           repo_path, worktree_path, branch_name, base_branch,
-          agent, model, title, dev_server_script, initialized, timestamp
+          agent, model, reasoning_effort, thread_id, active_turn_id, run_state,
+          last_error, last_activity_at, title, dev_server_script, initialized, timestamp
         FROM sessions
         WHERE project_path = ?
         ORDER BY timestamp DESC
@@ -700,7 +844,8 @@ export async function listSessions(projectPath?: string): Promise<SessionMetadat
         SELECT
           session_name, project_path, workspace_path, workspace_mode, active_repo_path,
           repo_path, worktree_path, branch_name, base_branch,
-          agent, model, title, dev_server_script, initialized, timestamp
+          agent, model, reasoning_effort, thread_id, active_turn_id, run_state,
+          last_error, last_activity_at, title, dev_server_script, initialized, timestamp
         FROM sessions
         ORDER BY timestamp DESC
       `;
@@ -716,10 +861,329 @@ export async function listSessions(projectPath?: string): Promise<SessionMetadat
   }
 }
 
+export async function getSessionAgentRuntimeState(sessionName: string): Promise<SessionAgentRuntimeState | null> {
+  const metadata = await getSessionMetadata(sessionName);
+  return metadata ? toSessionAgentRuntimeState(metadata) : null;
+}
+
+export async function updateSessionAgentRuntimeState(
+  sessionName: string,
+  updates: SessionAgentRuntimeUpdate,
+): Promise<{ success: boolean; runtime?: SessionAgentRuntimeState; error?: string }> {
+  try {
+    const metadata = await getSessionMetadata(sessionName);
+    if (!metadata) {
+      return { success: false, error: 'Session metadata not found' };
+    }
+
+    const nextAgentProvider = normalizeOptionalText(updates.agentProvider) ?? metadata.agent;
+    const nextModel = normalizeOptionalText(updates.model) ?? metadata.model;
+    const nextMetadata: SessionMetadata = {
+      ...metadata,
+      agent: nextAgentProvider,
+      agentProvider: nextAgentProvider as AgentProvider,
+      model: nextModel,
+      reasoningEffort: updates.reasoningEffort === undefined
+        ? metadata.reasoningEffort
+        : normalizeProviderReasoningEffort(nextAgentProvider, updates.reasoningEffort),
+      threadId: updates.threadId === undefined ? metadata.threadId : (normalizeOptionalText(updates.threadId) ?? undefined),
+      activeTurnId: updates.activeTurnId === undefined
+        ? metadata.activeTurnId
+        : (normalizeOptionalText(updates.activeTurnId) ?? undefined),
+      runState: updates.runState === undefined
+        ? metadata.runState
+        : (normalizeOptionalText(updates.runState) as SessionAgentRunState | undefined),
+      lastError: updates.lastError === undefined ? metadata.lastError : (normalizeOptionalText(updates.lastError) ?? undefined),
+      lastActivityAt: updates.lastActivityAt === undefined
+        ? metadata.lastActivityAt
+        : (normalizeOptionalText(updates.lastActivityAt) ?? undefined),
+    };
+
+    await saveSessionMetadata(nextMetadata);
+    return { success: true, runtime: toSessionAgentRuntimeState(nextMetadata) };
+  } catch (e: unknown) {
+    console.error('Failed to update session agent runtime state:', e);
+    return { success: false, error: getErrorMessage(e) };
+  }
+}
+
+export async function listSessionAgentHistory(
+  sessionName: string,
+  query: SessionAgentHistoryQuery = {},
+): Promise<SessionAgentHistoryItem[]> {
+  try {
+    const db = getLocalDb();
+    const clauses = ['session_name = ?'];
+    const params: Array<string | number> = [sessionName];
+    const threadId = normalizeOptionalText(query.threadId);
+    const turnId = normalizeOptionalText(query.turnId);
+    const limit = typeof query.limit === 'number' && Number.isFinite(query.limit) && query.limit > 0
+      ? Math.floor(query.limit)
+      : undefined;
+
+    if (threadId) {
+      clauses.push('thread_id = ?');
+      params.push(threadId);
+    }
+
+    if (turnId) {
+      clauses.push('turn_id = ?');
+      params.push(turnId);
+    }
+
+    let sql = `
+      SELECT
+        session_name, item_id, thread_id, turn_id, ordinal, kind, status,
+        payload_json, created_at, updated_at
+      FROM session_agent_history_items
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY ordinal ASC, created_at ASC, item_id ASC
+    `;
+
+    if (limit !== undefined) {
+      sql += '\nLIMIT ?';
+      params.push(limit);
+    }
+
+    const rows = db.prepare(sql).all(...params) as SessionAgentHistoryRow[];
+    return rows
+      .map((row) => toSessionAgentHistoryItem(row))
+      .filter((item): item is SessionAgentHistoryItem => Boolean(item));
+  } catch (e) {
+    console.error('Failed to list session agent history:', e);
+    return [];
+  }
+}
+
+export async function getSessionAgentSnapshot(
+  sessionName: string,
+): Promise<{ success: boolean; snapshot?: SessionAgentSnapshot; error?: string }> {
+  try {
+    const metadata = await getSessionMetadata(sessionName);
+    if (!metadata) {
+      return { success: false, error: 'Session metadata not found' };
+    }
+
+    const history = await listSessionAgentHistory(sessionName);
+    return {
+      success: true,
+      snapshot: {
+        metadata,
+        runtime: toSessionAgentRuntimeState(metadata),
+        history,
+      },
+    };
+  } catch (e: unknown) {
+    console.error('Failed to get session agent snapshot:', e);
+    return { success: false, error: getErrorMessage(e) };
+  }
+}
+
+type NormalizedHistoryWrite = {
+  itemId: string;
+  kind: HistoryEntry['kind'];
+  payloadJson: string;
+  threadIdProvided: boolean;
+  threadId: string | null;
+  turnIdProvided: boolean;
+  turnId: string | null;
+  ordinal: number;
+  statusProvided: boolean;
+  itemStatus: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function normalizeHistoryWrite(input: SessionAgentHistoryInput): NormalizedHistoryWrite | null {
+  const itemId = normalizeOptionalText(input.id);
+  if (!itemId) return null;
+
+  const {
+    threadId,
+    turnId,
+    ordinal,
+    itemStatus,
+    createdAt,
+    updatedAt,
+    ...entry
+  } = input;
+
+  const normalizedEntry = { ...entry, id: itemId } as HistoryEntry;
+  const normalizedOrdinal = typeof ordinal === 'number' && Number.isFinite(ordinal)
+    ? Math.max(0, Math.floor(ordinal))
+    : 0;
+
+  return {
+    itemId,
+    kind: normalizedEntry.kind,
+    payloadJson: JSON.stringify(normalizedEntry),
+    threadIdProvided: Object.prototype.hasOwnProperty.call(input, 'threadId'),
+    threadId: normalizeNullableText(threadId),
+    turnIdProvided: Object.prototype.hasOwnProperty.call(input, 'turnId'),
+    turnId: normalizeNullableText(turnId),
+    ordinal: normalizedOrdinal,
+    statusProvided: Object.prototype.hasOwnProperty.call(input, 'itemStatus'),
+    itemStatus: normalizeNullableText(itemStatus),
+    createdAt: normalizeOptionalText(createdAt) ?? new Date().toISOString(),
+    updatedAt: normalizeOptionalText(updatedAt) ?? new Date().toISOString(),
+  };
+}
+
+export async function upsertSessionAgentHistory(
+  sessionName: string,
+  entries: SessionAgentHistoryInput[],
+): Promise<{ success: boolean; history?: SessionAgentHistoryItem[]; error?: string }> {
+  try {
+    const metadata = await getSessionMetadata(sessionName);
+    if (!metadata) {
+      return { success: false, error: 'Session metadata not found' };
+    }
+
+    const normalizedEntries = entries
+      .map((entry) => normalizeHistoryWrite(entry))
+      .filter((entry): entry is NormalizedHistoryWrite => Boolean(entry));
+
+    if (normalizedEntries.length === 0) {
+      return { success: true, history: await listSessionAgentHistory(sessionName) };
+    }
+
+    const db = getLocalDb();
+    const selectExisting = db.prepare(`
+      SELECT
+        session_name, item_id, thread_id, turn_id, ordinal, kind, status,
+        payload_json, created_at, updated_at
+      FROM session_agent_history_items
+      WHERE session_name = ? AND item_id = ?
+    `);
+    const insertOrReplace = db.prepare(`
+      INSERT OR REPLACE INTO session_agent_history_items (
+        session_name, item_id, thread_id, turn_id, ordinal, kind, status,
+        payload_json, created_at, updated_at
+      ) VALUES (
+        @sessionName, @itemId, @threadId, @turnId, @ordinal, @kind, @status,
+        @payloadJson, @createdAt, @updatedAt
+      )
+    `);
+
+    const transaction = db.transaction((writes: NormalizedHistoryWrite[]) => {
+      for (const write of writes) {
+        const existing = selectExisting.get(sessionName, write.itemId) as SessionAgentHistoryRow | undefined;
+        insertOrReplace.run({
+          sessionName,
+          itemId: write.itemId,
+          threadId: write.threadIdProvided ? write.threadId : (existing?.thread_id ?? null),
+          turnId: write.turnIdProvided ? write.turnId : (existing?.turn_id ?? null),
+          ordinal: write.ordinal,
+          kind: write.kind,
+          status: write.statusProvided ? write.itemStatus : (existing?.status ?? null),
+          payloadJson: write.payloadJson,
+          createdAt: existing?.created_at ?? write.createdAt,
+          updatedAt: write.updatedAt,
+        });
+      }
+    });
+
+    transaction(normalizedEntries);
+    const latestUpdatedAt = normalizedEntries.reduce(
+      (latest, entry) => (latest > entry.updatedAt ? latest : entry.updatedAt),
+      normalizedEntries[0]?.updatedAt ?? new Date().toISOString(),
+    );
+    db.prepare(`
+      UPDATE sessions
+      SET last_activity_at = ?
+      WHERE session_name = ?
+    `).run(latestUpdatedAt, sessionName);
+    return { success: true, history: await listSessionAgentHistory(sessionName) };
+  } catch (e: unknown) {
+    console.error('Failed to upsert session agent history:', e);
+    return { success: false, error: getErrorMessage(e) };
+  }
+}
+
+export async function replaceSessionAgentHistory(
+  sessionName: string,
+  entries: SessionAgentHistoryInput[],
+): Promise<{ success: boolean; history?: SessionAgentHistoryItem[]; error?: string }> {
+  try {
+    const metadata = await getSessionMetadata(sessionName);
+    if (!metadata) {
+      return { success: false, error: 'Session metadata not found' };
+    }
+
+    const db = getLocalDb();
+    const normalizedEntries = entries
+      .map((entry) => normalizeHistoryWrite(entry))
+      .filter((entry): entry is NormalizedHistoryWrite => Boolean(entry));
+
+    const transaction = db.transaction((writes: NormalizedHistoryWrite[]) => {
+      db.prepare(`DELETE FROM session_agent_history_items WHERE session_name = ?`).run(sessionName);
+      const insert = db.prepare(`
+        INSERT INTO session_agent_history_items (
+          session_name, item_id, thread_id, turn_id, ordinal, kind, status,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          @sessionName, @itemId, @threadId, @turnId, @ordinal, @kind, @status,
+          @payloadJson, @createdAt, @updatedAt
+        )
+      `);
+
+      for (const write of writes) {
+        insert.run({
+          sessionName,
+          itemId: write.itemId,
+          threadId: write.threadId,
+          turnId: write.turnId,
+          ordinal: write.ordinal,
+          kind: write.kind,
+          status: write.itemStatus,
+          payloadJson: write.payloadJson,
+          createdAt: write.createdAt,
+          updatedAt: write.updatedAt,
+        });
+      }
+    });
+
+    transaction(normalizedEntries);
+    const latestUpdatedAt = normalizedEntries.reduce(
+      (latest, entry) => (latest > entry.updatedAt ? latest : entry.updatedAt),
+      normalizedEntries[0]?.updatedAt ?? new Date().toISOString(),
+    );
+    db.prepare(`
+      UPDATE sessions
+      SET last_activity_at = ?
+      WHERE session_name = ?
+    `).run(latestUpdatedAt, sessionName);
+    return { success: true, history: await listSessionAgentHistory(sessionName) };
+  } catch (e: unknown) {
+    console.error('Failed to replace session agent history:', e);
+    return { success: false, error: getErrorMessage(e) };
+  }
+}
+
+export async function clearSessionAgentHistory(
+  sessionName: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const db = getLocalDb();
+    db.prepare(`DELETE FROM session_agent_history_items WHERE session_name = ?`).run(sessionName);
+    return { success: true };
+  } catch (e: unknown) {
+    console.error('Failed to clear session agent history:', e);
+    return { success: false, error: getErrorMessage(e) };
+  }
+}
+
 export async function createSession(
   projectPath: string,
   gitContextsOrBaseBranch: string | SessionCreateGitContextInput[],
-  metadata: { agent: string; model: string; title?: string; devServerScript?: string }
+  metadata: {
+    agent: string;
+    agentProvider?: AgentProvider;
+    model: string;
+    reasoningEffort?: ReasoningEffort;
+    title?: string;
+    devServerScript?: string;
+  }
 ): Promise<{
   success: boolean;
   sessionName?: string;
@@ -789,7 +1253,9 @@ export async function createSession(
       activeRepoPath,
       gitRepos,
       agent: metadata.agent,
+      agentProvider: metadata.agentProvider ?? (metadata.agent as AgentProvider),
       model: metadata.model,
+      reasoningEffort: metadata.reasoningEffort,
       title: metadata.title,
       devServerScript: metadata.devServerScript,
       initialized: false,
@@ -862,6 +1328,7 @@ export async function deleteSession(sessionName: string): Promise<{ success: boo
     db.prepare(`DELETE FROM sessions WHERE session_name = ?`).run(sessionName);
     db.prepare(`DELETE FROM session_git_repos WHERE session_name = ?`).run(sessionName);
     db.prepare(`DELETE FROM session_launch_contexts WHERE session_name = ?`).run(sessionName);
+    db.prepare(`DELETE FROM session_agent_history_items WHERE session_name = ?`).run(sessionName);
 
     const promptsDir = await getSessionPromptsDir();
     const promptFilePath = path.join(promptsDir, `${sessionName}.txt`);

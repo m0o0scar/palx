@@ -2,6 +2,7 @@ import http, { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
 import { URL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
+import type { ChatStreamEvent, SessionAgentRuntimeState } from '@/lib/types';
 
 const NOTIFICATION_SERVER_HOST = '127.0.0.1';
 
@@ -10,6 +11,7 @@ type SessionNotificationServerState = {
   server: http.Server;
   socketServer: WebSocketServer;
   sessionSockets: Map<string, Set<WebSocket>>;
+  agentSessionSockets: Map<string, Set<WebSocket>>;
   sessionListSockets: Set<WebSocket>;
 };
 
@@ -23,6 +25,14 @@ export type SessionNotificationPayload = {
 
 export type SessionListUpdatedPayload = {
   type: 'session-list-updated';
+  timestamp: string;
+};
+
+export type SessionAgentEventPayload = {
+  type: 'session-agent-event';
+  sessionId: string;
+  snapshot: SessionAgentRuntimeState;
+  event: ChatStreamEvent;
   timestamp: string;
 };
 
@@ -81,6 +91,7 @@ function detachSocketFromSession(
 
 async function createSessionNotificationServer(): Promise<SessionNotificationServerState> {
   const sessionSockets = new Map<string, Set<WebSocket>>();
+  const agentSessionSockets = new Map<string, Set<WebSocket>>();
   const sessionListSockets = new Set<WebSocket>();
   const socketServer = new WebSocketServer({ noServer: true });
 
@@ -93,6 +104,52 @@ async function createSessionNotificationServer(): Promise<SessionNotificationSer
       });
       socket.on('error', () => {
         sessionListSockets.delete(socket);
+      });
+      return;
+    }
+
+    if (channel === 'agent') {
+      const sessionId = parseSessionIdFromRequest(request);
+      if (!sessionId) {
+        socket.close(1008, 'sessionId query parameter is required');
+        return;
+      }
+
+      const state = globalThis.__vibaSessionNotificationServerState;
+      if (!state) {
+        socket.close(1011, 'notification server unavailable');
+        return;
+      }
+
+      attachSocketToSession(
+        {
+          ...state,
+          sessionSockets: state.agentSessionSockets,
+        },
+        sessionId,
+        socket,
+      );
+
+      socket.on('close', () => {
+        detachSocketFromSession(
+          {
+            ...state,
+            sessionSockets: state.agentSessionSockets,
+          },
+          sessionId,
+          socket,
+        );
+      });
+
+      socket.on('error', () => {
+        detachSocketFromSession(
+          {
+            ...state,
+            sessionSockets: state.agentSessionSockets,
+          },
+          sessionId,
+          socket,
+        );
       });
       return;
     }
@@ -149,6 +206,7 @@ async function createSessionNotificationServer(): Promise<SessionNotificationSer
     server,
     socketServer,
     sessionSockets,
+    agentSessionSockets,
     sessionListSockets,
   };
 }
@@ -188,6 +246,13 @@ export async function ensureSessionNotificationServer(): Promise<{ wsBaseUrl: st
 
 export function buildSessionNotificationWsUrl(wsBaseUrl: string, sessionId: string): string {
   const url = new URL(wsBaseUrl);
+  url.searchParams.set('sessionId', sessionId);
+  return url.toString();
+}
+
+export function buildSessionAgentWsUrl(wsBaseUrl: string, sessionId: string): string {
+  const url = new URL(wsBaseUrl);
+  url.searchParams.set('channel', 'agent');
   url.searchParams.set('sessionId', sessionId);
   return url.toString();
 }
@@ -284,6 +349,59 @@ export async function publishSessionListUpdated(): Promise<number> {
 
   for (const staleSocket of staleSockets) {
     state.sessionListSockets.delete(staleSocket);
+  }
+
+  return delivered;
+}
+
+export async function publishSessionAgentEvent(input: {
+  sessionId: string;
+  snapshot: SessionAgentRuntimeState;
+  event: ChatStreamEvent;
+}): Promise<number> {
+  const sessionId = input.sessionId.trim();
+  if (!sessionId) {
+    throw new Error('sessionId is required');
+  }
+
+  const state = await getSessionNotificationServerState();
+  const sockets = state.agentSessionSockets.get(sessionId);
+  if (!sockets || sockets.size === 0) {
+    return 0;
+  }
+
+  const payload: SessionAgentEventPayload = {
+    type: 'session-agent-event',
+    sessionId,
+    snapshot: input.snapshot,
+    event: input.event,
+    timestamp: new Date().toISOString(),
+  };
+  const serializedPayload = JSON.stringify(payload);
+
+  let delivered = 0;
+  const staleSockets: WebSocket[] = [];
+
+  for (const socket of sockets) {
+    if (socket.readyState !== WebSocket.OPEN) {
+      staleSockets.push(socket);
+      continue;
+    }
+
+    try {
+      socket.send(serializedPayload);
+      delivered += 1;
+    } catch {
+      staleSockets.push(socket);
+    }
+  }
+
+  for (const staleSocket of staleSockets) {
+    sockets.delete(staleSocket);
+  }
+
+  if (sockets.size === 0) {
+    state.agentSessionSockets.delete(sessionId);
   }
 
   return delivered;

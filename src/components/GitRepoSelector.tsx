@@ -5,11 +5,7 @@ import { FolderGit2, Plus, X, ChevronRight, ChevronDown, Bot, Trash2, ExternalLi
 import FileBrowser from './FileBrowser';
 import {
   GitBranch,
-  startTtydProcess,
   listRepoFiles,
-  checkAgentCliInstalled,
-  installAgentCli,
-  SupportedAgentCli,
   resolveRepoCardIcon,
 } from '@/app/actions/git';
 import {
@@ -22,20 +18,17 @@ import {
 import { createSession, deleteSession, getSessionPrefillContext, listSessions, saveSessionLaunchContext, SessionMetadata } from '@/app/actions/session';
 import { deleteDraft, listDrafts, saveDraft, DraftMetadata } from '@/app/actions/draft';
 import { getConfig, updateConfig, updateProjectSettings, Config } from '@/app/actions/config';
-import { listAgentApiCredentials, listCredentials } from '@/app/actions/credentials';
+import { listCredentials } from '@/app/actions/credentials';
 import type { Credential } from '@/lib/credentials';
 import { useRouter } from 'next/navigation';
 import { getBaseName } from '@/lib/path';
 import { doesSessionPrefillMatchProject } from '@/lib/session-prefill';
 import { notifySessionsUpdated, subscribeToSessionsUpdated } from '@/lib/session-updates';
 import { consumePendingSessionNavigationRetry, recordPendingSessionNavigation } from '@/lib/session-navigation';
-import { hasStartupTaskDescription } from '@/lib/agent-startup-prompt';
+import { buildAgentStartupPrompt, hasStartupTaskDescription } from '@/lib/agent-startup-prompt';
+import { normalizeProviderReasoningEffort } from '@/lib/agent/reasoning';
 import {
-  applyThemeToTerminalIframe,
-  applyThemeToTerminalWindow,
   resolveShouldUseDarkTheme,
-  TERMINAL_THEME_DARK,
-  TERMINAL_THEME_LIGHT,
   THEME_MODE_STORAGE_KEY,
   THEME_REFRESH_EVENT,
 } from '@/lib/ttyd-theme';
@@ -45,6 +38,13 @@ import { HomeDashboard } from './git-repo-selector/HomeDashboard';
 import { RepoSettingsDialog } from './git-repo-selector/RepoSettingsDialog';
 import { CloneRemoteDialog } from './git-repo-selector/CloneRemoteDialog';
 import { type RepoCredentialSelection } from './git-repo-selector/types';
+import type {
+  AgentProvider,
+  AppStatus,
+  ModelOption,
+  ProviderCatalogEntry,
+  ReasoningEffort,
+} from '@/lib/types';
 
 type SessionMode = 'fast' | 'plan';
 type ThemeMode = 'auto' | 'light' | 'dark';
@@ -54,17 +54,11 @@ const THEME_MODE_SEQUENCE: ThemeMode[] = ['auto', 'light', 'dark'];
 
 const SESSION_MODE_STORAGE_KEY = 'viba:new-session-mode';
 const SESSION_TITLE_MAX_LENGTH = 120;
-const AGENT_LOGIN_COMMANDS: Record<SupportedAgentCli, string> = {
-  codex: 'codex',
-};
-const AGENT_CLI_LABELS: Record<SupportedAgentCli, string> = {
+const SUPPORTED_AGENT_PROVIDERS = ['codex', 'gemini', 'cursor'] as const;
+const AGENT_PROVIDER_FALLBACK_LABELS: Record<string, string> = {
   codex: 'Codex CLI',
-};
-
-type TerminalWindow = Window & {
-  term?: {
-    paste: (text: string) => void;
-  };
+  gemini: 'Gemini CLI',
+  cursor: 'Cursor Agent CLI',
 };
 
 type PredefinedPrompt = {
@@ -117,6 +111,48 @@ function toProjectRelativeRepoPath(projectPath: string, repoPath: string): strin
 function arePathListsEqual(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
+}
+
+type AgentStatusResponse = {
+  providers: ProviderCatalogEntry[];
+  defaultProvider: AgentProvider;
+  status: AppStatus | null;
+  error?: string;
+};
+
+type AgentLoginResponse =
+  | {
+      kind: 'browser';
+      authUrl: string;
+      loginId?: string | null;
+      message?: string | null;
+    }
+  | {
+      kind: 'pending';
+      loginId?: string | null;
+      message: string;
+    };
+
+function normalizeAgentProvider(value: string | null | undefined): AgentProvider {
+  return value === 'codex' || value === 'gemini' || value === 'cursor' ? value : 'codex';
+}
+
+function agentProviderLabel(provider: string, providers: ProviderCatalogEntry[] = []): string {
+  return providers.find((entry) => entry.id === provider)?.label
+    || AGENT_PROVIDER_FALLBACK_LABELS[provider]
+    || provider;
+}
+
+function normalizeReasoningSelection(value: string): ReasoningEffort | undefined {
+  const normalized = value.trim();
+  return normalized ? normalized as ReasoningEffort : undefined;
+}
+
+function normalizeProviderReasoningSelection(
+  provider: AgentProvider,
+  value: string,
+): ReasoningEffort | undefined {
+  return normalizeProviderReasoningEffort(provider, normalizeReasoningSelection(value));
 }
 
 export default function GitRepoSelector({
@@ -181,14 +217,19 @@ export default function GitRepoSelector({
   const [error, setError] = useState<string | null>(null);
   const [isResolvingRepoFromName, setIsResolvingRepoFromName] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
-  const [isInstallingAgentCli, setIsInstallingAgentCli] = useState(false);
-  const [installingAgentCli, setInstallingAgentCli] = useState<SupportedAgentCli | null>(null);
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
-  const [loginAgentCli, setLoginAgentCli] = useState<SupportedAgentCli | null>(null);
-  const [loginCommand, setLoginCommand] = useState('');
+  const [agentProviders, setAgentProviders] = useState<ProviderCatalogEntry[]>([]);
+  const [selectedAgentProvider, setSelectedAgentProvider] = useState<AgentProvider>('codex');
+  const [selectedAgentModel, setSelectedAgentModel] = useState('');
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<ReasoningEffort | ''>('');
+  const [agentStatus, setAgentStatus] = useState<AppStatus | null>(null);
+  const [isLoadingAgentStatus, setIsLoadingAgentStatus] = useState(false);
+  const [isInstallingAgentProvider, setIsInstallingAgentProvider] = useState(false);
+  const [installingAgentProvider, setInstallingAgentProvider] = useState<AgentProvider | null>(null);
+  const [installLogs, setInstallLogs] = useState<string[]>([]);
+  const [agentSetupMessage, setAgentSetupMessage] = useState<string | null>(null);
+  const [isWaitingForLogin, setIsWaitingForLogin] = useState(false);
+  const [waitingForLoginProvider, setWaitingForLoginProvider] = useState<AgentProvider | null>(null);
   const [homeSearchQuery, setHomeSearchQuery] = useState('');
-  const [loginCommandInjected, setLoginCommandInjected] = useState(false);
-  const [loginModalError, setLoginModalError] = useState<string | null>(null);
   const [repoSettingsError, setRepoSettingsError] = useState<string | null>(null);
   const [isUploadingProjectIcon, setIsUploadingProjectIcon] = useState(false);
   const [isSavingRepoSettings, setIsSavingRepoSettings] = useState(false);
@@ -203,7 +244,6 @@ export default function GitRepoSelector({
   const repoCardIconResolutionsInFlightRef = useRef<Set<string>>(new Set());
   const selectedProjectLoadRequestRef = useRef(0);
   const pendingProjectRouteSyncRef = useRef<string | null>(null);
-  const loginTerminalRef = useRef<HTMLIFrameElement>(null);
 
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const sessionNavigationCommittedRef = useRef(false);
@@ -239,8 +279,10 @@ export default function GitRepoSelector({
     return requestId;
   }, [resetSelectedProjectState]);
 
-  const navigateToSession = useCallback((sessionName: string) => {
-    const targetPath = `/session/${encodeURIComponent(sessionName)}`;
+  const navigateToSession = useCallback((sessionName: string, options?: { fresh?: boolean }) => {
+    const targetPath = options?.fresh
+      ? `/session/${encodeURIComponent(sessionName)}?fresh=1`
+      : `/session/${encodeURIComponent(sessionName)}`;
     sessionNavigationCommittedRef.current = true;
     recordPendingSessionNavigation(sessionName);
     // Use a hard navigation here. App Router transitions out of /new can be interrupted
@@ -395,11 +437,9 @@ export default function GitRepoSelector({
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const applyThemeMode = () => {
       const shouldUseDark = resolveShouldUseDarkTheme(themeMode, mediaQuery.matches);
-      const terminalTheme = shouldUseDark ? TERMINAL_THEME_DARK : TERMINAL_THEME_LIGHT;
       document.documentElement.classList.toggle('dark', shouldUseDark);
       document.documentElement.dataset.themeMode = themeMode;
       setIsDarkThemeActive(shouldUseDark);
-      applyThemeToTerminalIframe(loginTerminalRef.current, terminalTheme);
     };
 
     applyThemeMode();
@@ -841,6 +881,12 @@ export default function GitRepoSelector({
 
       setInitialMessage(context.initialMessage || '');
       setPrefilledAttachmentPaths(context.attachmentPaths || []);
+      const resolvedProvider = normalizeAgentProvider(context.agentProvider);
+      setSelectedAgentProvider(resolvedProvider);
+      setSelectedAgentModel(context.model || '');
+      setSelectedReasoningEffort(
+        normalizeProviderReasoningEffort(resolvedProvider, context.reasoningEffort) || '',
+      );
       setShowSessionAdvanced(true);
       setHasAppliedPrefill(true);
     };
@@ -870,6 +916,12 @@ export default function GitRepoSelector({
     if (!config && currentConfig) setConfig(currentConfig);
 
     const settings = currentConfig.projectSettings[repoPath] || {};
+    const resolvedProvider = normalizeAgentProvider(settings.agentProvider);
+    setSelectedAgentProvider(resolvedProvider);
+    setSelectedAgentModel(settings.agentModel || '');
+    setSelectedReasoningEffort(
+      normalizeProviderReasoningEffort(resolvedProvider, settings.agentReasoningEffort) || '',
+    );
 
     const savedStartupScript = settings.startupScript;
     const savedDevServerScript = settings.devServerScript;
@@ -901,6 +953,25 @@ export default function GitRepoSelector({
     if (primaryRepo === repoPath) {
       setCurrentBranchName(newBranch);
     }
+  };
+
+  const handleAgentProviderChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const nextProvider = normalizeAgentProvider(event.target.value);
+    setSelectedAgentProvider(nextProvider);
+    setSelectedAgentModel('');
+    setSelectedReasoningEffort('');
+    setAgentStatus(null);
+    setAgentSetupMessage(null);
+    setIsWaitingForLogin(false);
+    setWaitingForLoginProvider(null);
+  };
+
+  const handleAgentModelChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedAgentModel(event.target.value);
+  };
+
+  const handleReasoningEffortChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedReasoningEffort(event.target.value as ReasoningEffort | '');
   };
 
   const handleSessionModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -1217,129 +1288,336 @@ export default function GitRepoSelector({
       setIsUploadingProjectIcon(false);
     }
   };
+  const fetchAgentStatus = useCallback(async (
+    provider: AgentProvider,
+    options?: { silent?: boolean },
+  ): Promise<AgentStatusResponse | null> => {
+    if (!options?.silent) {
+      setIsLoadingAgentStatus(true);
+    }
 
-  const handleLoginTerminalLoad = useCallback(() => {
-    if (!isLoginModalOpen || !loginCommand || !loginTerminalRef.current) {
+    try {
+      const response = await fetch(`/api/agent/status?provider=${encodeURIComponent(provider)}`, {
+        cache: 'no-store',
+      });
+      const payload = await response.json().catch(() => null) as AgentStatusResponse | null;
+      if (!payload) {
+        throw new Error('Failed to load agent runtime status.');
+      }
+
+      const supportedProviders = payload.providers.filter((entry) => (
+        entry.available
+        && (entry.id === 'codex' || entry.id === 'gemini' || entry.id === 'cursor')
+      ));
+
+      setAgentProviders(supportedProviders);
+      if (provider === selectedAgentProvider) {
+        setAgentStatus(payload.status);
+        if (payload.error) {
+          setAgentSetupMessage(payload.error);
+        }
+      }
+
+      return payload;
+    } catch (statusError) {
+      const message = statusError instanceof Error ? statusError.message : 'Failed to load agent runtime status.';
+      if (provider === selectedAgentProvider) {
+        setAgentStatus(null);
+        setAgentSetupMessage(message);
+      }
+      return null;
+    } finally {
+      if (!options?.silent) {
+        setIsLoadingAgentStatus(false);
+      }
+    }
+  }, [selectedAgentProvider]);
+
+  const handleInstallAgentProvider = useCallback(async (provider: AgentProvider) => {
+    setIsInstallingAgentProvider(true);
+    setInstallingAgentProvider(provider);
+    setInstallLogs([]);
+    setAgentSetupMessage(null);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/agent/install', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ provider }),
+      });
+
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || 'Failed to start provider installation.');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffered += decoder.decode(value, { stream: true });
+        const lines = buffered.split('\n');
+        buffered = lines.pop() ?? '';
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+
+          const event = JSON.parse(line) as
+            | { type: 'install_started'; command: string }
+            | { type: 'install_log'; stream: 'stdout' | 'stderr'; text: string }
+            | { type: 'install_completed'; status: AppStatus }
+            | { type: 'error'; message: string };
+
+          if (event.type === 'install_started') {
+            setInstallLogs((previous) => [...previous, `$ ${event.command}`].slice(-200));
+            continue;
+          }
+
+          if (event.type === 'install_log') {
+            const trimmedText = event.text.trimEnd();
+            if (trimmedText) {
+              setInstallLogs((previous) => [...previous, trimmedText].slice(-200));
+            }
+            continue;
+          }
+
+          if (event.type === 'install_completed') {
+            if (provider === selectedAgentProvider) {
+              setAgentStatus(event.status);
+            }
+            setAgentSetupMessage(`${agentProviderLabel(provider, agentProviders)} installed.`);
+            continue;
+          }
+
+          if (event.type === 'error') {
+            throw new Error(event.message);
+          }
+        }
+      }
+
+      await fetchAgentStatus(provider, { silent: true });
+    } catch (installError) {
+      const message = installError instanceof Error ? installError.message : 'Failed to install provider.';
+      setAgentSetupMessage(message);
+      setError(message);
+    } finally {
+      setIsInstallingAgentProvider(false);
+      setInstallingAgentProvider(null);
+    }
+  }, [agentProviders, fetchAgentStatus, selectedAgentProvider]);
+
+  const handleAgentLogin = useCallback(async (provider: AgentProvider) => {
+    setAgentSetupMessage(null);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/agent/login/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ provider }),
+      });
+      const payload = await response.json().catch(() => null) as (AgentLoginResponse & { error?: string }) | null;
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error || 'Failed to start provider login.');
+      }
+
+      const providerLabel = agentProviderLabel(provider, agentProviders);
+      if (payload.kind === 'browser') {
+        window.open(payload.authUrl, '_blank', 'noopener,noreferrer');
+        setAgentSetupMessage(payload.message || `Finish the ${providerLabel} login in the browser, then return here.`);
+      } else {
+        setAgentSetupMessage(payload.message || `Finish the ${providerLabel} login flow, then return here.`);
+      }
+
+      setIsWaitingForLogin(true);
+      setWaitingForLoginProvider(provider);
+    } catch (loginError) {
+      const message = loginError instanceof Error ? loginError.message : 'Failed to start provider login.';
+      setAgentSetupMessage(message);
+      setError(message);
+    }
+  }, [agentProviders]);
+
+  const ensureSelectedProviderReady = useCallback(async (): Promise<{ ready: boolean; status: AppStatus | null }> => {
+    const payload = await fetchAgentStatus(selectedAgentProvider);
+    const status = payload?.status ?? null;
+    if (!status) {
+      setError(agentSetupMessage || 'Failed to load agent runtime status.');
+      return { ready: false, status: null };
+    }
+
+    if (!status.installed) {
+      setError(`Install ${agentProviderLabel(selectedAgentProvider, agentProviders)} before creating a task.`);
+      return { ready: false, status };
+    }
+
+    if (!status.loggedIn) {
+      setError(`Log in to ${agentProviderLabel(selectedAgentProvider, agentProviders)} before creating a task.`);
+      return { ready: false, status };
+    }
+
+    return { ready: true, status };
+  }, [agentProviders, agentSetupMessage, fetchAgentStatus, selectedAgentProvider]);
+
+  useEffect(() => {
+    if (mode !== 'new') return;
+    void fetchAgentStatus(selectedAgentProvider);
+  }, [fetchAgentStatus, mode, selectedAgentProvider]);
+
+  useEffect(() => {
+    if (!agentStatus || agentStatus.provider !== selectedAgentProvider) {
       return;
     }
 
-    const iframe = loginTerminalRef.current;
-    const checkAndInject = (attempts = 0) => {
-      if (attempts > 40) {
-        setLoginModalError('Timed out while waiting for terminal to initialize.');
+    const validModels = agentStatus.models;
+    const nextModel = validModels.find((model) => model.id === selectedAgentModel)?.id
+      || agentStatus.defaultModel
+      || validModels[0]?.id
+      || '';
+
+    if (nextModel !== selectedAgentModel) {
+      setSelectedAgentModel(nextModel);
+    }
+  }, [agentStatus, selectedAgentModel, selectedAgentProvider]);
+
+  const selectedModelOption = useMemo<ModelOption | null>(() => {
+    return agentStatus?.models.find((model) => model.id === selectedAgentModel) || null;
+  }, [agentStatus, selectedAgentModel]);
+
+  const reasoningEffortOptions = useMemo(() => {
+    if (selectedAgentProvider !== 'codex') return [];
+    return selectedModelOption?.reasoningEfforts || [];
+  }, [selectedAgentProvider, selectedModelOption]);
+
+  useEffect(() => {
+    if (selectedAgentProvider !== 'codex') {
+      if (selectedReasoningEffort) {
+        setSelectedReasoningEffort('');
+      }
+      return;
+    }
+
+    const nextReasoning = reasoningEffortOptions.find((effort) => effort === selectedReasoningEffort)
+      || reasoningEffortOptions[0]
+      || '';
+
+    if (nextReasoning !== selectedReasoningEffort) {
+      setSelectedReasoningEffort(nextReasoning);
+    }
+  }, [reasoningEffortOptions, selectedAgentProvider, selectedReasoningEffort]);
+
+  useEffect(() => {
+    if (mode !== 'new' || !selectedRepo || !config) return;
+
+    const currentSettings = config.projectSettings[selectedRepo] || {};
+    const nextReasoning = selectedAgentProvider === 'codex'
+      ? normalizeProviderReasoningSelection(selectedAgentProvider, selectedReasoningEffort)
+      : undefined;
+
+    if (
+      normalizeAgentProvider(currentSettings.agentProvider) === selectedAgentProvider
+      && (currentSettings.agentModel || '') === selectedAgentModel
+      && (currentSettings.agentReasoningEffort || '') === (nextReasoning || '')
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void updateProjectSettings(selectedRepo, {
+      agentProvider: selectedAgentProvider,
+      agentModel: selectedAgentModel || undefined,
+      agentReasoningEffort: nextReasoning,
+    }).then((nextConfig) => {
+      if (!cancelled) {
+        setConfig(nextConfig);
+      }
+    }).catch((settingsError) => {
+      console.error('Failed to persist agent runtime settings:', settingsError);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [config, mode, selectedAgentModel, selectedAgentProvider, selectedReasoningEffort, selectedRepo]);
+
+  useEffect(() => {
+    if (!isWaitingForLogin || !waitingForLoginProvider) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const pollStatus = async () => {
+      const payload = await fetchAgentStatus(waitingForLoginProvider, { silent: true });
+      if (cancelled) return;
+
+      if (payload?.status?.loggedIn) {
+        setIsWaitingForLogin(false);
+        setWaitingForLoginProvider(null);
+        setAgentSetupMessage(`${agentProviderLabel(waitingForLoginProvider, agentProviders)} is ready.`);
         return;
       }
 
-      try {
-        const win = iframe.contentWindow as TerminalWindow | null;
-        if (win?.term) {
-          const shouldUseDark = resolveShouldUseDarkTheme(
-            themeMode,
-            window.matchMedia('(prefers-color-scheme: dark)').matches,
-          );
-          applyThemeToTerminalWindow(
-            win,
-            shouldUseDark ? TERMINAL_THEME_DARK : TERMINAL_THEME_LIGHT,
-          );
-          win.term.paste(`${loginCommand}\r`);
-          setLoginCommandInjected(true);
-          setLoginModalError(null);
-          win.focus();
-          return;
-        }
-
-        setTimeout(() => checkAndInject(attempts + 1), 300);
-      } catch (e) {
-        console.error('Failed to inject login command into terminal iframe:', e);
-        setLoginModalError('Could not access ttyd terminal. Ensure ttyd is running and try again.');
-      }
+      timer = window.setTimeout(() => {
+        void pollStatus();
+      }, 2000);
     };
 
-    setTimeout(() => checkAndInject(), 500);
-  }, [isLoginModalOpen, loginCommand, themeMode]);
+    timer = window.setTimeout(() => {
+      void pollStatus();
+    }, 2000);
 
-  const hasConfiguredAgentApiCredential = useCallback(async (agentCli: SupportedAgentCli): Promise<boolean> => {
-    try {
-      const result = await listAgentApiCredentials();
-      if (!result.success) return false;
-      return result.credentials.some((credential) => credential.agent === agentCli);
-    } catch {
-      return false;
-    }
-  }, []);
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [agentProviders, fetchAgentStatus, isWaitingForLogin, waitingForLoginProvider]);
 
-  const ensureAgentCliReady = useCallback(async (): Promise<boolean> => {
-    const agentCli: SupportedAgentCli = 'codex';
-
-    const checkResult = await checkAgentCliInstalled(agentCli);
-    if (!checkResult.success) {
-      setError(checkResult.error || `Failed to verify ${AGENT_CLI_LABELS[agentCli]} installation status.`);
-      return false;
-    }
-
-    if (checkResult.installed) {
-      return true;
-    }
-
-    setIsInstallingAgentCli(true);
-    setInstallingAgentCli(agentCli);
-    setError(null);
-
-    const installResult = await installAgentCli(agentCli);
-    setIsInstallingAgentCli(false);
-    setInstallingAgentCli(null);
-
-    if (!installResult.success) {
-      setError(installResult.error || `Failed to install ${AGENT_CLI_LABELS[agentCli]}.`);
-      return false;
-    }
-
-    const ttydResult = await startTtydProcess();
-    if (!ttydResult.success) {
-      setError(ttydResult.error || 'Failed to start ttyd');
-      return false;
-    }
-
-    const hasAgentApiCredential = await hasConfiguredAgentApiCredential(agentCli);
-    if (hasAgentApiCredential) {
-      return true;
-    }
-
-    setLoginAgentCli(agentCli);
-    setLoginCommand(AGENT_LOGIN_COMMANDS[agentCli]);
-    setLoginCommandInjected(false);
-    setLoginModalError(null);
-    setIsLoginModalOpen(true);
-    return false;
-  }, [hasConfiguredAgentApiCredential]);
-
-  const startSession = async (options: { skipAgentSetup?: boolean } = {}) => {
+  const startSession = async () => {
     if (!selectedRepo) return;
     setLoading(true);
     setError(null);
 
     try {
-      if (!options.skipAgentSetup) {
-        const isAgentCliReady = await ensureAgentCliReady();
-        if (!isAgentCliReady) {
-          setLoading(false);
-          return;
-        }
+      const readiness = await ensureSelectedProviderReady();
+      if (!readiness.ready || !readiness.status) {
+        setLoading(false);
+        return;
       }
 
       const resolvedDevServerScript = devServerScript.trim();
+      const resolvedProvider = normalizeAgentProvider(selectedAgentProvider);
+      const resolvedModel = selectedAgentModel.trim()
+        || readiness.status.defaultModel
+        || readiness.status.models[0]?.id
+        || '';
+      const resolvedReasoningEffort = resolvedProvider === 'codex'
+        ? normalizeProviderReasoningSelection(resolvedProvider, selectedReasoningEffort)
+        : undefined;
 
       // Also save startup script if changed
       await saveStartupScript();
       await saveDevServerScriptValue(resolvedDevServerScript);
-
-      // 1. Start TTYD if needed
-      const ttydResult = await startTtydProcess();
-      if (!ttydResult.success) {
-        setError(ttydResult.error || "Failed to start ttyd");
-        setLoading(false);
-        return;
-      }
+      const nextConfig = await updateProjectSettings(selectedRepo, {
+        agentProvider: resolvedProvider,
+        agentModel: resolvedModel || undefined,
+        agentReasoningEffort: resolvedReasoningEffort,
+      });
+      setConfig(nextConfig);
 
       // 2. Create session workspace (single/multi/folder mode decided by server runtime discovery).
       const derivedTitle = deriveSessionTitleFromTaskDescription(initialMessage);
@@ -1349,8 +1627,10 @@ export default function GitRepoSelector({
       }));
 
       const wtResult = await createSession(selectedRepo, gitContexts, {
-        agent: 'codex',
-        model: '',
+        agent: resolvedProvider,
+        agentProvider: resolvedProvider,
+        model: resolvedModel,
+        reasoningEffort: resolvedReasoningEffort,
         title: derivedTitle,
         devServerScript: resolvedDevServerScript || undefined
       });
@@ -1400,8 +1680,9 @@ export default function GitRepoSelector({
           startupScript: startupScript || undefined,
           attachmentPaths: allAttachmentPaths,
           attachmentNames: allAttachmentNames,
-          agentProvider: 'codex',
-          model: '',
+          agentProvider: resolvedProvider,
+          model: resolvedModel,
+          reasoningEffort: resolvedReasoningEffort,
           sessionMode,
         });
 
@@ -1411,9 +1692,42 @@ export default function GitRepoSelector({
           return;
         }
 
+        const initialAgentPrompt = buildAgentStartupPrompt({
+          taskDescription: launchInitialMessage || undefined,
+          attachmentPaths: allAttachmentPaths,
+          sessionMode,
+          sessionName: wtResult.sessionName,
+          notificationApiUrl: `${window.location.origin}/api/notifications`,
+          workspaceMode: wtResult.workspaceMode || 'folder',
+          gitRepos: wtResult.gitRepos,
+          discoveredRepoRelativePaths: projectGitRepos.map((repoPath) => toProjectRelativeRepoPath(selectedRepo, repoPath)),
+        });
+
+        if (initialAgentPrompt) {
+          const messageResponse = await fetch('/api/agent/message', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              sessionId: wtResult.sessionName,
+              message: initialAgentPrompt,
+              displayMessage: trimmedInitialMessage,
+              markInitialized: true,
+            }),
+          });
+          const messagePayload = await messageResponse.json().catch(() => null) as { error?: string } | null;
+          if (!messageResponse.ok) {
+            setError(messagePayload?.error || 'Failed to queue initial agent turn');
+            notifySessionsChanged();
+            setLoading(false);
+            return;
+          }
+        }
+
         // 4. Navigate to session page by path only
         notifySessionsChanged();
-        navigateToSession(wtResult.sessionName);
+        navigateToSession(wtResult.sessionName, { fresh: true });
         return;
 
         // No need to refresh sessions as we are navigating away
@@ -1440,6 +1754,11 @@ export default function GitRepoSelector({
     try {
       const draftId = Date.now().toString();
       const messageTitle = initialMessage.split('\n')[0].trim() || 'Untitled Draft';
+      const resolvedProvider = normalizeAgentProvider(selectedAgentProvider);
+      const resolvedModel = selectedAgentModel.trim()
+        || agentStatus?.defaultModel
+        || agentStatus?.models[0]?.id
+        || '';
       const draftGitContexts = projectGitRepos.map((repoPath) => {
         const fallbackBranch = branchesByRepo[repoPath]?.find((branch) => branch.current)?.name
           || branchesByRepo[repoPath]?.[0]?.name
@@ -1462,8 +1781,11 @@ export default function GitRepoSelector({
         branchName: firstGitContext?.branchName || currentBranchName || undefined,
         message: initialMessage,
         attachmentPaths: [...attachments, ...prefilledAttachmentPaths],
-        agentProvider: 'codex',
-        model: '',
+        agentProvider: resolvedProvider,
+        model: resolvedModel,
+        reasoningEffort: resolvedProvider === 'codex'
+          ? normalizeProviderReasoningSelection(resolvedProvider, selectedReasoningEffort)
+          : undefined,
         timestamp: new Date().toISOString(),
         title: messageTitle,
         startupScript: startupScript,
@@ -1507,6 +1829,12 @@ export default function GitRepoSelector({
     setStartupScript(draft.startupScript || '');
     setDevServerScript(draft.devServerScript || '');
     setSessionMode(draft.sessionMode || 'fast');
+    const resolvedProvider = normalizeAgentProvider(draft.agentProvider);
+    setSelectedAgentProvider(resolvedProvider);
+    setSelectedAgentModel(draft.model || '');
+    setSelectedReasoningEffort(
+      normalizeProviderReasoningEffort(resolvedProvider, draft.reasoningEffort) || '',
+    );
 
     // delete draft after opening
     await handleDeleteDraft(draft.id);
@@ -1520,26 +1848,6 @@ export default function GitRepoSelector({
       console.error(e);
     }
   };
-
-  const dismissLoginModal = useCallback(() => {
-    setIsLoginModalOpen(false);
-    setLoginAgentCli(null);
-    setLoginCommand('');
-    setLoginCommandInjected(false);
-    setLoginModalError(null);
-  }, []);
-
-  const handleLoginDone = async () => {
-    dismissLoginModal();
-    await startSession({ skipAgentSetup: true });
-  };
-
-  useDialogKeyboardShortcuts({
-    enabled: mode === 'new' && isLoginModalOpen && !!loginAgentCli,
-    onConfirm: handleLoginDone,
-    onDismiss: dismissLoginModal,
-    canConfirm: !loading,
-  });
 
   useDialogKeyboardShortcuts({
     enabled: mode === 'home' && isRepoSettingsDialogOpen && !!repoForSettings,
@@ -1560,18 +1868,9 @@ export default function GitRepoSelector({
     setLoading(true);
 
     try {
-      // 1. Start TTYD
-      const ttydResult = await startTtydProcess();
-      if (!ttydResult.success) {
-        setError(ttydResult.error || "Failed to start ttyd");
-        setLoading(false);
-        return;
-      }
-
-      // 2. Navigate — session already has initialized=true so SessionPageClient will resume
+      // Session runtime is server-managed; reopening the page only reconnects the UI.
       navigateToSession(session.sessionName);
       return;
-
     } catch (e) {
       console.error(e);
       setError("Failed to resume session");
@@ -2065,6 +2364,152 @@ export default function GitRepoSelector({
                   {showSessionAdvanced && (
                     <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-[#30363d] dark:bg-[#0d1117]/55">
                       <label className="flex flex-col gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Agent Runtime</span>
+                        <div className="relative">
+                          <select
+                            className="h-10 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                            value={selectedAgentProvider}
+                            onChange={handleAgentProviderChange}
+                            disabled={loading}
+                          >
+                            {(agentProviders.length > 0 ? agentProviders : SUPPORTED_AGENT_PROVIDERS.map((providerId) => ({
+                              id: providerId,
+                              label: agentProviderLabel(providerId),
+                              description: '',
+                              available: true,
+                            }))).map((provider) => (
+                              <option key={provider.id} value={provider.id}>
+                                {provider.label}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
+                        </div>
+                      </label>
+
+                      <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-[#30363d] dark:bg-[#111827]">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                              {agentProviderLabel(selectedAgentProvider, agentProviders)}
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400">
+                              {isLoadingAgentStatus
+                                ? 'Checking runtime status...'
+                                : agentStatus
+                                  ? [
+                                      agentStatus.installed ? 'Installed' : 'Not installed',
+                                      agentStatus.loggedIn ? 'Logged in' : 'Login required',
+                                      agentStatus.version ? `v${agentStatus.version}` : null,
+                                    ].filter(Boolean).join(' • ')
+                                  : 'Runtime status unavailable'}
+                            </div>
+                            {agentStatus?.account?.email ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                {agentStatus.account.email}
+                                {agentStatus.account.planType ? ` • ${agentStatus.account.planType}` : ''}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-200 dark:hover:bg-[#161b22]"
+                              onClick={() => void fetchAgentStatus(selectedAgentProvider)}
+                              disabled={loading || isLoadingAgentStatus}
+                            >
+                              Refresh
+                            </button>
+                            {!agentStatus?.installed && (
+                              <button
+                                type="button"
+                                className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                onClick={() => void handleInstallAgentProvider(selectedAgentProvider)}
+                                disabled={loading || isInstallingAgentProvider}
+                              >
+                                {isInstallingAgentProvider && installingAgentProvider === selectedAgentProvider
+                                  ? 'Installing...'
+                                  : 'Install'}
+                              </button>
+                            )}
+                            {agentStatus?.installed && !agentStatus.loggedIn && (
+                              <button
+                                type="button"
+                                className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                onClick={() => void handleAgentLogin(selectedAgentProvider)}
+                                disabled={loading || isWaitingForLogin}
+                              >
+                                {isWaitingForLogin && waitingForLoginProvider === selectedAgentProvider
+                                  ? 'Waiting for login...'
+                                  : 'Log In'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {agentSetupMessage && (
+                          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-400/30 dark:bg-blue-950/40 dark:text-blue-200">
+                            {agentSetupMessage}
+                          </div>
+                        )}
+
+                        {installLogs.length > 0 && isInstallingAgentProvider && installingAgentProvider === selectedAgentProvider && (
+                          <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-950 px-3 py-2 font-mono text-[11px] text-slate-100">
+                            {installLogs.join('\n')}
+                          </pre>
+                        )}
+                      </div>
+
+                      <label className="flex flex-col gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Model</span>
+                        <div className="relative">
+                          <select
+                            className="h-10 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                            value={selectedAgentModel}
+                            onChange={handleAgentModelChange}
+                            disabled={loading || isLoadingAgentStatus || (agentStatus?.models.length || 0) === 0}
+                          >
+                            {(agentStatus?.models.length ? agentStatus.models : [{
+                              id: selectedAgentModel || '',
+                              label: selectedAgentModel || 'Default model',
+                              description: '',
+                            }]).map((model) => (
+                              <option key={model.id || 'default-model'} value={model.id}>
+                                {model.label}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
+                        </div>
+                        {selectedModelOption?.description && (
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {selectedModelOption.description}
+                          </span>
+                        )}
+                      </label>
+
+                      {selectedAgentProvider === 'codex' && reasoningEffortOptions.length > 0 && (
+                        <label className="flex flex-col gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Reasoning Effort</span>
+                          <div className="relative">
+                            <select
+                              className="h-10 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                              value={selectedReasoningEffort}
+                              onChange={handleReasoningEffortChange}
+                              disabled={loading}
+                            >
+                              {reasoningEffortOptions.map((effort) => (
+                                <option key={effort} value={effort}>
+                                  {effort}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
+                          </div>
+                        </label>
+                      )}
+
+                      <label className="flex flex-col gap-2">
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start Up Command</span>
                         <textarea
                           className="min-h-[86px] rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
@@ -2139,7 +2584,11 @@ export default function GitRepoSelector({
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{session.title || session.sessionName}</p>
                         <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                          {getProjectDisplayName(session.projectPath || session.repoPath || '')} • {session.agent}
+                          {getProjectDisplayName(session.projectPath || session.repoPath || '')}
+                          {' • '}
+                          {agentProviderLabel(session.agentProvider || session.agent, agentProviders)}
+                          {session.model ? ` • ${session.model}` : ''}
+                          {session.runState ? ` • ${session.runState}` : ''}
                         </p>
                       </div>
                       <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
@@ -2196,7 +2645,11 @@ export default function GitRepoSelector({
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{draft.title}</p>
                         <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-                          {getProjectDisplayName(draft.projectPath || draft.repoPath || '')} • {draft.agentProvider}
+                          {getProjectDisplayName(draft.projectPath || draft.repoPath || '')}
+                          {' • '}
+                          {agentProviderLabel(draft.agentProvider, agentProviders)}
+                          {draft.model ? ` • ${draft.model}` : ''}
+                          {draft.reasoningEffort ? ` • ${draft.reasoningEffort}` : ''}
                         </p>
                       </div>
                       <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
@@ -2392,66 +2845,23 @@ export default function GitRepoSelector({
         </div>
       )}
 
-      {mode === 'new' && isInstallingAgentCli && installingAgentCli && (
+      {mode === 'new' && isInstallingAgentProvider && installingAgentProvider && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-base-content/45 px-4">
-          <div className="w-full max-w-md rounded-xl border border-base-300 bg-base-100 p-6 shadow-2xl">
-            <div className="flex items-center gap-4">
+          <div className="w-full max-w-3xl rounded-xl border border-base-300 bg-base-100 p-6 shadow-2xl">
+            <div className="flex items-start gap-4">
               <span className="loading loading-spinner loading-lg text-primary"></span>
-              <div className="space-y-1">
-                <h3 className="text-lg font-semibold">Installing {AGENT_CLI_LABELS[installingAgentCli]}</h3>
-                <p className="text-sm opacity-70">
-                  Please wait while we install the coding agent CLI.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {mode === 'new' && isLoginModalOpen && loginAgentCli && (
-        <div className="fixed inset-0 z-[1001] flex items-center justify-center bg-base-content/60 p-4">
-          <div className="w-full max-w-5xl rounded-xl border border-base-300 bg-base-100 shadow-2xl">
-            <div className="space-y-4 p-5 md:p-6">
-              <h3 className="text-xl font-semibold">Login Required</h3>
-              <p className="text-sm opacity-80">
-                {AGENT_CLI_LABELS[loginAgentCli]} has been installed. Complete login in the terminal below, then click Done to continue.
-              </p>
-              <p className="text-xs opacity-60">
-                Command: <span className="font-mono">{loginCommand}</span>
-              </p>
-
-              <div className="h-[420px] overflow-hidden rounded-lg border border-base-300 bg-base-200">
-                <iframe
-                  ref={loginTerminalRef}
-                  src="/terminal"
-                  className="h-full w-full border-none"
-                  allow="clipboard-read; clipboard-write"
-                  onLoad={handleLoginTerminalLoad}
-                />
-              </div>
-
-              {loginModalError && (
-                <div className="alert alert-error text-sm py-2">
-                  {loginModalError}
+              <div className="min-w-0 flex-1 space-y-4">
+                <div className="space-y-1">
+                  <h3 className="text-lg font-semibold">
+                    Installing {agentProviderLabel(installingAgentProvider, agentProviders)}
+                  </h3>
+                  <p className="text-sm opacity-70">
+                    The runtime is being installed in the background. You can close this dialog after it completes.
+                  </p>
                 </div>
-              )}
-
-              {!loginModalError && (
-                <div className="text-xs opacity-70">
-                  {loginCommandInjected
-                    ? 'Login command was sent to the terminal automatically.'
-                    : 'Waiting for terminal to initialize...'}
-                </div>
-              )}
-
-              <div className="flex justify-end">
-                <button
-                  className="btn btn-primary"
-                  onClick={() => void handleLoginDone()}
-                  disabled={loading}
-                >
-                  Done
-                </button>
+                <pre className="max-h-[360px] overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-950 px-4 py-3 font-mono text-[11px] text-slate-100">
+                  {installLogs.join('\n') || 'Waiting for install output...'}
+                </pre>
               </div>
             </div>
           </div>

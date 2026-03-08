@@ -1,7 +1,7 @@
 'use server';
 
 import { getProjectAlias } from './config';
-import { getSessionTerminalSources, resolveRepoCardIcon, startTtydProcess } from './git';
+import { getSessionTerminalSources, resolveRepoCardIcon } from './git';
 import { discoverProjectGitRepos } from './project';
 import { consumeSessionLaunchContext, getSessionMetadata, type SessionMetadata } from './session';
 import { resolveSessionTerminalRepoPaths } from '@/lib/session-terminal-repos';
@@ -36,14 +36,6 @@ export type SessionPageBootstrapResult =
     };
 
 export async function getSessionPageBootstrap(sessionId: string): Promise<SessionPageBootstrapResult> {
-    const ttydResult = await startTtydProcess();
-    if (!ttydResult.success) {
-        return {
-            success: false,
-            error: 'Failed to start terminal service',
-        };
-    }
-
     const metadata = await getSessionMetadata(sessionId);
     if (!metadata) {
         return {
@@ -57,7 +49,7 @@ export async function getSessionPageBootstrap(sessionId: string): Promise<Sessio
         discoverProjectGitRepos(metadata.projectPath).catch(() => null),
         getProjectAlias(metadata.projectPath),
         resolveRepoCardIcon(metadata.projectPath).catch(() => ({ success: false as const, iconPath: null })),
-        isFirstOpen ? consumeSessionLaunchContext(sessionId) : Promise.resolve(null),
+        consumeSessionLaunchContext(sessionId),
     ]);
 
     const terminalRepoPaths = resolveSessionTerminalRepoPaths({
@@ -72,20 +64,6 @@ export async function getSessionPageBootstrap(sessionId: string): Promise<Sessio
         terminalRepoPaths,
         metadata.agent,
     );
-
-    if (!isFirstOpen) {
-        return {
-            success: true,
-            metadata,
-            terminalPersistenceMode: ttydResult.persistenceMode === 'tmux' ? 'tmux' : 'shell',
-            terminalSources,
-            repoDisplayName,
-            sessionIconPath: iconResult.success ? (iconResult.iconPath || null) : null,
-            isResume: true,
-            launchContext: null,
-            projectGitRepoRelativePaths: [],
-        };
-    }
 
     const projectGitRepoRelativePaths = discoveryResult
         ? discoveryResult.repos.map((repo) => repo.relativePath)
@@ -121,11 +99,11 @@ export async function getSessionPageBootstrap(sessionId: string): Promise<Sessio
     return {
         success: true,
         metadata,
-        terminalPersistenceMode: ttydResult.persistenceMode === 'tmux' ? 'tmux' : 'shell',
+        terminalPersistenceMode: 'shell',
         terminalSources,
         repoDisplayName,
         sessionIconPath: iconResult.success ? (iconResult.iconPath || null) : null,
-        isResume: false,
+        isResume: !isFirstOpen,
         launchContext,
         projectGitRepoRelativePaths,
     };

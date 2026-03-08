@@ -8,7 +8,7 @@ type JsonObject = Record<string, unknown>;
 
 const DB_FILE_NAME = 'palx.db';
 const LEGACY_MIGRATION_KEY = 'legacy_migration_v1';
-const SUPPORTED_AGENT_APIS = new Set(['codex']);
+const SUPPORTED_AGENT_APIS = new Set(['codex', 'gemini', 'cursor']);
 const VIBA_DIR = path.join(os.homedir(), '.viba');
 const DB_PATH = path.join(VIBA_DIR, DB_FILE_NAME);
 
@@ -94,6 +94,7 @@ function createSchema(db: Database.Database): void {
       repo_path TEXT PRIMARY KEY,
       agent_provider TEXT,
       agent_model TEXT,
+      agent_reasoning_effort TEXT,
       startup_script TEXT,
       dev_server_script TEXT,
       last_branch TEXT,
@@ -106,6 +107,7 @@ function createSchema(db: Database.Database): void {
       project_path TEXT PRIMARY KEY,
       agent_provider TEXT,
       agent_model TEXT,
+      agent_reasoning_effort TEXT,
       startup_script TEXT,
       dev_server_script TEXT,
       alias TEXT
@@ -146,6 +148,12 @@ function createSchema(db: Database.Database): void {
       base_branch TEXT,
       agent TEXT NOT NULL,
       model TEXT NOT NULL,
+      reasoning_effort TEXT,
+      thread_id TEXT,
+      active_turn_id TEXT,
+      run_state TEXT,
+      last_error TEXT,
+      last_activity_at TEXT,
       title TEXT,
       dev_server_script TEXT,
       initialized INTEGER,
@@ -172,6 +180,7 @@ function createSchema(db: Database.Database): void {
       attachment_names_json TEXT,
       agent_provider TEXT,
       model TEXT,
+      reasoning_effort TEXT,
       session_mode TEXT,
       is_resume INTEGER,
       timestamp TEXT NOT NULL
@@ -187,11 +196,26 @@ function createSchema(db: Database.Database): void {
       attachment_paths_json TEXT NOT NULL,
       agent_provider TEXT NOT NULL,
       model TEXT NOT NULL,
+      reasoning_effort TEXT,
       timestamp TEXT NOT NULL,
       title TEXT NOT NULL,
       startup_script TEXT NOT NULL,
       dev_server_script TEXT NOT NULL,
       session_mode TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS session_agent_history_items (
+      session_name TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      thread_id TEXT,
+      turn_id TEXT,
+      ordinal INTEGER NOT NULL DEFAULT 0,
+      kind TEXT NOT NULL,
+      status TEXT,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (session_name, item_id)
     );
   `);
 }
@@ -365,11 +389,11 @@ function migrateLegacyConfig(db: Database.Database): void {
   if (config.repoSettings && typeof config.repoSettings === 'object') {
     const insertRepoSettings = db.prepare(`
       INSERT INTO app_config_repo_settings (
-        repo_path, agent_provider, agent_model, startup_script, dev_server_script,
-        last_branch, credential_id, credential_preference
+        repo_path, agent_provider, agent_model, agent_reasoning_effort,
+        startup_script, dev_server_script, last_branch, credential_id, credential_preference
       ) VALUES (
-        @repoPath, @agentProvider, @agentModel, @startupScript, @devServerScript,
-        @lastBranch, @credentialId, @credentialPreference
+        @repoPath, @agentProvider, @agentModel, @agentReasoningEffort,
+        @startupScript, @devServerScript, @lastBranch, @credentialId, @credentialPreference
       )
     `);
     for (const [repoPath, rawSettings] of Object.entries(config.repoSettings)) {
@@ -383,6 +407,7 @@ function migrateLegacyConfig(db: Database.Database): void {
         repoPath,
         agentProvider: asOptionalString(settings.agentProvider),
         agentModel: asOptionalString(settings.agentModel),
+        agentReasoningEffort: asOptionalString(settings.agentReasoningEffort ?? settings.reasoningEffort),
         startupScript: asOptionalString(settings.startupScript),
         devServerScript: asOptionalString(settings.devServerScript),
         lastBranch: asOptionalString(settings.lastBranch),
@@ -520,9 +545,11 @@ function migrateLegacySessions(db: Database.Database): void {
     const insert = db.prepare(`
       INSERT OR REPLACE INTO sessions (
         session_name, repo_path, worktree_path, branch_name, base_branch, agent, model,
+        reasoning_effort, thread_id, active_turn_id, run_state, last_error, last_activity_at,
         title, dev_server_script, initialized, timestamp
       ) VALUES (
         @sessionName, @repoPath, @worktreePath, @branchName, @baseBranch, @agent, @model,
+        @reasoningEffort, @threadId, @activeTurnId, @runState, @lastError, @lastActivityAt,
         @title, @devServerScript, @initialized, @timestamp
       )
     `);
@@ -543,6 +570,12 @@ function migrateLegacySessions(db: Database.Database): void {
         baseBranch: asOptionalString(row.baseBranch),
         agent,
         model,
+        reasoningEffort: asOptionalString(row.reasoningEffort),
+        threadId: asOptionalString(row.threadId),
+        activeTurnId: asOptionalString(row.activeTurnId),
+        runState: asOptionalString(row.runState),
+        lastError: asOptionalString(row.lastError),
+        lastActivityAt: asOptionalString(row.lastActivityAt),
         title: asOptionalString(row.title),
         devServerScript: asOptionalString(row.devServerScript),
         initialized: asBooleanOrNull(row.initialized),
@@ -556,11 +589,11 @@ function migrateLegacySessions(db: Database.Database): void {
     const insert = db.prepare(`
       INSERT OR REPLACE INTO session_launch_contexts (
         session_name, title, initial_message, raw_initial_message, startup_script,
-        attachment_paths_json, attachment_names_json, agent_provider, model,
+        attachment_paths_json, attachment_names_json, agent_provider, model, reasoning_effort,
         session_mode, is_resume, timestamp
       ) VALUES (
         @sessionName, @title, @initialMessage, @rawInitialMessage, @startupScript,
-        @attachmentPathsJson, @attachmentNamesJson, @agentProvider, @model,
+        @attachmentPathsJson, @attachmentNamesJson, @agentProvider, @model, @reasoningEffort,
         @sessionMode, @isResume, @timestamp
       )
     `);
@@ -578,6 +611,7 @@ function migrateLegacySessions(db: Database.Database): void {
         attachmentNamesJson: Array.isArray(row.attachmentNames) ? JSON.stringify(row.attachmentNames) : null,
         agentProvider: asOptionalString(row.agentProvider),
         model: asOptionalString(row.model),
+        reasoningEffort: asOptionalString(row.reasoningEffort),
         sessionMode: asOptionalString(row.sessionMode),
         isResume: asBooleanOrNull(row.isResume),
         timestamp,
@@ -593,10 +627,10 @@ function migrateLegacyDrafts(db: Database.Database): void {
   const insert = db.prepare(`
     INSERT OR REPLACE INTO drafts (
       id, repo_path, branch_name, message, attachment_paths_json, agent_provider,
-      model, timestamp, title, startup_script, dev_server_script, session_mode
+      model, reasoning_effort, timestamp, title, startup_script, dev_server_script, session_mode
     ) VALUES (
       @id, @repoPath, @branchName, @message, @attachmentPathsJson, @agentProvider,
-      @model, @timestamp, @title, @startupScript, @devServerScript, @sessionMode
+      @model, @reasoningEffort, @timestamp, @title, @startupScript, @devServerScript, @sessionMode
     )
   `);
 
@@ -627,6 +661,7 @@ function migrateLegacyDrafts(db: Database.Database): void {
       attachmentPathsJson: Array.isArray(row.attachmentPaths) ? JSON.stringify(row.attachmentPaths) : '[]',
       agentProvider,
       model,
+      reasoningEffort: asOptionalString(row.reasoningEffort),
       timestamp,
       title,
       startupScript,
@@ -717,6 +752,7 @@ function normalizeRelativePath(absolutePath: string, basePath: string | null): s
 function runSchemaMigrations(db: Database.Database): void {
   if (tableExists(db, 'app_config_repo_settings')) {
     addColumnIfMissing(db, 'app_config_repo_settings', 'alias TEXT');
+    addColumnIfMissing(db, 'app_config_repo_settings', 'agent_reasoning_effort TEXT');
   }
 
   addColumnIfMissing(db, 'projects', 'icon_path TEXT');
@@ -727,8 +763,17 @@ function runSchemaMigrations(db: Database.Database): void {
   addColumnIfMissing(db, 'sessions', 'workspace_path TEXT');
   addColumnIfMissing(db, 'sessions', 'workspace_mode TEXT');
   addColumnIfMissing(db, 'sessions', 'active_repo_path TEXT');
+  addColumnIfMissing(db, 'sessions', 'reasoning_effort TEXT');
+  addColumnIfMissing(db, 'sessions', 'thread_id TEXT');
+  addColumnIfMissing(db, 'sessions', 'active_turn_id TEXT');
+  addColumnIfMissing(db, 'sessions', 'run_state TEXT');
+  addColumnIfMissing(db, 'sessions', 'last_error TEXT');
+  addColumnIfMissing(db, 'sessions', 'last_activity_at TEXT');
+  addColumnIfMissing(db, 'session_launch_contexts', 'reasoning_effort TEXT');
   addColumnIfMissing(db, 'drafts', 'project_path TEXT');
   addColumnIfMissing(db, 'drafts', 'git_contexts_json TEXT');
+  addColumnIfMissing(db, 'drafts', 'reasoning_effort TEXT');
+  addColumnIfMissing(db, 'app_config_project_settings', 'agent_reasoning_effort TEXT');
 
   if (tableExists(db, 'repositories') && getRowCount(db, 'projects') === 0) {
     db.prepare(`
@@ -757,11 +802,34 @@ function runSchemaMigrations(db: Database.Database): void {
   if (tableExists(db, 'app_config_repo_settings') && getRowCount(db, 'app_config_project_settings') === 0) {
     db.prepare(`
       INSERT OR REPLACE INTO app_config_project_settings (
-        project_path, agent_provider, agent_model, startup_script, dev_server_script, alias
+        project_path, agent_provider, agent_model, agent_reasoning_effort,
+        startup_script, dev_server_script, alias
       )
       SELECT
-        repo_path, agent_provider, agent_model, startup_script, dev_server_script, alias
+        repo_path, agent_provider, agent_model, agent_reasoning_effort,
+        startup_script, dev_server_script, alias
       FROM app_config_repo_settings
+    `).run();
+  }
+
+  if (tableExists(db, 'app_config_repo_settings') && tableExists(db, 'app_config_project_settings')) {
+    db.prepare(`
+      UPDATE app_config_project_settings
+      SET agent_reasoning_effort = (
+        SELECT rs.agent_reasoning_effort
+        FROM app_config_repo_settings rs
+        WHERE rs.repo_path = app_config_project_settings.project_path
+      )
+      WHERE
+        (agent_reasoning_effort IS NULL OR TRIM(agent_reasoning_effort) = '')
+        AND EXISTS (
+          SELECT 1
+          FROM app_config_repo_settings rs
+          WHERE
+            rs.repo_path = app_config_project_settings.project_path
+            AND rs.agent_reasoning_effort IS NOT NULL
+            AND TRIM(rs.agent_reasoning_effort) <> ''
+        )
     `).run();
   }
 
@@ -879,6 +947,9 @@ function runSchemaMigrations(db: Database.Database): void {
   createIndexIfColumnsExist(db, 'drafts', 'drafts_project_path_idx', ['project_path']);
   createIndexIfColumnsExist(db, 'drafts', 'drafts_timestamp_idx', ['timestamp']);
   createIndexIfColumnsExist(db, 'session_git_repos', 'session_git_repos_session_idx', ['session_name']);
+  createIndexIfColumnsExist(db, 'session_agent_history_items', 'session_agent_history_session_idx', ['session_name']);
+  createIndexIfColumnsExist(db, 'session_agent_history_items', 'session_agent_history_thread_idx', ['session_name', 'thread_id']);
+  createIndexIfColumnsExist(db, 'session_agent_history_items', 'session_agent_history_order_idx', ['session_name', 'ordinal', 'created_at']);
 }
 
 function initializeDb(): Database.Database {

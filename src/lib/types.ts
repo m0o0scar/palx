@@ -110,3 +110,257 @@ export interface SessionGitRepoContext {
   branchName: string;
   baseBranch?: string;
 }
+
+export type AgentProvider = 'codex' | 'gemini' | 'cursor' | (string & {});
+
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | (string & {});
+
+export type AgentReasoningEffort = ReasoningEffort;
+
+export type SessionAgentRunState =
+  | 'idle'
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'cancelled'
+  | 'error'
+  | 'needs_auth'
+  | (string & {});
+
+export type ProviderCatalogEntry = {
+  id: AgentProvider;
+  label: string;
+  description: string;
+  available: boolean;
+};
+
+export type ModelOption = {
+  id: string;
+  label: string;
+  description?: string | null;
+  reasoningEfforts?: ReasoningEffort[];
+};
+
+export type CodexAccount = {
+  type: string;
+  email?: string | null;
+  planType?: string | null;
+};
+
+export type ToolTraceSource =
+  | 'mcp'
+  | 'function'
+  | 'custom'
+  | 'dynamic'
+  | 'web_search'
+  | 'local_shell'
+  | 'acp';
+
+export type FileChange = {
+  path: string;
+  kind: string;
+  diff: string;
+};
+
+export type AppStatus = {
+  provider: AgentProvider;
+  installed: boolean;
+  version: string | null;
+  loggedIn: boolean;
+  account: CodexAccount | null;
+  installCommand: string;
+  models: ModelOption[];
+  defaultModel: string | null;
+};
+
+export type HistoryEntry =
+  | {
+      kind: 'user';
+      id: string;
+      text: string;
+    }
+  | {
+      kind: 'assistant';
+      id: string;
+      text: string;
+      phase: string | null;
+    }
+  | {
+      kind: 'reasoning';
+      id: string;
+      summary: string;
+      text: string;
+    }
+  | {
+      kind: 'command';
+      id: string;
+      command: string;
+      cwd: string;
+      output: string;
+      status: string;
+      exitCode: number | null;
+      toolName: string | null;
+      toolInput: string | null;
+    }
+  | {
+      kind: 'tool';
+      id: string;
+      source: ToolTraceSource;
+      server: string | null;
+      tool: string;
+      status: string;
+      input: string | null;
+      message: string | null;
+      result: string | null;
+      error: string | null;
+    }
+  | {
+      kind: 'fileChange';
+      id: string;
+      status: string;
+      output: string;
+      changes: FileChange[];
+    }
+  | {
+      kind: 'plan';
+      id: string;
+      text: string;
+    };
+
+export type ThreadHistoryResponse = {
+  provider: AgentProvider;
+  threadId: string;
+  entries: HistoryEntry[];
+};
+
+export type ChatStreamEvent =
+  | {
+      type: 'thread_ready';
+      threadId: string;
+    }
+  | {
+      type: 'turn_started';
+      turnId: string;
+    }
+  | {
+      type: 'item_started';
+      item: Record<string, unknown>;
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      type: 'item_completed';
+      item: Record<string, unknown>;
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      type: 'agent_message_delta';
+      itemId: string;
+      delta: string;
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      type: 'reasoning_delta';
+      itemId: string;
+      delta: string;
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      type: 'reasoning_summary_delta';
+      itemId: string;
+      delta: string;
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      type: 'command_output_delta';
+      itemId: string;
+      delta: string;
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      type: 'command_seed';
+      itemId: string;
+      threadId: string;
+      turnId: string;
+      command: string;
+      cwd: string;
+      toolName: string;
+      toolInput: string | null;
+    }
+  | {
+      type: 'file_change_delta';
+      itemId: string;
+      delta: string;
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      type: 'plan_updated';
+      threadId: string;
+      turnId: string;
+      steps: Array<{
+        title: string;
+        status: string;
+      }>;
+    }
+  | {
+      type: 'tool_progress';
+      itemId: string;
+      threadId: string;
+      turnId: string;
+      status: string;
+      source: ToolTraceSource;
+      server: string | null;
+      tool: string;
+      input: string | null;
+      message: string | null;
+      result: string | null;
+      error: string | null;
+    }
+  | {
+      type: 'turn_completed';
+      threadId: string;
+      turnId: string;
+      status: string;
+      error: string | null;
+    }
+  | {
+      type: 'error';
+      message: string;
+    };
+
+export type SessionAgentRuntimeState = {
+  sessionName: string;
+  agentProvider: AgentProvider;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  threadId?: string | null;
+  activeTurnId?: string | null;
+  runState?: SessionAgentRunState | null;
+  lastError?: string | null;
+  lastActivityAt?: string | null;
+};
+
+export type SessionAgentHistoryItem = HistoryEntry & {
+  sessionName: string;
+  threadId?: string | null;
+  turnId?: string | null;
+  ordinal: number;
+  itemStatus?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SessionAgentHistoryInput = HistoryEntry & {
+  threadId?: string | null;
+  turnId?: string | null;
+  ordinal?: number;
+  itemStatus?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};

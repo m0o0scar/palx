@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { SessionView } from '@/components/SessionView';
-import { markSessionInitialized, SessionMetadata } from '@/app/actions/session';
+import { SessionMetadata } from '@/app/actions/session';
 import { getSessionPageBootstrap, type SessionPageBootstrapResult } from '@/app/actions/session-page';
 import { clearPendingSessionNavigation } from '@/lib/session-navigation';
 
@@ -89,6 +89,7 @@ function loadSessionPageBootstrapCached(sessionId: string): Promise<SessionPageB
 
 export default function SessionPage() {
     const params = useParams<{ sessionId: string }>();
+    const searchParams = useSearchParams();
     const sessionIdParam = params.sessionId;
     const sessionId = Array.isArray(sessionIdParam) ? sessionIdParam[0] : sessionIdParam;
     const router = useRouter();
@@ -115,6 +116,7 @@ export default function SessionPage() {
     const [terminalPersistenceMode, setTerminalPersistenceMode] = useState<'tmux' | 'shell'>('shell');
     const [repoDisplayName, setRepoDisplayName] = useState<string | undefined>(undefined);
     const [sessionFaviconHref, setSessionFaviconHref] = useState<string>(SESSION_FALLBACK_FAVICON_PATH);
+    const isFreshNavigation = searchParams.get('fresh') === '1';
 
     const handleOpenSessionNotification = useCallback(() => {
         if (!sessionId) return;
@@ -147,7 +149,14 @@ export default function SessionPage() {
     useEffect(() => {
         if (!sessionId) return;
         clearPendingSessionNavigation(sessionId);
-    }, [sessionId]);
+    }, [isFreshNavigation, sessionId]);
+
+    useEffect(() => {
+        if (!isFreshNavigation || !sessionId) return;
+
+        const nextUrl = `/session/${encodeURIComponent(sessionId)}`;
+        window.history.replaceState(window.history.state, '', nextUrl);
+    }, [isFreshNavigation, sessionId]);
 
     useEffect(() => {
         if (!sessionId) return;
@@ -289,7 +298,7 @@ export default function SessionPage() {
                 setRepoDisplayName(bootstrap.repoDisplayName || undefined);
                 setTerminalSources(bootstrap.terminalSources);
                 setProjectGitRepoRelativePaths(bootstrap.projectGitRepoRelativePaths);
-                setIsResume(bootstrap.isResume);
+                setIsResume(isFreshNavigation ? false : bootstrap.isResume);
 
                 if (bootstrap.sessionIconPath) {
                     setSessionFaviconHref(`/api/file-thumbnail?path=${encodeURIComponent(bootstrap.sessionIconPath)}`);
@@ -320,20 +329,13 @@ export default function SessionPage() {
         return () => {
             cancelled = true;
         };
-    }, [sessionId]);
+    }, [isFreshNavigation, sessionId]);
 
     const handleExit = (force?: boolean) => {
         if (force) {
             router.replace('/');
         } else {
             router.push('/');
-        }
-    };
-
-    // Called by SessionView once the agent command has been sent for the first time
-    const handleSessionStart = async () => {
-        if (sessionId) {
-            await markSessionInitialized(sessionId);
         }
     };
 
@@ -397,7 +399,6 @@ export default function SessionPage() {
             onExit={handleExit}
             isResume={isResume}
             terminalPersistenceMode={terminalPersistenceMode}
-            onSessionStart={handleSessionStart}
             agentTerminalSrc={terminalSources.agentTerminalSrc}
             floatingTerminalSrc={terminalSources.floatingTerminalSrc}
         />
