@@ -2305,8 +2305,8 @@ export default function GitRepoSelector({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-            <div className="space-y-6 lg:col-span-4">
+          <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+            <div className="self-start space-y-6 lg:col-span-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
                 <h3 className="mb-5 flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-white">
                   <FolderGit2 className="h-5 w-5 text-primary" />
@@ -2716,7 +2716,7 @@ export default function GitRepoSelector({
               </div>
             </div>
 
-            <div className="flex flex-col lg:col-span-8">
+            <div className="self-start lg:col-span-8">
               <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <label className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-white" htmlFor="task-description">
