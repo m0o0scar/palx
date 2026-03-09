@@ -546,6 +546,8 @@ function applyEventToRecord(record: AgentSessionRecord, event: ChatStreamEvent) 
       record.snapshot.lastError = event.message;
       record.snapshot.completedAt = new Date().toISOString();
       return;
+    case 'turn_diagnostic':
+      return;
   }
 }
 

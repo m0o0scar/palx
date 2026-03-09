@@ -233,6 +233,41 @@ export type ThreadHistoryResponse = {
   entries: HistoryEntry[];
 };
 
+export type SessionAgentDiagnosticStepStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed';
+
+export type SessionAgentDiagnosticStep = {
+  key: string;
+  label: string;
+  status: SessionAgentDiagnosticStepStatus;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  detail?: string | null;
+};
+
+export type SessionAgentTurnDiagnostics = {
+  transport: string;
+  runState: SessionAgentRunState;
+  queuedAt: string;
+  updatedAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  timeToTurnStartMs?: number | null;
+  currentStepKey?: string | null;
+  steps: SessionAgentDiagnosticStep[];
+};
+
+export type SessionAgentTurnDiagnosticUpdate = {
+  key: string;
+  label: string;
+  status: Exclude<SessionAgentDiagnosticStepStatus, 'pending'>;
+  detail?: string | null;
+};
+
 export type ChatStreamEvent =
   | {
       type: 'thread_ready';
@@ -332,6 +367,13 @@ export type ChatStreamEvent =
   | {
       type: 'error';
       message: string;
+    }
+  | {
+      type: 'turn_diagnostic';
+      key: string;
+      label: string;
+      status: Exclude<SessionAgentDiagnosticStepStatus, 'pending'>;
+      detail?: string | null;
     };
 
 export type SessionAgentRuntimeState = {
@@ -344,6 +386,7 @@ export type SessionAgentRuntimeState = {
   runState?: SessionAgentRunState | null;
   lastError?: string | null;
   lastActivityAt?: string | null;
+  turnDiagnostics?: SessionAgentTurnDiagnostics | null;
 };
 
 export type SessionAgentHistoryItem = HistoryEntry & {

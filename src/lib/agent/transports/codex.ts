@@ -11,6 +11,7 @@ import type {
   FileChange,
   HistoryEntry,
   ModelOption,
+  SessionAgentTurnDiagnosticUpdate,
   ThreadHistoryResponse,
   ToolTraceSource,
 } from "@/lib/agent/types";
@@ -883,7 +884,35 @@ export async function streamChat(
   },
   onEvent: (event: ChatStreamEvent) => void,
   signal?: AbortSignal,
+  onDiagnostic?: (update: SessionAgentTurnDiagnosticUpdate) => void,
 ) {
+  const emitDiagnostic = (update: SessionAgentTurnDiagnosticUpdate) => {
+    onDiagnostic?.(update);
+  };
+  const failDiagnosticStep = (key: string, label: string, error: unknown) => {
+    emitDiagnostic({
+      key,
+      label,
+      status: "failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  };
+  const runDiagnosticStep = async <T,>(
+    key: string,
+    label: string,
+    action: () => Promise<T>,
+  ) => {
+    emitDiagnostic({ key, label, status: "running" });
+    try {
+      const result = await action();
+      emitDiagnostic({ key, label, status: "completed" });
+      return result;
+    } catch (error) {
+      failDiagnosticStep(key, label, error);
+      throw error;
+    }
+  };
+
   const connection = new CodexAppServerConnection(input.workspacePath, {
     model: input.model,
     reasoningEffort: input.reasoningEffort,
@@ -892,6 +921,8 @@ export async function streamChat(
   const turnDone = createDeferred<void>();
   const rawToolCalls = new Map<string, { source: ToolTraceSource; tool: string }>();
   let rawEventSequence = 0;
+  let waitingForTurnStart = false;
+  let turnStartReceived = false;
 
   const close = () => {
     connection.close();
@@ -900,7 +931,9 @@ export async function streamChat(
   signal?.addEventListener("abort", close, { once: true });
 
   try {
-    await connection.initialize();
+    await runDiagnosticStep("launch_runtime", "Launch Codex runtime", async () => {
+      await connection.initialize();
+    });
     connection.onNotification((message) => {
       if (!message.method || !message.params) {
         return;
@@ -909,6 +942,15 @@ export async function streamChat(
       const params = message.params;
       switch (message.method) {
         case "turn/started":
+          turnStartReceived = true;
+          if (waitingForTurnStart) {
+            emitDiagnostic({
+              key: "await_turn_started",
+              label: "Await turn start signal",
+              status: "completed",
+            });
+            waitingForTurnStart = false;
+          }
           onEvent({
             type: "turn_started",
             turnId: normalizeText((params.turn as Record<string, unknown> | undefined)?.id),
@@ -1242,27 +1284,31 @@ export async function streamChat(
     let threadId = input.threadId?.trim() || "";
 
     if (threadId) {
-      const resumed = (await connection.request("thread/resume", {
-        threadId,
-        cwd: input.workspacePath,
-        approvalPolicy: "never",
-        sandbox: "workspace-write",
-        persistExtendedHistory: true,
-      })) as {
-        thread?: { id?: string };
-      };
+      const resumed = await runDiagnosticStep("restore_thread", "Resume existing thread", async () => {
+        return (await connection.request("thread/resume", {
+          threadId,
+          cwd: input.workspacePath,
+          approvalPolicy: "never",
+          sandbox: "workspace-write",
+          persistExtendedHistory: true,
+        })) as {
+          thread?: { id?: string };
+        };
+      });
 
       threadId = normalizeText(resumed.thread?.id) || threadId;
     } else {
-      const started = (await connection.request("thread/start", {
-        cwd: input.workspacePath,
-        approvalPolicy: "never",
-        sandbox: "workspace-write",
-        experimentalRawEvents: true,
-        persistExtendedHistory: true,
-      })) as {
-        thread?: { id?: string };
-      };
+      const started = await runDiagnosticStep("start_thread", "Create new thread", async () => {
+        return (await connection.request("thread/start", {
+          cwd: input.workspacePath,
+          approvalPolicy: "never",
+          sandbox: "workspace-write",
+          experimentalRawEvents: true,
+          persistExtendedHistory: true,
+        })) as {
+          thread?: { id?: string };
+        };
+      });
 
       threadId = normalizeText(started.thread?.id);
     }
@@ -1273,21 +1319,44 @@ export async function streamChat(
 
     onEvent({ type: "thread_ready", threadId });
 
-    await connection.request("turn/start", {
-      threadId,
-      input: [
-        {
-          type: "text",
-          text: input.message,
-          text_elements: [],
-        },
-      ],
-      cwd: input.workspacePath,
-      approvalPolicy: "never",
-      summary: "detailed",
+    emitDiagnostic({
+      key: "await_turn_started",
+      label: "Await turn start signal",
+      status: "running",
+    });
+    waitingForTurnStart = true;
+    await runDiagnosticStep("send_turn_start", "Send turn request", async () => {
+      await connection.request("turn/start", {
+        threadId,
+        input: [
+          {
+            type: "text",
+            text: input.message,
+            text_elements: [],
+          },
+        ],
+        cwd: input.workspacePath,
+        approvalPolicy: "never",
+        summary: "detailed",
+      });
     });
 
     await turnDone.promise;
+    if (waitingForTurnStart && !turnStartReceived) {
+      emitDiagnostic({
+        key: "await_turn_started",
+        label: "Await turn start signal",
+        status: "failed",
+        detail: "Turn completed before a turn/started event arrived.",
+      });
+      waitingForTurnStart = false;
+    }
+  } catch (error) {
+    if (waitingForTurnStart && !turnStartReceived) {
+      failDiagnosticStep("await_turn_started", "Await turn start signal", error);
+      waitingForTurnStart = false;
+    }
+    throw error;
   } finally {
     signal?.removeEventListener("abort", close);
     connection.close();

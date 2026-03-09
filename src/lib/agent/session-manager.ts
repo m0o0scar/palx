@@ -31,16 +31,21 @@ import type {
   HistoryEntry,
   SessionAgentHistoryInput,
   SessionAgentHistoryItem,
+  SessionAgentRunState,
+  SessionAgentTurnDiagnosticUpdate,
+  SessionAgentTurnDiagnostics,
   SessionAgentRuntimeState,
 } from '@/lib/types';
 
 type ActiveRun = {
   abortController: AbortController;
   promise: Promise<void>;
+  diagnostics: SessionAgentTurnDiagnostics;
 };
 
 type ManagerState = {
   runs: Map<string, ActiveRun>;
+  lastDiagnostics: Map<string, SessionAgentTurnDiagnostics>;
 };
 
 type StartTurnInput = {
@@ -58,6 +63,7 @@ function getManagerState(): ManagerState {
   if (!globalThis.__palxAgentSessionManagerState) {
     globalThis.__palxAgentSessionManagerState = {
       runs: new Map(),
+      lastDiagnostics: new Map(),
     };
   }
 
@@ -67,6 +73,141 @@ function getManagerState(): ManagerState {
 function normalizeText(value: string | null | undefined) {
   const normalized = value?.trim();
   return normalized ? normalized : '';
+}
+
+function cloneTurnDiagnostics(
+  diagnostics: SessionAgentTurnDiagnostics,
+): SessionAgentTurnDiagnostics {
+  return {
+    ...diagnostics,
+    steps: diagnostics.steps.map((step) => ({ ...step })),
+  };
+}
+
+function createTurnDiagnostics(provider: AgentProvider, queuedAt: string): SessionAgentTurnDiagnostics {
+  return {
+    transport: provider === 'codex' ? 'codex-app-server' : 'acp',
+    runState: 'queued',
+    queuedAt,
+    updatedAt: queuedAt,
+    startedAt: null,
+    completedAt: null,
+    timeToTurnStartMs: null,
+    currentStepKey: null,
+    steps: [],
+  };
+}
+
+function getSessionTurnDiagnosticsSnapshot(sessionId: string): SessionAgentTurnDiagnostics | null {
+  const state = getManagerState();
+  const diagnostics = state.runs.get(sessionId)?.diagnostics ?? state.lastDiagnostics.get(sessionId) ?? null;
+  return diagnostics ? cloneTurnDiagnostics(diagnostics) : null;
+}
+
+export function enrichSessionRuntimeWithDiagnostics(
+  sessionId: string,
+  runtime: SessionAgentRuntimeState | null,
+): SessionAgentRuntimeState | null {
+  if (!runtime) {
+    return null;
+  }
+
+  const diagnostics = getSessionTurnDiagnosticsSnapshot(sessionId);
+  if (!diagnostics) {
+    return runtime;
+  }
+
+  return {
+    ...runtime,
+    turnDiagnostics: diagnostics,
+  };
+}
+
+function updateRunDiagnostics(
+  sessionId: string,
+  updater: (diagnostics: SessionAgentTurnDiagnostics) => void,
+): SessionAgentTurnDiagnostics | null {
+  const state = getManagerState();
+  const activeRun = state.runs.get(sessionId);
+  if (!activeRun) {
+    return null;
+  }
+
+  updater(activeRun.diagnostics);
+  state.lastDiagnostics.set(sessionId, cloneTurnDiagnostics(activeRun.diagnostics));
+  return cloneTurnDiagnostics(activeRun.diagnostics);
+}
+
+function applyRunDiagnosticUpdate(
+  sessionId: string,
+  update: SessionAgentTurnDiagnosticUpdate,
+): SessionAgentTurnDiagnostics | null {
+  const now = new Date().toISOString();
+  return updateRunDiagnostics(sessionId, (diagnostics) => {
+    diagnostics.updatedAt = now;
+    diagnostics.currentStepKey = update.status === 'running' ? update.key : diagnostics.currentStepKey;
+
+    const existingStep = diagnostics.steps.find((step) => step.key === update.key);
+    if (existingStep) {
+      existingStep.label = update.label;
+      existingStep.status = update.status;
+      existingStep.detail = update.detail ?? existingStep.detail ?? null;
+      if (!existingStep.startedAt) {
+        existingStep.startedAt = now;
+      }
+      if (update.status === 'completed' || update.status === 'failed') {
+        existingStep.completedAt = now;
+        existingStep.durationMs = Math.max(
+          0,
+          new Date(now).getTime() - new Date(existingStep.startedAt).getTime(),
+        );
+        if (diagnostics.currentStepKey === update.key) {
+          diagnostics.currentStepKey = null;
+        }
+      }
+      return;
+    }
+
+    diagnostics.steps.push({
+      key: update.key,
+      label: update.label,
+      status: update.status,
+      startedAt: now,
+      completedAt: update.status === 'completed' || update.status === 'failed' ? now : null,
+      durationMs: update.status === 'completed' || update.status === 'failed' ? 0 : null,
+      detail: update.detail ?? null,
+    });
+    if (update.status !== 'running') {
+      diagnostics.currentStepKey = null;
+    }
+  });
+}
+
+function updateRunDiagnosticsForRuntimeState(
+  sessionId: string,
+  runState: SessionAgentRunState,
+  timestamp: string,
+): SessionAgentTurnDiagnostics | null {
+  return updateRunDiagnostics(sessionId, (diagnostics) => {
+    diagnostics.runState = runState;
+    diagnostics.updatedAt = timestamp;
+
+    if (runState === 'running') {
+      diagnostics.startedAt = timestamp;
+      diagnostics.completedAt = null;
+      diagnostics.timeToTurnStartMs = Math.max(
+        0,
+        new Date(timestamp).getTime() - new Date(diagnostics.queuedAt).getTime(),
+      );
+      diagnostics.currentStepKey = null;
+      return;
+    }
+
+    if (runState === 'completed' || runState === 'cancelled' || runState === 'error') {
+      diagnostics.completedAt = timestamp;
+      diagnostics.currentStepKey = null;
+    }
+  });
 }
 
 async function resolveSessionGitAuthEnv(metadata: NonNullable<Awaited<ReturnType<typeof getSessionMetadata>>>): Promise<Record<string, string>> {
@@ -407,7 +548,7 @@ class HistoryProjector {
 }
 
 async function publishRuntimeEvent(sessionId: string, event: ChatStreamEvent) {
-  const snapshot = readSessionRuntime(sessionId);
+  const snapshot = enrichSessionRuntimeWithDiagnostics(sessionId, readSessionRuntime(sessionId));
   if (!snapshot) {
     return;
   }
@@ -416,6 +557,25 @@ async function publishRuntimeEvent(sessionId: string, event: ChatStreamEvent) {
     sessionId,
     snapshot,
     event,
+  });
+}
+
+async function publishDiagnosticEvent(
+  sessionId: string,
+  update: SessionAgentTurnDiagnosticUpdate,
+) {
+  const snapshot = enrichSessionRuntimeWithDiagnostics(sessionId, readSessionRuntime(sessionId));
+  if (!snapshot) {
+    return;
+  }
+
+  await publishSessionAgentEvent({
+    sessionId,
+    snapshot,
+    event: {
+      type: 'turn_diagnostic',
+      ...update,
+    },
   });
 }
 
@@ -495,9 +655,17 @@ export async function startSessionTurn(input: StartTurnInput): Promise<{
     lastError: null,
     lastActivityAt: startedAt,
   });
+  const diagnostics = createTurnDiagnostics(provider as AgentProvider, startedAt);
+  state.lastDiagnostics.set(sessionId, cloneTurnDiagnostics(diagnostics));
   await publishSessionListUpdated();
 
   const abortController = new AbortController();
+  const activeRun: ActiveRun = {
+    abortController,
+    promise: Promise.resolve(),
+    diagnostics,
+  };
+  state.runs.set(sessionId, activeRun);
   const promise = (async () => {
     try {
       await adapter.streamChat({
@@ -519,12 +687,26 @@ export async function startSessionTurn(input: StartTurnInput): Promise<{
           timestamp: now,
           loadStatus: async (providerId) => await getAgentAdapter(providerId).getStatus(),
         }));
+        if (event.type === 'turn_started') {
+          updateRunDiagnosticsForRuntimeState(sessionId, 'running', now);
+        } else if (event.type === 'turn_completed') {
+          const completionState = event.error
+            ? (event.error === 'Request cancelled.' ? 'cancelled' : 'error')
+            : (event.status === 'cancelled'
+                ? 'cancelled'
+                : (event.status === 'failed' || event.status === 'error' ? 'error' : 'completed'));
+          updateRunDiagnosticsForRuntimeState(sessionId, completionState, now);
+        }
 
         await publishRuntimeEvent(sessionId, event as ChatStreamEvent);
         await publishDerivedNotification(sessionId, event as ChatStreamEvent, projector.getLatestAssistantText());
-      }, abortController.signal);
+      }, abortController.signal, (update) => {
+        applyRunDiagnosticUpdate(sessionId, update);
+        void publishDiagnosticEvent(sessionId, update);
+      });
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Agent turn failed.';
+      const failureTimestamp = new Date().toISOString();
       const failureEvent: ChatStreamEvent = {
         type: 'error',
         message: abortController.signal.aborted ? 'Request cancelled.' : messageText,
@@ -536,14 +718,19 @@ export async function startSessionTurn(input: StartTurnInput): Promise<{
           aborted: abortController.signal.aborted,
           message: messageText,
         },
-        timestamp: new Date().toISOString(),
+        timestamp: failureTimestamp,
         loadStatus: async (providerId) => await getAgentAdapter(providerId).getStatus(),
       }));
+      updateRunDiagnosticsForRuntimeState(
+        sessionId,
+        abortController.signal.aborted ? 'cancelled' : 'error',
+        failureTimestamp,
+      );
 
       if (runtime) {
         await publishSessionAgentEvent({
           sessionId,
-          snapshot: runtime,
+          snapshot: enrichSessionRuntimeWithDiagnostics(sessionId, runtime) ?? runtime,
           event: failureEvent,
         });
         await publishDerivedNotification(sessionId, failureEvent, projector.getLatestAssistantText());
@@ -553,15 +740,14 @@ export async function startSessionTurn(input: StartTurnInput): Promise<{
       await publishSessionListUpdated();
     }
   })();
-
-  state.runs.set(sessionId, {
-    abortController,
-    promise,
-  });
+  activeRun.promise = promise;
 
   void promise.catch(() => {});
 
-  return { success: true, runtime: initialRuntime };
+  return {
+    success: true,
+    runtime: enrichSessionRuntimeWithDiagnostics(sessionId, initialRuntime),
+  };
 }
 
 export async function cancelSessionTurn(sessionId: string): Promise<{
@@ -578,22 +764,24 @@ export async function cancelSessionTurn(sessionId: string): Promise<{
   if (!active) {
     return {
       success: true,
-      runtime: readSessionRuntime(normalizedSessionId),
+      runtime: enrichSessionRuntimeWithDiagnostics(normalizedSessionId, readSessionRuntime(normalizedSessionId)),
     };
   }
 
   active.abortController.abort();
+  const cancelledAt = new Date().toISOString();
   const runtime = updateSessionRuntime(normalizedSessionId, {
     activeTurnId: null,
     runState: 'cancelled',
     lastError: 'Request cancelled.',
-    lastActivityAt: new Date().toISOString(),
+    lastActivityAt: cancelledAt,
   });
+  updateRunDiagnosticsForRuntimeState(normalizedSessionId, 'cancelled', cancelledAt);
 
   if (runtime) {
     await publishSessionAgentEvent({
       sessionId: normalizedSessionId,
-      snapshot: runtime,
+      snapshot: enrichSessionRuntimeWithDiagnostics(normalizedSessionId, runtime) ?? runtime,
       event: {
         type: 'error',
         message: 'Request cancelled.',
@@ -601,9 +789,23 @@ export async function cancelSessionTurn(sessionId: string): Promise<{
     });
   }
 
-  return { success: true, runtime };
+  return {
+    success: true,
+    runtime: enrichSessionRuntimeWithDiagnostics(normalizedSessionId, runtime) ?? runtime,
+  };
 }
 
 export async function getAgentSessionSnapshot(sessionId: string) {
-  return await getSessionAgentSnapshot(sessionId);
+  const result = await getSessionAgentSnapshot(sessionId);
+  if (!result.success || !result.snapshot) {
+    return result;
+  }
+
+  return {
+    ...result,
+    snapshot: {
+      ...result.snapshot,
+      runtime: enrichSessionRuntimeWithDiagnostics(sessionId, result.snapshot.runtime) ?? result.snapshot.runtime,
+    },
+  };
 }

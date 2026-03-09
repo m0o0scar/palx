@@ -3,6 +3,7 @@ import {
   normalizeNullableProviderReasoningEffort,
   normalizeProviderReasoningEffort,
 } from '@/lib/agent/reasoning';
+import { sortSessionHistoryForTimeline } from '@/lib/agent/history-order';
 import type {
   AgentProvider,
   HistoryEntry,
@@ -245,9 +246,9 @@ export function listSessionHistory(sessionName: string): SessionAgentHistoryItem
     ORDER BY ordinal ASC, created_at ASC, item_id ASC
   `).all(sessionName) as SessionAgentHistoryRow[];
 
-  return rows
+  return sortSessionHistoryForTimeline(rows
     .map((row) => toHistoryItem(row))
-    .filter((item): item is SessionAgentHistoryItem => Boolean(item));
+    .filter((item): item is SessionAgentHistoryItem => Boolean(item)));
 }
 
 export function getNextHistoryOrdinal(sessionName: string): number {

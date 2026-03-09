@@ -5,6 +5,7 @@ import type {
   ChatStreamEvent,
   LoginStartResponse,
   ProviderCatalogEntry,
+  SessionAgentTurnDiagnosticUpdate,
   ThreadHistoryResponse,
 } from '@/lib/agent/types';
 
@@ -29,5 +30,6 @@ export type AgentAdapter = {
     input: AgentChatInput,
     onEvent: (event: ChatStreamEvent) => void,
     signal?: AbortSignal,
+    onDiagnostic?: (update: SessionAgentTurnDiagnosticUpdate) => void,
   ): Promise<void>;
 };

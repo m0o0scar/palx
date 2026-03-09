@@ -13,6 +13,7 @@ import {
   normalizeNullableProviderReasoningEffort,
   normalizeProviderReasoningEffort,
 } from '@/lib/agent/reasoning';
+import { sortSessionHistoryForTimeline } from '@/lib/agent/history-order';
 import { publishSessionListUpdated } from '@/lib/sessionNotificationServer';
 import type {
   AgentProvider,
@@ -946,9 +947,9 @@ export async function listSessionAgentHistory(
     }
 
     const rows = db.prepare(sql).all(...params) as SessionAgentHistoryRow[];
-    return rows
+    return sortSessionHistoryForTimeline(rows
       .map((row) => toSessionAgentHistoryItem(row))
-      .filter((item): item is SessionAgentHistoryItem => Boolean(item));
+      .filter((item): item is SessionAgentHistoryItem => Boolean(item)));
   } catch (e) {
     console.error('Failed to list session agent history:', e);
     return [];

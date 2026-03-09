@@ -250,6 +250,7 @@ export default function GitRepoSelector({
 
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const sessionNavigationCommittedRef = useRef(false);
+  const agentRuntimeSettingsRequestRef = useRef(0);
 
   const collapsedSessionSetupLabel = 'Show Session Setup';
 
@@ -1449,6 +1450,33 @@ export default function GitRepoSelector({
     }
   }, [agentProviders]);
 
+  const saveAgentRuntimeSettings = useCallback(async (
+    projectPath: string,
+    updates: {
+      agentProvider: AgentProvider;
+      agentModel?: string;
+      agentReasoningEffort?: ReasoningEffort;
+    },
+  ): Promise<Config> => {
+    const response = await fetch('/api/projects/settings', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        projectPath,
+        updates,
+      }),
+    });
+    const payload = await response.json().catch(() => null) as { config?: Config; error?: string } | null;
+
+    if (!response.ok || !payload?.config) {
+      throw new Error(payload?.error || 'Failed to persist agent runtime settings.');
+    }
+
+    return payload.config;
+  }, []);
+
   const ensureSelectedProviderReady = useCallback(async (): Promise<{ ready: boolean; status: AppStatus | null }> => {
     const payload = await fetchAgentStatus(selectedAgentProvider);
     const status = payload?.status ?? null;
@@ -1533,24 +1561,21 @@ export default function GitRepoSelector({
       return;
     }
 
-    let cancelled = false;
+    const requestId = agentRuntimeSettingsRequestRef.current + 1;
+    agentRuntimeSettingsRequestRef.current = requestId;
 
-    void updateProjectSettings(selectedRepo, {
+    void saveAgentRuntimeSettings(selectedRepo, {
       agentProvider: selectedAgentProvider,
       agentModel: selectedAgentModel || undefined,
       agentReasoningEffort: nextReasoning,
     }).then((nextConfig) => {
-      if (!cancelled) {
+      if (agentRuntimeSettingsRequestRef.current === requestId) {
         setConfig(nextConfig);
       }
     }).catch((settingsError) => {
       console.error('Failed to persist agent runtime settings:', settingsError);
     });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [config, mode, selectedAgentModel, selectedAgentProvider, selectedReasoningEffort, selectedRepo]);
+  }, [config, mode, saveAgentRuntimeSettings, selectedAgentModel, selectedAgentProvider, selectedReasoningEffort, selectedRepo]);
 
   useEffect(() => {
     if (!isWaitingForLogin || !waitingForLoginProvider) {

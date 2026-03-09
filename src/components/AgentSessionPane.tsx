@@ -9,7 +9,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AlertCircle, Clock3, Loader2, PlayCircle, Send, Square } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronRight, Clock3, Loader2, PlayCircle, Send, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type {
@@ -134,6 +134,27 @@ function formatTimestamp(value: string | null | undefined) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleString();
+}
+
+function formatDuration(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  if (value < 10_000) return `${(value / 1000).toFixed(1)}s`;
+  if (value < 60_000) return `${Math.round(value / 1000)}s`;
+  return `${(value / 60_000).toFixed(1)}m`;
+}
+
+function diagnosticStepTone(status: string) {
+  switch (status) {
+    case 'completed':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200';
+    case 'failed':
+      return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200';
+    case 'running':
+      return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200';
+    default:
+      return 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-300';
+  }
 }
 
 function codeBlock(value: string | null | undefined) {
@@ -831,8 +852,17 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
     if (runtime.threadId) {
       details.push(`thread ${runtime.threadId}`);
     }
+    if (runtime.turnDiagnostics?.timeToTurnStartMs != null) {
+      details.push(`startup ${formatDuration(runtime.turnDiagnostics.timeToTurnStartMs)}`);
+    }
     return details;
   }, [runtime]);
+  const turnDiagnostics = runtime?.turnDiagnostics ?? null;
+  const [showTurnDiagnostics, setShowTurnDiagnostics] = useState(false);
+
+  useEffect(() => {
+    setShowTurnDiagnostics(false);
+  }, [sessionId, turnDiagnostics?.queuedAt]);
 
   const submitMessageToAgent = useCallback(async (message: string) => {
     setError(null);
@@ -999,6 +1029,52 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
               ))}
               <span className="truncate" title={workspacePath}>cwd: {workspacePath}</span>
             </div>
+            {turnDiagnostics ? (
+              <div className="mt-3">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                  onClick={() => setShowTurnDiagnostics((current) => !current)}
+                  aria-expanded={showTurnDiagnostics}
+                >
+                  {showTurnDiagnostics ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                  Startup Diagnostics
+                </button>
+                {showTurnDiagnostics ? (
+                  <div className="mt-2 rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-2 dark:border-[#30363d] dark:bg-[#0d1117]/80">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                      <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                        {turnDiagnostics.transport}
+                      </span>
+                      {turnDiagnostics.timeToTurnStartMs != null ? (
+                        <span>to running {formatDuration(turnDiagnostics.timeToTurnStartMs)}</span>
+                      ) : (
+                        <span>queued since {formatTimestamp(turnDiagnostics.queuedAt)}</span>
+                      )}
+                    </div>
+                    {turnDiagnostics.steps.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {turnDiagnostics.steps.map((step) => {
+                          const durationLabel = step.status === 'running'
+                            ? 'in progress'
+                            : formatDuration(step.durationMs);
+                          return (
+                            <span
+                              key={step.key}
+                              title={step.detail || undefined}
+                              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${diagnosticStepTone(step.status)}`}
+                            >
+                              <span>{step.label}</span>
+                              {durationLabel ? <span>{durationLabel}</span> : null}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           <button
             type="button"

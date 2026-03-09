@@ -20,6 +20,6 @@ export const geminiAdapter: AgentAdapter = {
   ensureInstalled: async (onEvent) => await ensureAcpInstalled("gemini", onEvent),
   startLogin: async () => await startAcpLogin("gemini"),
   readThreadHistory: async (input) => await readAcpThreadHistory("gemini", input),
-  streamChat: async (input, onEvent, signal) =>
-    await streamAcpChat("gemini", input, onEvent, signal),
+  streamChat: async (input, onEvent, signal, onDiagnostic) =>
+    await streamAcpChat("gemini", input, onEvent, signal, onDiagnostic),
 };

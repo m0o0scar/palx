@@ -33,6 +33,7 @@ import type {
   LoginStartResponse,
   ModelOption,
   ProviderCatalogEntry,
+  SessionAgentTurnDiagnosticUpdate,
   ThreadHistoryResponse,
   ToolTraceSource,
 } from "@/lib/agent/types";
@@ -1496,7 +1497,35 @@ export async function streamAcpChat(
   input: ChatInput,
   onEvent: (event: ChatStreamEvent) => void,
   signal?: AbortSignal,
+  onDiagnostic?: (update: SessionAgentTurnDiagnosticUpdate) => void,
 ) {
+  const emitDiagnostic = (update: SessionAgentTurnDiagnosticUpdate) => {
+    onDiagnostic?.(update);
+  };
+  const failDiagnosticStep = (key: string, label: string, error: unknown) => {
+    emitDiagnostic({
+      key,
+      label,
+      status: "failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  };
+  const runDiagnosticStep = async <T,>(
+    key: string,
+    label: string,
+    action: () => Promise<T>,
+  ) => {
+    emitDiagnostic({ key, label, status: "running" });
+    try {
+      const result = await action();
+      emitDiagnostic({ key, label, status: "completed" });
+      return result;
+    } catch (error) {
+      failDiagnosticStep(key, label, error);
+      throw error;
+    }
+  };
+
   const config = providerConfigs[provider];
   let threadId = input.threadId?.trim() || "";
   const turnId = randomUUID();
@@ -1505,31 +1534,33 @@ export async function streamAcpChat(
   let projector: AcpTurnProjector | null = null;
   let lastReplayActivityAt = Date.now();
 
-  const connection = await createAcpConnection(
-    config,
-    input.workspacePath,
-    {
-      onSessionUpdate: ({ update }) => {
-        lastReplayActivityAt = Date.now();
-        if (suppressHistory || !projector) {
-          return;
-        }
+  const connection = await runDiagnosticStep("launch_runtime", "Launch ACP runtime", async () => {
+    return await createAcpConnection(
+      config,
+      input.workspacePath,
+      {
+        onSessionUpdate: ({ update }) => {
+          lastReplayActivityAt = Date.now();
+          if (suppressHistory || !projector) {
+            return;
+          }
 
-        projector.handleUpdate(update);
-      },
-      onPermissionRequest: (params) => {
-        if (suppressHistory || !projector) {
-          return;
-        }
+          projector.handleUpdate(update);
+        },
+        onPermissionRequest: (params) => {
+          if (suppressHistory || !projector) {
+            return;
+          }
 
-        projector.handlePermissionRequest(params);
+          projector.handlePermissionRequest(params);
+        },
       },
-    },
-    {
-      model: input.model,
-      extraEnv: input.extraEnv,
-    },
-  );
+      {
+        model: input.model,
+        extraEnv: input.extraEnv,
+      },
+    );
+  });
 
   const abortHandler = () => {
     cancelled = true;
@@ -1547,16 +1578,22 @@ export async function streamAcpChat(
 
   try {
     if (threadId) {
-      await connection.client.loadSession({
-        sessionId: threadId,
-        cwd: input.workspacePath,
-        mcpServers: [],
+      await runDiagnosticStep("load_session", "Load existing session", async () => {
+        await connection.client.loadSession({
+          sessionId: threadId,
+          cwd: input.workspacePath,
+          mcpServers: [],
+        });
       });
-      await waitForReplayIdle(() => lastReplayActivityAt);
+      await runDiagnosticStep("replay_history", "Replay prior session history", async () => {
+        await waitForReplayIdle(() => lastReplayActivityAt);
+      });
     } else {
-      const session = await connection.client.newSession({
-        cwd: input.workspacePath,
-        mcpServers: [],
+      const session = await runDiagnosticStep("start_session", "Create new ACP session", async () => {
+        return await connection.client.newSession({
+          cwd: input.workspacePath,
+          mcpServers: [],
+        });
       });
       threadId = session.sessionId;
     }
@@ -1573,15 +1610,17 @@ export async function streamAcpChat(
       turnId,
     });
 
-    const promptResult = await connection.client.prompt({
-      sessionId: threadId,
-      messageId: randomUUID(),
-      prompt: [
-        {
-          type: "text",
-          text: input.message,
-        },
-      ],
+    const promptResult = await runDiagnosticStep("send_prompt", "Send prompt", async () => {
+      return await connection.client.prompt({
+        sessionId: threadId,
+        messageId: randomUUID(),
+        prompt: [
+          {
+            type: "text",
+            text: input.message,
+          },
+        ],
+      });
     });
 
     onEvent({
@@ -1591,6 +1630,8 @@ export async function streamAcpChat(
       status: normalizeText(promptResult.stopReason) || (cancelled ? "cancelled" : "completed"),
       error: cancelled ? "Request cancelled." : null,
     });
+  } catch (error) {
+    throw error;
   } finally {
     signal?.removeEventListener("abort", abortHandler);
     await connection.close();

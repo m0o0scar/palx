@@ -8,6 +8,8 @@ export type {
   ModelOption,
   ProviderCatalogEntry,
   ReasoningEffort,
+  SessionAgentTurnDiagnosticUpdate,
+  SessionAgentTurnDiagnostics,
   SessionAgentRunState,
   ThreadHistoryResponse,
   ToolTraceSource,

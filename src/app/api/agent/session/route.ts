@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionAgentSnapshot, replaceSessionAgentHistory } from '@/app/actions/session';
 import { getAgentAdapter } from '@/lib/agent/providers';
+import { enrichSessionRuntimeWithDiagnostics } from '@/lib/agent/session-manager';
 
 export const runtime = 'nodejs';
 
@@ -18,14 +19,18 @@ export async function GET(request: NextRequest) {
   }
 
   const snapshot = snapshotResult.snapshot;
-  if (snapshot.history.length === 0 && snapshot.runtime.threadId) {
+  const enrichedSnapshot = {
+    ...snapshot,
+    runtime: enrichSessionRuntimeWithDiagnostics(sessionId, snapshot.runtime) ?? snapshot.runtime,
+  };
+  if (enrichedSnapshot.history.length === 0 && enrichedSnapshot.runtime.threadId) {
     try {
-      const adapter = getAgentAdapter(snapshot.runtime.agentProvider);
+      const adapter = getAgentAdapter(enrichedSnapshot.runtime.agentProvider);
       const thread = await adapter.readThreadHistory({
-        workspacePath: snapshot.metadata.workspacePath,
-        threadId: snapshot.runtime.threadId,
-        model: snapshot.runtime.model,
-        reasoningEffort: snapshot.runtime.reasoningEffort ?? null,
+        workspacePath: enrichedSnapshot.metadata.workspacePath,
+        threadId: enrichedSnapshot.runtime.threadId,
+        model: enrichedSnapshot.runtime.model,
+        reasoningEffort: enrichedSnapshot.runtime.reasoningEffort ?? null,
       });
 
       const history = thread.entries.map((entry, index) => ({
@@ -36,12 +41,15 @@ export async function GET(request: NextRequest) {
       await replaceSessionAgentHistory(sessionId, history);
       const refreshed = await getSessionAgentSnapshot(sessionId);
       if (refreshed.success && refreshed.snapshot) {
-        return NextResponse.json(refreshed.snapshot);
+        return NextResponse.json({
+          ...refreshed.snapshot,
+          runtime: enrichSessionRuntimeWithDiagnostics(sessionId, refreshed.snapshot.runtime) ?? refreshed.snapshot.runtime,
+        });
       }
     } catch {
       // Fall through to the persisted snapshot when provider replay is unavailable.
     }
   }
 
-  return NextResponse.json(snapshot);
+  return NextResponse.json(enrichedSnapshot);
 }
