@@ -47,7 +47,6 @@ type AgentSocketPayload = {
 export type AgentSessionPaneHandle = {
   focusComposer: () => void;
   insertText: (text: string) => boolean;
-  openStartupDiagnostics: () => void;
   openAgentDetails: () => void;
   cancelActiveTurn: () => Promise<void>;
 };
@@ -60,7 +59,6 @@ export type AgentSessionHeaderMeta = {
   threadId: string | null;
   reasoningEffort: string | null;
   workspacePath: string;
-  hasTurnDiagnostics: boolean;
   canCancel: boolean;
   isCancelling: boolean;
   lastActivityAt: string | null;
@@ -887,12 +885,7 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
 
   const providerName = providerLabel(runtime?.agentProvider || null);
   const turnDiagnostics = runtime?.turnDiagnostics ?? null;
-  const [isTurnDiagnosticsDialogOpen, setIsTurnDiagnosticsDialogOpen] = useState(false);
   const [isAgentDetailsDialogOpen, setIsAgentDetailsDialogOpen] = useState(false);
-
-  useEffect(() => {
-    setIsTurnDiagnosticsDialogOpen(false);
-  }, [sessionId, turnDiagnostics?.queuedAt]);
 
   const submitMessageToAgent = useCallback(async (message: string, attachmentPaths: string[] = []) => {
     const normalizedAttachmentPaths = Array.from(new Set(attachmentPaths.map((entry) => entry.trim()).filter(Boolean)));
@@ -1129,7 +1122,6 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
     threadId: runtime?.threadId || null,
     reasoningEffort: runtime?.reasoningEffort || null,
     workspacePath,
-    hasTurnDiagnostics: Boolean(turnDiagnostics),
     canCancel: Boolean(runtime) && (isTurnActive || isCancelling),
     isCancelling,
     lastActivityAt: runtime?.lastActivityAt || null,
@@ -1141,7 +1133,6 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
     providerName,
     runtime,
     socketConnected,
-    turnDiagnostics,
     workspacePath,
   ]);
 
@@ -1169,17 +1160,13 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
       onFeedback?.('Inserted text into agent input');
       return true;
     },
-    openStartupDiagnostics() {
-      if (!turnDiagnostics) return;
-      setIsTurnDiagnosticsDialogOpen(true);
-    },
     openAgentDetails() {
       setIsAgentDetailsDialogOpen(true);
     },
     async cancelActiveTurn() {
       await handleCancel();
     },
-  }), [handleCancel, onFeedback, turnDiagnostics]);
+  }), [handleCancel, onFeedback]);
 
   useEffect(() => {
     if (isTurnActive || isSending || pendingMessages.length === 0) return;
@@ -1205,56 +1192,6 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-transparent">
-      {turnDiagnostics && isTurnDiagnosticsDialogOpen ? (
-        <dialog className="modal modal-open">
-          <div className="modal-box max-w-2xl">
-            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">Startup Diagnostics</h3>
-            <div className="mt-3 rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-2 dark:border-[#30363d] dark:bg-[#0d1117]/80">
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                  {turnDiagnostics.transport}
-                </span>
-                {turnDiagnostics.timeToTurnStartMs != null ? (
-                  <span>to running {formatDuration(turnDiagnostics.timeToTurnStartMs)}</span>
-                ) : (
-                  <span>queued since {formatTimestamp(turnDiagnostics.queuedAt)}</span>
-                )}
-              </div>
-              {turnDiagnostics.steps.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {turnDiagnostics.steps.map((step) => {
-                    const durationLabel = step.status === 'running'
-                      ? 'in progress'
-                      : formatDuration(step.durationMs);
-                    return (
-                      <span
-                        key={step.key}
-                        title={step.detail || undefined}
-                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${diagnosticStepTone(step.status)}`}
-                      >
-                        <span>{step.label}</span>
-                        {durationLabel ? <span>{durationLabel}</span> : null}
-                      </span>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-            <div className="modal-action">
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setIsTurnDiagnosticsDialogOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-          <form method="dialog" className="modal-backdrop">
-            <button onClick={() => setIsTurnDiagnosticsDialogOpen(false)}>close</button>
-          </form>
-        </dialog>
-      ) : null}
       {isAgentDetailsDialogOpen ? (
         <dialog className="modal modal-open">
           <div className="modal-box max-w-2xl">
@@ -1300,16 +1237,42 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
                   <div className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Last Activity</div>
                   <div className="mt-0.5 text-xs text-slate-700 dark:text-slate-200">{formatTimestamp(runtime?.lastActivityAt) || 'n/a'}</div>
                 </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Startup Diagnostics</div>
-                  <div className="mt-0.5 text-xs text-slate-700 dark:text-slate-200">
-                    {turnDiagnostics
-                      ? (turnDiagnostics.timeToTurnStartMs != null
-                        ? `to running ${formatDuration(turnDiagnostics.timeToTurnStartMs)}`
-                        : `queued since ${formatTimestamp(turnDiagnostics.queuedAt) || 'unknown'}`)
-                      : 'n/a'}
+                {turnDiagnostics ? (
+                  <div className="sm:col-span-2">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Startup Diagnostics</div>
+                    <div className="mt-2 rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-2 dark:border-[#30363d] dark:bg-[#0d1117]/80">
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                          {turnDiagnostics.transport}
+                        </span>
+                        {turnDiagnostics.timeToTurnStartMs != null ? (
+                          <span>to running {formatDuration(turnDiagnostics.timeToTurnStartMs)}</span>
+                        ) : (
+                          <span>queued since {formatTimestamp(turnDiagnostics.queuedAt)}</span>
+                        )}
+                      </div>
+                      {turnDiagnostics.steps.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {turnDiagnostics.steps.map((step) => {
+                            const durationLabel = step.status === 'running'
+                              ? 'in progress'
+                              : formatDuration(step.durationMs);
+                            return (
+                              <span
+                                key={step.key}
+                                title={step.detail || undefined}
+                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${diagnosticStepTone(step.status)}`}
+                              >
+                                <span>{step.label}</span>
+                                {durationLabel ? <span>{durationLabel}</span> : null}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
+                ) : null}
               </div>
               {runtime?.lastError ? (
                 <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">

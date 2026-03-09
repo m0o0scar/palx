@@ -1241,10 +1241,6 @@ export function SessionView({
         agentPaneRef.current?.openAgentDetails();
     }, []);
 
-    const handleOpenStartupDiagnostics = useCallback(() => {
-        agentPaneRef.current?.openStartupDiagnostics();
-    }, []);
-
     const handleCancelAgentTurn = useCallback(() => {
         void agentPaneRef.current?.cancelActiveTurn();
     }, []);
@@ -2257,15 +2253,6 @@ export function SessionView({
                             >
                                 <Info className="h-3.5 w-3.5" />
                             </button>
-                            {agentHeaderMeta?.hasTurnDiagnostics ? (
-                                <button
-                                    type="button"
-                                    className="btn btn-ghost btn-xs h-6 min-h-6 shrink-0 border border-slate-200 bg-white px-2 text-slate-700 hover:bg-slate-100 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-300 dark:hover:bg-[#30363d]/60"
-                                    onClick={handleOpenStartupDiagnostics}
-                                >
-                                    Startup Diagnostics
-                                </button>
-                            ) : null}
                             {agentHeaderMeta?.canCancel ? (
                                 <button
                                     type="button"
