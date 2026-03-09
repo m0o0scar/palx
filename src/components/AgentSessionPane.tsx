@@ -976,9 +976,9 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-transparent">
-      <div className="border-b border-slate-200 px-4 py-3 dark:border-[#30363d]">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
+      <div className="border-b border-slate-200 px-4 py-2.5 dark:border-[#30363d]">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{providerName}</span>
               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${runStateTone(activeRunState)}`}>
@@ -993,22 +993,24 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
                 {socketConnected ? 'live' : 'offline'}
               </span>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400">
               {runtimeDetails.map((detail) => (
                 <span key={detail}>{detail}</span>
               ))}
-              <span className="truncate" title={workspacePath}>cwd: {workspacePath}</span>
+              <span className="max-w-full truncate" title={workspacePath}>cwd: {workspacePath}</span>
             </div>
           </div>
-          <button
-            type="button"
-            className="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-200 dark:hover:bg-[#161b22]"
-            onClick={() => void handleCancel()}
-            disabled={!isTurnActive || isCancelling}
-          >
-            {isCancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
-            Cancel
-          </button>
+          {(isTurnActive || isCancelling) ? (
+            <button
+              type="button"
+              className="inline-flex h-8 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-200 dark:hover:bg-[#161b22]"
+              onClick={() => void handleCancel()}
+              disabled={isCancelling}
+            >
+              {isCancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+              Cancel
+            </button>
+          ) : null}
         </div>
         {runtime?.lastError ? (
           <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
