@@ -18,7 +18,7 @@ import {
     terminateTmuxSessionRole,
 } from '@/app/actions/git';
 import { getConfig, updateConfig } from '@/app/actions/config';
-import { Trash2, ExternalLink, Play, GitMerge, GitPullRequestArrow, GitBranch, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, ChevronRight, Grip, ChevronDown, Plus, MousePointer2, ArrowLeft, ArrowRight, RotateCw, ScrollText, TextCursorInput, X } from 'lucide-react';
+import { Trash2, ExternalLink, Play, GitMerge, GitPullRequestArrow, GitBranch, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, ChevronRight, Grip, ChevronDown, Plus, RotateCw, ScrollText, TextCursorInput, X } from 'lucide-react';
 import AgentSessionPane, { type AgentSessionPaneHandle } from './AgentSessionPane';
 import SessionFileBrowser from './SessionFileBrowser';
 import { SessionRepoViewer, type SessionRepoViewerOption } from './SessionRepoViewer';
@@ -115,111 +115,6 @@ const loadConfiguredIde = async (): Promise<string | null> => {
         });
     }
     return configuredIdePromise;
-};
-
-type PreviewComponentStackEntry = {
-    name?: unknown;
-    source?: {
-        fileName?: unknown;
-    } | null;
-};
-
-const normalizePickerSourceFileName = (value: string): string => {
-    let normalized = value.trim();
-    if (!normalized) return '';
-
-    normalized = normalized.replace(/[#?].*$/, '');
-
-    if (/^file:\/\//i.test(normalized)) {
-        try {
-            const asUrl = new URL(normalized);
-            normalized = decodeURIComponent(asUrl.pathname);
-        } catch {
-            // Keep original value when URL parsing fails
-        }
-    } else if (/^https?:\/\//i.test(normalized)) {
-        try {
-            const asUrl = new URL(normalized);
-            normalized = decodeURIComponent(asUrl.pathname);
-        } catch {
-            // Keep original value when URL parsing fails
-        }
-    }
-
-    normalized = normalized
-        .replace(/^webpack(?:-internal)?:\/\/\/?/, '')
-        .replace(/^rsc:\/\//, '')
-        .replace(/^\(.*?\)\//, '')
-        .replace(/^\/\.\//, '/')
-        .replace(/^\.\//, '');
-
-    return normalized.trim();
-};
-
-const joinPath = (base: string, relative: string): string => {
-    const normalizedBase = base.replace(/\/+$/, '');
-    const normalizedRelative = relative.replace(/^\/+/, '');
-    return `${normalizedBase}/${normalizedRelative}`;
-};
-
-const resolveComponentSourcePath = (rawSourceFileName: string, workspaceRoot: string): string | null => {
-    const normalizedWorkspaceRoot = workspaceRoot.trim().replace(/\/+$/, '');
-    if (!normalizedWorkspaceRoot) return null;
-
-    const normalizedSource = normalizePickerSourceFileName(rawSourceFileName);
-    if (!normalizedSource) return null;
-
-    if (normalizedSource.startsWith('/')) {
-        return normalizedSource;
-    }
-
-    const relativeCandidates = new Set<string>();
-    relativeCandidates.add(normalizedSource.replace(/^\.\/+/, ''));
-
-    const srcIndex = normalizedSource.indexOf('/src/');
-    if (srcIndex >= 0) {
-        relativeCandidates.add(normalizedSource.slice(srcIndex + 1));
-    }
-
-    if (normalizedSource.startsWith('src/')) {
-        relativeCandidates.add(normalizedSource);
-    }
-
-    for (const relative of relativeCandidates) {
-        if (!relative) continue;
-        return joinPath(normalizedWorkspaceRoot, relative);
-    }
-
-    return null;
-};
-
-const buildComponentReferenceText = (reactStack: unknown[], workspaceRoot: string): string | null => {
-    for (const entry of reactStack) {
-        if (!entry || typeof entry !== 'object') continue;
-
-        const componentEntry = entry as PreviewComponentStackEntry;
-        const componentName = typeof componentEntry.name === 'string' ? componentEntry.name.trim() : '';
-        if (!componentName) continue;
-
-        const sourceFileName = typeof componentEntry.source?.fileName === 'string'
-            ? componentEntry.source.fileName.trim()
-            : '';
-        const sourcePath = sourceFileName ? resolveComponentSourcePath(sourceFileName, workspaceRoot) : null;
-
-        if (sourcePath) {
-            return `${componentName} (${sourcePath})`;
-        }
-    }
-
-    return null;
-};
-
-const normalizeComponentLookupName = (value: string): string => {
-    const trimmed = value.trim();
-    if (!trimmed) return '';
-
-    const match = trimmed.match(/[A-Za-z_$][\w$]*/);
-    return match ? match[0] : '';
 };
 
 export interface SessionViewProps {
@@ -327,7 +222,6 @@ export function SessionView({
 
     const agentPaneRef = useRef<AgentSessionPaneHandle>(null);
     const terminalFramesRef = useRef<Record<string, HTMLIFrameElement | null>>({});
-    const previewIframeRef = useRef<HTMLIFrameElement>(null);
     const previewAddressInputRef = useRef<HTMLInputElement>(null);
     const splitContainerRef = useRef<HTMLDivElement>(null);
     const splitResizeRef = useRef({ startX: 0, startRatio: DEFAULT_AGENT_PANE_RATIO });
@@ -796,8 +690,6 @@ export function SessionView({
     const [previewInputUrl, setPreviewInputUrl] = useState('');
     const [previewUrl, setPreviewUrl] = useState('');
     const [loadedPreviewTargetUrl, setLoadedPreviewTargetUrl] = useState('');
-    const [isPreviewPickerActive, setIsPreviewPickerActive] = useState(false);
-    const [isResolvingElement, setIsResolvingElement] = useState(false);
     const [isRepoViewActive, setIsRepoViewActive] = useState(false);
     const [agentPaneRatio, setAgentPaneRatio] = useState(DEFAULT_AGENT_PANE_RATIO);
     const [isSplitResizing, setIsSplitResizing] = useState(false);
@@ -1490,54 +1382,6 @@ export function SessionView({
         setIsInsertingFilePaths(false);
     }, [insertIntoAgentComposer]);
 
-    const resolveComponentSourcePathByNames = useCallback(async (componentNames: string[]): Promise<{ resolvedName: string; sourcePath: string } | null> => {
-        const normalizedNames = componentNames.map(normalizeComponentLookupName).filter(Boolean);
-        if (normalizedNames.length === 0) return null;
-
-        const roots = Array.from(
-            new Set(
-                [repo, worktree]
-                    .map((root) => (root || '').trim())
-                    .filter(Boolean)
-            )
-        );
-        if (roots.length === 0) return null;
-
-        for (const workspaceRoot of roots) {
-            try {
-                const response = await fetch('/api/component-source/resolve', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        componentNames: normalizedNames,
-                        workspaceRoot,
-                    }),
-                });
-
-                const payload = await response.json().catch(() => null) as { resolvedName?: string; sourcePath?: string; error?: string } | null;
-                if (!response.ok) {
-                    console.warn('Component source resolve miss', {
-                        componentNames: normalizedNames,
-                        workspaceRoot,
-                        error: payload?.error || response.statusText,
-                    });
-                    continue;
-                }
-
-                const sourcePath = typeof payload?.sourcePath === 'string' ? payload.sourcePath.trim() : '';
-                const resolvedName = typeof payload?.resolvedName === 'string' ? payload.resolvedName.trim() : '';
-
-                if (sourcePath && resolvedName) return { sourcePath, resolvedName };
-            } catch (error) {
-                console.error('Failed to resolve component source path:', error);
-            }
-        }
-
-        return null;
-    }, [repo, worktree]);
-
     const loadBaseBranchOptions = useCallback(async () => {
         if (!sessionName || isFolderMode || !repo) {
             setBaseBranchOptions([]);
@@ -1748,25 +1592,7 @@ export function SessionView({
         }
     }, [handleRebaseSelect, newBaseBranchFrom, newBaseBranchName, repo, sessionName]);
 
-    const stopPreviewProxy = useCallback(async (target: string): Promise<void> => {
-        const normalized = normalizePreviewUrl(target);
-        if (!normalized) return;
-
-        try {
-            await fetch('/api/preview-proxy/stop', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ target: normalized }),
-                keepalive: true,
-            });
-        } catch (error) {
-            console.error('Failed to stop preview proxy:', error);
-        }
-    }, []);
-
-    const loadPreviewViaProxy = useCallback(async (rawUrl: string, openPreview: boolean): Promise<boolean> => {
+    const loadPreview = useCallback(async (rawUrl: string, openPreview: boolean): Promise<boolean> => {
         const normalized = normalizePreviewUrl(rawUrl);
         if (!normalized) {
             setFeedback('Please enter a preview URL');
@@ -1774,32 +1600,11 @@ export function SessionView({
         }
 
         setPreviewInputUrl(normalized);
-        setIsPreviewPickerActive(false);
         setFeedback(`Loading preview: ${normalized}`);
 
         try {
-            const previousTargetUrl = loadedPreviewTargetUrl;
-
-            const response = await fetch('/api/preview-proxy/start', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    target: normalized,
-                }),
-            });
-
-            const payload = await response.json().catch(() => null) as { error?: string; proxyUrl?: string } | null;
-            if (!response.ok || !payload?.proxyUrl) {
-                throw new Error(payload?.error || 'Failed to start preview proxy');
-            }
-
-            setPreviewUrl(payload.proxyUrl);
+            setPreviewUrl(normalized);
             setLoadedPreviewTargetUrl(normalized);
-            if (previousTargetUrl && previousTargetUrl !== normalized) {
-                void stopPreviewProxy(previousTargetUrl);
-            }
             if (openPreview) {
                 setIsPreviewVisible(true);
             }
@@ -1807,43 +1612,10 @@ export function SessionView({
             return true;
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to load preview';
-            console.error('Failed to load preview via proxy:', error);
+            console.error('Failed to load preview:', error);
             setFeedback(`Failed to load preview: ${message}`);
             return false;
         }
-    }, [loadedPreviewTargetUrl, stopPreviewProxy]);
-
-    const handleTogglePreviewPicker = useCallback(() => {
-        if (!previewUrl) {
-            setFeedback('Load a preview before picking elements');
-            return;
-        }
-
-        const previewWindow = previewIframeRef.current?.contentWindow;
-        if (!previewWindow) {
-            setFeedback('Preview is not ready yet');
-            return;
-        }
-
-        const nextState = !isPreviewPickerActive;
-        previewWindow.postMessage({
-            type: 'viba:preview-picker-toggle',
-            active: nextState,
-        }, '*');
-
-        setIsPreviewPickerActive(nextState);
-        setFeedback(nextState ? 'Picker enabled: click an element in the preview' : 'Picker disabled');
-    }, [isPreviewPickerActive, previewUrl]);
-
-    const postPreviewControlMessage = useCallback((payload: { action?: PreviewNavigationAction; type: string }) => {
-        const previewWindow = previewIframeRef.current?.contentWindow;
-        if (!previewWindow) {
-            setFeedback('Preview is not ready yet');
-            return false;
-        }
-
-        previewWindow.postMessage(payload, '*');
-        return true;
     }, []);
 
     const handlePreviewNavigate = useCallback((action: PreviewNavigationAction) => {
@@ -1852,14 +1624,19 @@ export function SessionView({
             return;
         }
 
-        if (!postPreviewControlMessage({ type: 'viba:preview-navigation', action })) {
+        if (action !== 'reload') {
+            setFeedback('Back/forward preview controls were removed with the preview proxy');
             return;
         }
 
-        if (action === 'reload') {
-            setFeedback('Reloading preview...');
+        const normalizedTarget = normalizePreviewUrl(loadedPreviewTargetUrl || previewInputUrl || previewUrl);
+        if (!normalizedTarget) {
+            setFeedback('Preview target URL is unavailable');
+            return;
         }
-    }, [postPreviewControlMessage, previewUrl]);
+        setPreviewUrl(normalizedTarget);
+        setFeedback('Reloading preview...');
+    }, [loadedPreviewTargetUrl, previewInputUrl, previewUrl]);
 
     const handleUnloadPreview = useCallback(() => {
         if (!previewUrl) {
@@ -1867,21 +1644,13 @@ export function SessionView({
             return;
         }
 
-        if (loadedPreviewTargetUrl) {
-            void stopPreviewProxy(loadedPreviewTargetUrl);
-        }
         setPreviewUrl('');
         setLoadedPreviewTargetUrl('');
-        setIsPreviewPickerActive(false);
         setFeedback('Preview unloaded');
-    }, [loadedPreviewTargetUrl, previewUrl, stopPreviewProxy]);
-
-    const handlePreviewIframeLoad = useCallback(() => {
-        postPreviewControlMessage({ type: 'viba:preview-location-request' });
-    }, [postPreviewControlMessage]);
+    }, [previewUrl]);
 
     const { attachTerminalLinkHandler } = useTerminalLink({
-        onLoadPreview: loadPreviewViaProxy
+        onLoadPreview: (url, openPreview) => loadPreview(url, openPreview)
     });
 
     useEffect(() => {
@@ -1897,162 +1666,13 @@ export function SessionView({
         };
     }, [isPreviewVisible, previewInputUrl]);
 
-    useEffect(() => {
-        return () => {
-            if (loadedPreviewTargetUrl) {
-                void stopPreviewProxy(loadedPreviewTargetUrl);
-            }
-        };
-    }, [loadedPreviewTargetUrl, stopPreviewProxy]);
-
-    useEffect(() => {
-        const handlePreviewMessage = (event: MessageEvent) => {
-            if (!previewIframeRef.current || event.source !== previewIframeRef.current.contentWindow) return;
-
-            const payload = event.data as {
-                active?: boolean;
-                element?: unknown;
-                type?: string;
-                url?: unknown;
-            } | null;
-            if (!payload || typeof payload !== 'object') return;
-
-            if (payload.type === 'viba:preview-picker-state') {
-                setIsPreviewPickerActive(Boolean(payload.active));
-                return;
-            }
-
-            if (payload.type === 'viba:preview-picker-ready') {
-                const previewWindow = previewIframeRef.current?.contentWindow;
-                if (previewWindow) {
-                    previewWindow.postMessage({ type: 'viba:preview-location-request' }, '*');
-                }
-                return;
-            }
-
-            if (payload.type === 'viba:preview-link-open') {
-                if (typeof payload.url === 'string' && payload.url.trim().length > 0) {
-                    window.open(payload.url, '_blank', 'noopener,noreferrer');
-                }
-                return;
-            }
-
-            if (payload.type === 'viba:preview-location-change') {
-                if (typeof payload.url === 'string' && payload.url.trim().length > 0) {
-                    setPreviewInputUrl(payload.url);
-                    setLoadedPreviewTargetUrl(payload.url);
-                }
-                return;
-            }
-
-            if (payload.type === 'viba:preview-element-selected') {
-                const selectedElement = (payload.element && typeof payload.element === 'object')
-                    ? payload.element as { reactComponentStack?: unknown[]; selector?: string | null }
-                    : null;
-                const reactStack = Array.isArray(selectedElement?.reactComponentStack)
-                    ? selectedElement.reactComponentStack
-                    : [];
-                const componentReference = buildComponentReferenceText(reactStack, worktree || repo);
-                const firstReactComponent = reactStack[0] && typeof reactStack[0] === 'object'
-                    ? (reactStack[0] as { name?: unknown }).name
-                    : undefined;
-                const fallbackName = typeof firstReactComponent === 'string' && firstReactComponent.trim().length > 0
-                    ? firstReactComponent.trim()
-                    : '';
-                const builtInComponents = new Set([
-                    'Suspense', 'ErrorBoundary', 'Router', 'AppRouter', 'LayoutRouter',
-                    'RenderFromTemplateContext', 'ScrollAndFocusHandler', 'InnerLayoutRouter',
-                    'RedirectErrorBoundary', 'NotFoundBoundary', 'LoadingBoundary',
-                    'ReactDevOverlay', 'HotReload', 'AppContainer', 'Route', 'Link', 'Image',
-                    'OuterLayoutRouter', 'Head', 'StringRefs', 'Fragment', 'Profiler',
-                    'StrictMode', 'SuspenseList', 'Script', 'Page', '__next_root_layout_boundary__'
-                ]);
-
-                const stackComponentNames = Array.from(
-                    new Set(
-                        reactStack
-                            .map((entry) => {
-                                if (!entry || typeof entry !== 'object') return '';
-                                const name = (entry as { name?: unknown }).name;
-                                return typeof name === 'string' ? name.trim() : '';
-                            })
-                            .filter((name) => {
-                                if (!name) return false;
-                                if (builtInComponents.has(name)) return false;
-                                if (name.startsWith('styled.') || name.startsWith('Styled(')) return false;
-                                return true;
-                            })
-                    )
-                );
-
-                console.log('Filtered stack component names:', stackComponentNames);
-
-                const identifier = componentReference
-                    || fallbackName
-                    || (typeof selectedElement?.selector === 'string' ? selectedElement.selector : '');
-
-                console.log('Preview selected element:', selectedElement);
-                console.log('Preview selected reactComponentStack:', reactStack);
-                console.log('Preview selected identifier:', identifier);
-                setIsPreviewPickerActive(false);
-
-                if (!identifier) {
-                    setFeedback('Element selected. No identifier was resolved.');
-                    return;
-                }
-
-                void (async () => {
-                    let finalIdentifier = componentReference || '';
-
-                    if (!finalIdentifier && stackComponentNames.length > 0) {
-                        setIsResolvingElement(true);
-                        try {
-                            const result = await resolveComponentSourcePathByNames(stackComponentNames);
-                            if (result?.resolvedName && result?.sourcePath) {
-                                finalIdentifier = `${result.resolvedName} (${result.sourcePath})`;
-                            }
-                        } finally {
-                            setIsResolvingElement(false);
-                        }
-                    }
-
-                    if (!finalIdentifier) {
-                        if (stackComponentNames.length > 0) {
-                            setFeedback('Element selected, but source file path could not be resolved for the component');
-                            return;
-                        }
-                        finalIdentifier = identifier;
-                    }
-
-                    console.log('Final resolved component identifier:', finalIdentifier);
-
-                    const inserted = await insertIntoAgentComposer(`${finalIdentifier} `);
-                    setFeedback(
-                        inserted
-                            ? `Element identifier sent to agent: ${finalIdentifier}`
-                            : 'Element selected, but failed to send identifier to agent input'
-                    );
-                })();
-            }
-        };
-
-        window.addEventListener('message', handlePreviewMessage);
-        return () => {
-            window.removeEventListener('message', handlePreviewMessage);
-        };
-    }, [insertIntoAgentComposer, repo, resolveComponentSourcePathByNames, worktree]);
-
-    useEffect(() => {
-        setIsPreviewPickerActive(false);
-    }, [previewUrl]);
-
     const handlePreviewSubmit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        void loadPreviewViaProxy(previewInputUrl, true);
+        void loadPreview(previewInputUrl, true);
     };
 
     const handleOpenPreviewInNewTab = useCallback(() => {
-        const preferredTarget = previewInputUrl.trim() || previewUrl;
+        const preferredTarget = loadedPreviewTargetUrl.trim() || previewInputUrl.trim() || previewUrl;
         const normalizedTarget = normalizePreviewUrl(preferredTarget);
 
         if (!normalizedTarget) {
@@ -2062,7 +1682,7 @@ export function SessionView({
 
         window.open(normalizedTarget, '_blank', 'noopener,noreferrer');
         setFeedback(`Opened preview in new tab: ${normalizedTarget}`);
-    }, [previewInputUrl, previewUrl]);
+    }, [loadedPreviewTargetUrl, previewInputUrl, previewUrl]);
 
     const handleStartDevServer = async () => {
         const script = devServerScript?.trim();
@@ -2686,26 +2306,6 @@ export function SessionView({
                                         <button
                                             className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#30363d]/60"
                                             type="button"
-                                            onClick={() => handlePreviewNavigate('back')}
-                                            disabled={!previewUrl}
-                                            title="Go back"
-                                            aria-label="Go back"
-                                        >
-                                            <ArrowLeft className="h-3.5 w-3.5" />
-                                        </button>
-                                        <button
-                                            className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#30363d]/60"
-                                            type="button"
-                                            onClick={() => handlePreviewNavigate('forward')}
-                                            disabled={!previewUrl}
-                                            title="Go forward"
-                                            aria-label="Go forward"
-                                        >
-                                            <ArrowRight className="h-3.5 w-3.5" />
-                                        </button>
-                                        <button
-                                            className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#30363d]/60"
-                                            type="button"
                                             onClick={() => handlePreviewNavigate('reload')}
                                             disabled={!previewUrl}
                                             title="Reload preview"
@@ -2733,19 +2333,6 @@ export function SessionView({
                                             spellCheck={false}
                                         />
                                         <button
-                                            className={`btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 ${isPreviewPickerActive ? 'text-success' : 'text-slate-500 dark:text-slate-400'} hover:bg-slate-100 dark:hover:bg-[#30363d]/60`}
-                                            type="button"
-                                            onClick={handleTogglePreviewPicker}
-                                            disabled={!previewUrl || isResolvingElement}
-                                            title={isPreviewPickerActive ? 'Disable picker' : 'Pick element from preview'}
-                                        >
-                                            {isResolvingElement ? (
-                                                <span className="loading loading-spinner loading-xs w-3 h-3"></span>
-                                            ) : (
-                                                <MousePointer2 className="h-3 w-3" />
-                                            )}
-                                        </button>
-                                        <button
                                             className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#30363d]/60"
                                             type="button"
                                             onClick={handleOpenPreviewInNewTab}
@@ -2769,11 +2356,9 @@ export function SessionView({
                                             </div>
                                         ) : previewUrl ? (
                                             <iframe
-                                                ref={previewIframeRef}
                                                 src={previewUrl}
                                                 className={`h-full w-full border-none ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
                                                 title="Dev server preview"
-                                                onLoad={handlePreviewIframeLoad}
                                                 sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-same-origin allow-scripts allow-downloads"
                                             />
                                         ) : (
