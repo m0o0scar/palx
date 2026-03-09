@@ -7,6 +7,7 @@ import {
   GitBranch,
   listRepoFiles,
   resolveRepoCardIcon,
+  saveAttachments,
 } from '@/app/actions/git';
 import {
   cloneRemoteProject,
@@ -116,6 +117,20 @@ function arePathListsEqual(left: string[], right: string[]): boolean {
   return left.every((value, index) => value === right[index]);
 }
 
+function getClipboardImageFiles(data: DataTransfer | null): File[] {
+  if (!data) return [];
+
+  const files: File[] = [];
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+    const file = item.getAsFile();
+    if (file) {
+      files.push(file);
+    }
+  }
+  return files;
+}
+
 type AgentStatusResponse = {
   providers: ProviderCatalogEntry[];
   defaultProvider: AgentProvider;
@@ -210,6 +225,7 @@ export default function GitRepoSelector({
   const [initialMessage, setInitialMessage] = useState<string>('');
   const [sessionMode, setSessionMode] = useState<SessionMode>('fast');
   const [attachments, setAttachments] = useState<string[]>([]);
+  const [isPastingTaskAttachments, setIsPastingTaskAttachments] = useState(false);
   const [isAttachmentBrowserOpen, setIsAttachmentBrowserOpen] = useState(false);
   const [lastAttachmentBrowserPath, setLastAttachmentBrowserPath] = useState<string>('');
   const [prefilledAttachmentPaths, setPrefilledAttachmentPaths] = useState<string[]>([]);
@@ -1033,6 +1049,46 @@ export default function GitRepoSelector({
       return Array.from(new Set([...prev, ...normalized]));
     });
   }, []);
+
+  const handleTaskDescriptionPaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!selectedRepo) return;
+
+    const imageFiles = getClipboardImageFiles(event.clipboardData);
+    if (imageFiles.length === 0) return;
+
+    event.preventDefault();
+    setError(null);
+    setIsPastingTaskAttachments(true);
+
+    try {
+      const formData = new FormData();
+      const timestamp = Date.now();
+      imageFiles.forEach((file, index) => {
+        const defaultExtension = file.type.startsWith('image/')
+          ? file.type.slice('image/'.length).replace(/[^a-zA-Z0-9]/g, '') || 'png'
+          : 'png';
+        const normalizedExtension = defaultExtension === 'jpeg' ? 'jpg' : defaultExtension;
+        const trimmedName = file.name.trim();
+        const hasExtension = trimmedName.includes('.');
+        const fileName = trimmedName
+          ? (hasExtension ? trimmedName : `${trimmedName}.${normalizedExtension}`)
+          : `pasted-image-${timestamp}-${index + 1}.${normalizedExtension}`;
+        formData.append(`image-${index}`, new File([file], fileName, { type: file.type || 'image/png' }));
+      });
+
+      const savedPaths = await saveAttachments(selectedRepo, formData);
+      if (savedPaths.length === 0) {
+        throw new Error('Failed to save pasted images.');
+      }
+
+      appendAttachmentPaths(savedPaths);
+    } catch (pasteError) {
+      const message = pasteError instanceof Error ? pasteError.message : 'Failed to paste image attachments.';
+      setError(message);
+    } finally {
+      setIsPastingTaskAttachments(false);
+    }
+  }, [appendAttachmentPaths, selectedRepo]);
 
   // Suggestion state
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -2785,6 +2841,9 @@ export default function GitRepoSelector({
                     placeholder={`Describe the task for the AI agent...\nExample:\n1. Create a new component for the user profile card.\n2. Ensure it fetches data from the /api/user endpoint.\n3. Add error handling for failed requests.\n\nTip: Type @ to mention files or folders.`}
                     value={initialMessage}
                     onChange={handleMessageChange}
+                    onPaste={(event) => {
+                      void handleTaskDescriptionPaste(event);
+                    }}
                     onKeyDown={handleKeyDown}
                     onClick={(event) => {
                       setCursorPosition(event.currentTarget.selectionStart);
@@ -2828,6 +2887,9 @@ export default function GitRepoSelector({
                       Select Attachments
                     </button>
                   </div>
+                  {isPastingTaskAttachments && (
+                    <div className="mb-2 text-xs text-slate-500 dark:text-slate-400">Saving pasted image attachments...</div>
+                  )}
 
                   <div className="min-h-[88px] rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-[#0d1117]/40">
                     <div className="flex flex-wrap gap-2">

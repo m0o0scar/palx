@@ -52,6 +52,7 @@ type StartTurnInput = {
   sessionId: string;
   message: string;
   displayMessage?: string | null;
+  attachmentPaths?: string[];
   markInitialized?: boolean;
 };
 
@@ -73,6 +74,31 @@ function getManagerState(): ManagerState {
 function normalizeText(value: string | null | undefined) {
   const normalized = value?.trim();
   return normalized ? normalized : '';
+}
+
+function normalizeAttachmentPaths(value: string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map((entry) => normalizeText(entry)).filter(Boolean)));
+}
+
+function appendAttachmentPathsToMessage(message: string, attachmentPaths: string[]): string {
+  if (attachmentPaths.length === 0) {
+    return message;
+  }
+
+  const attachmentSection = [
+    'Attachments:',
+    ...attachmentPaths.map((attachmentPath) => `- ${attachmentPath}`),
+  ].join('\n');
+
+  return message ? `${message}\n\n${attachmentSection}` : attachmentSection;
+}
+
+function buildAttachmentOnlyDisplayMessage(attachmentPaths: string[]): string {
+  if (attachmentPaths.length === 0) {
+    return '';
+  }
+  return `Attached ${attachmentPaths.length} file${attachmentPaths.length === 1 ? '' : 's'}.`;
 }
 
 function cloneTurnDiagnostics(
@@ -612,15 +638,18 @@ export async function startSessionTurn(input: StartTurnInput): Promise<{
   error?: string;
 }> {
   const sessionId = normalizeText(input.sessionId);
-  const message = normalizeText(input.message);
-  const displayMessage = normalizeText(input.displayMessage ?? input.message);
+  const attachmentPaths = normalizeAttachmentPaths(input.attachmentPaths);
+  const userMessage = normalizeText(input.message);
+  const message = appendAttachmentPathsToMessage(userMessage, attachmentPaths);
+  const displayMessageInput = normalizeText(input.displayMessage ?? input.message);
+  const displayMessage = displayMessageInput || buildAttachmentOnlyDisplayMessage(attachmentPaths);
 
   if (!sessionId) {
     return { success: false, error: 'sessionId is required.' };
   }
 
   if (!message) {
-    return { success: false, error: 'message is required.' };
+    return { success: false, error: 'message or attachmentPaths is required.' };
   }
 
   const state = getManagerState();
@@ -642,7 +671,7 @@ export async function startSessionTurn(input: StartTurnInput): Promise<{
   const adapter = getAgentAdapter(provider as AgentProvider);
   const existingHistory = listSessionHistory(sessionId);
   const projector = new HistoryProjector(sessionId, existingHistory);
-  projector.addUserMessage(displayMessage);
+  projector.addUserMessage(displayMessage || message);
 
   if (input.markInitialized) {
     await markSessionInitialized(sessionId);

@@ -1126,10 +1126,28 @@ export async function saveAttachments(worktreePath: string, formData: FormData):
     const savePromises = files.map(async ([, entry]) => {
       if (entry instanceof File) {
         const buffer = Buffer.from(await entry.arrayBuffer());
-        const safeName = entry.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const fullPath = path.join(attachmentsDir, safeName);
+        const rawName = entry.name.trim() || `attachment-${Date.now()}`;
+        const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || `attachment-${Date.now()}`;
+        const parsed = path.parse(safeName);
+        const baseName = parsed.name || `attachment-${Date.now()}`;
+        const extension = parsed.ext || '';
+        let candidateName = `${baseName}${extension}`;
+        let fullPath = path.join(attachmentsDir, candidateName);
+        let suffix = 1;
+
+        while (true) {
+          try {
+            await fs.access(fullPath);
+            candidateName = `${baseName}-${suffix}${extension}`;
+            fullPath = path.join(attachmentsDir, candidateName);
+            suffix += 1;
+          } catch {
+            break;
+          }
+        }
+
         await fs.writeFile(fullPath, buffer);
-        return safeName;
+        return fullPath;
       }
       return null;
     });

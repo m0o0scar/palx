@@ -8,6 +8,7 @@ export async function POST(request: Request) {
     sessionId?: string;
     message?: string;
     displayMessage?: string | null;
+    attachmentPaths?: string[];
     markInitialized?: boolean;
   } | null;
 
@@ -15,6 +16,7 @@ export async function POST(request: Request) {
     sessionId: body?.sessionId ?? '',
     message: body?.message ?? '',
     displayMessage: body?.displayMessage ?? null,
+    attachmentPaths: Array.isArray(body?.attachmentPaths) ? body?.attachmentPaths : [],
     markInitialized: Boolean(body?.markInitialized),
   });
 

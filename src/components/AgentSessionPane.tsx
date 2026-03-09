@@ -9,10 +9,11 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AlertCircle, ChevronDown, ChevronRight, Clock3, Loader2, PlayCircle, Send, Square } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronRight, Clock3, Loader2, Paperclip, PlayCircle, Send, Square, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { listRepoFiles } from '@/app/actions/git';
+import { listRepoFiles, saveAttachments } from '@/app/actions/git';
+import { getBaseName } from '@/lib/path';
 import { buildRepoMentionSuggestions } from '@/lib/repo-mention-suggestions';
 import type {
   AgentProvider,
@@ -57,6 +58,8 @@ type AgentSessionPaneProps = {
 type PendingMessage = {
   id: string;
   text: string;
+  attachmentPaths: string[];
+  displayText: string;
 };
 
 type VirtualHistoryMetrics = {
@@ -195,6 +198,37 @@ function stripMarkdownSyntax(value: string) {
 function plainTextPreview(value: string | null | undefined) {
   const preview = firstLinePreview(value);
   return preview ? stripMarkdownSyntax(preview) : '';
+}
+
+function formatAttachmentSummary(attachmentPaths: string[]) {
+  if (attachmentPaths.length === 0) return '';
+  return `Attached ${attachmentPaths.length} file${attachmentPaths.length === 1 ? '' : 's'}.`;
+}
+
+function buildDisplayMessage(message: string, attachmentPaths: string[]) {
+  if (message) return message;
+  return formatAttachmentSummary(attachmentPaths);
+}
+
+function buildPendingMessageDisplayText(message: string, attachmentPaths: string[]) {
+  const attachmentSummary = formatAttachmentSummary(attachmentPaths);
+  if (!message) return attachmentSummary;
+  if (!attachmentSummary) return message;
+  return `${message}\n\n${attachmentSummary}`;
+}
+
+function getClipboardImageFiles(data: DataTransfer | null): File[] {
+  if (!data) return [];
+
+  const files: File[] = [];
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+    const file = item.getAsFile();
+    if (file) {
+      files.push(file);
+    }
+  }
+  return files;
 }
 
 function MarkdownMessage({ value }: { value: string | null | undefined }) {
@@ -461,10 +495,13 @@ function renderHistoryItem(item: SessionAgentHistoryItem) {
   }
 }
 
-function createPendingMessage(text: string): PendingMessage {
+function createPendingMessage(text: string, attachmentPaths: string[]): PendingMessage {
+  const normalizedAttachments = Array.from(new Set(attachmentPaths.map((entry) => entry.trim()).filter(Boolean)));
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     text,
+    attachmentPaths: normalizedAttachments,
+    displayText: buildPendingMessageDisplayText(text, normalizedAttachments),
   };
 }
 
@@ -513,7 +550,9 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState('');
+  const [pendingAttachmentPaths, setPendingAttachmentPaths] = useState<string[]>([]);
   const [isSending, setIsSending] = useState(false);
+  const [isPastingAttachments, setIsPastingAttachments] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [pendingMessages, setPendingMessages] = useState<PendingMessage[]>([]);
@@ -746,7 +785,7 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
 
   const activeRunState = runtime?.runState ?? 'idle';
   const isTurnActive = activeRunState === 'queued' || activeRunState === 'running';
-  const canSend = !loading && !isSending && composerValue.trim().length > 0;
+  const canSend = !loading && !isSending && (composerValue.trim().length > 0 || pendingAttachmentPaths.length > 0);
   const liveHistoryTailCount = useMemo(
     () => Math.min(history.length, isTurnActive ? STREAMING_HISTORY_TAIL_COUNT : Math.min(2, history.length)),
     [history.length, isTurnActive],
@@ -875,7 +914,9 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
     setShowTurnDiagnostics(false);
   }, [sessionId, turnDiagnostics?.queuedAt]);
 
-  const submitMessageToAgent = useCallback(async (message: string) => {
+  const submitMessageToAgent = useCallback(async (message: string, attachmentPaths: string[] = []) => {
+    const normalizedAttachmentPaths = Array.from(new Set(attachmentPaths.map((entry) => entry.trim()).filter(Boolean)));
+    const displayMessage = buildDisplayMessage(message, normalizedAttachmentPaths);
     setError(null);
     try {
       const response = await fetch('/api/agent/message', {
@@ -886,6 +927,8 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
         body: JSON.stringify({
           sessionId,
           message,
+          displayMessage,
+          attachmentPaths: normalizedAttachmentPaths,
         }),
       });
       const payload = await response.json().catch(() => null) as { error?: string } | null;
@@ -903,11 +946,11 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
     }
   }, [onFeedback, scheduleRefresh, sessionId]);
 
-  const updateComposerSuggestions = useCallback((query: string, entries: string[]) => {
+  const updateComposerSuggestions = useCallback((query: string, entries: string[], currentAttachments: string[]) => {
     const nextSuggestions = buildRepoMentionSuggestions({
       query,
       repoEntries: entries,
-      currentAttachments: [],
+      currentAttachments,
       carriedAttachments: [],
     });
     setSuggestionList(nextSuggestions);
@@ -948,33 +991,85 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
           entries = await listRepoFiles(workspacePath);
           setWorkspaceEntriesCache(entries);
         }
-        updateComposerSuggestions(query, entries);
+        updateComposerSuggestions(
+          query,
+          entries,
+          pendingAttachmentPaths.map((attachmentPath) => getBaseName(attachmentPath))
+        );
         return;
       }
     }
 
     setShowSuggestions(false);
-  }, [updateComposerSuggestions, workspaceEntriesCache, workspacePath]);
+  }, [pendingAttachmentPaths, updateComposerSuggestions, workspaceEntriesCache, workspacePath]);
+
+  const handleComposerPaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = getClipboardImageFiles(event.clipboardData);
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    setError(null);
+    setIsPastingAttachments(true);
+
+    try {
+      const formData = new FormData();
+      const timestamp = Date.now();
+      imageFiles.forEach((file, index) => {
+        const defaultExtension = file.type.startsWith('image/')
+          ? file.type.slice('image/'.length).replace(/[^a-zA-Z0-9]/g, '') || 'png'
+          : 'png';
+        const normalizedExtension = defaultExtension === 'jpeg' ? 'jpg' : defaultExtension;
+        const trimmedName = file.name.trim();
+        const hasExtension = trimmedName.includes('.');
+        const fileName = trimmedName
+          ? (hasExtension ? trimmedName : `${trimmedName}.${normalizedExtension}`)
+          : `pasted-image-${timestamp}-${index + 1}.${normalizedExtension}`;
+        formData.append(`image-${index}`, new File([file], fileName, { type: file.type || 'image/png' }));
+      });
+
+      const savedPaths = await saveAttachments(workspacePath, formData);
+      if (savedPaths.length === 0) {
+        throw new Error('Failed to save pasted images.');
+      }
+
+      setPendingAttachmentPaths((current) => Array.from(new Set([...current, ...savedPaths])));
+      onFeedback?.(`Attached ${savedPaths.length} image file${savedPaths.length === 1 ? '' : 's'} from clipboard`);
+    } catch (pasteError) {
+      const messageText = pasteError instanceof Error ? pasteError.message : 'Failed to paste image attachments.';
+      setError(messageText);
+      onFeedback?.(messageText);
+    } finally {
+      setIsPastingAttachments(false);
+    }
+  }, [onFeedback, workspacePath]);
+
+  const removePendingAttachment = useCallback((targetPath: string) => {
+    setPendingAttachmentPaths((current) => current.filter((entry) => entry !== targetPath));
+  }, []);
 
   const handleSubmit = useCallback(async () => {
     const message = composerValue.trim();
-    if (!message || isSending) return;
+    const attachmentPaths = pendingAttachmentPaths;
+    if ((!message && attachmentPaths.length === 0) || isSending) return;
 
     setComposerValue('');
+    setPendingAttachmentPaths([]);
 
     if (isTurnActive) {
-      setPendingMessages((current) => [...current, createPendingMessage(message)]);
+      setPendingMessages((current) => [...current, createPendingMessage(message, attachmentPaths)]);
       onFeedback?.('Queued message for the next turn');
       return;
     }
 
     setIsSending(true);
-    const result = await submitMessageToAgent(message);
+    const result = await submitMessageToAgent(message, attachmentPaths);
     if (result.success) {
       onFeedback?.('Sent message to agent');
     }
     setIsSending(false);
-  }, [composerValue, isSending, isTurnActive, onFeedback, submitMessageToAgent]);
+  }, [composerValue, isSending, isTurnActive, onFeedback, pendingAttachmentPaths, submitMessageToAgent]);
 
   const handleCancel = useCallback(async () => {
     if (!runtime || !isTurnActive || isCancelling) return;
@@ -1021,7 +1116,7 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
     const nextMessage = queue[nextIndex];
     setIsSending(true);
     setPendingMessages((current) => current.filter((item) => item.id !== nextMessage.id));
-    const result = await submitMessageToAgent(nextMessage.text);
+    const result = await submitMessageToAgent(nextMessage.text, nextMessage.attachmentPaths);
     setIsSending(false);
 
     if (result.success) {
@@ -1237,7 +1332,21 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
                     <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700/80 dark:text-amber-200/80">
                       {index === 0 ? 'Next in Queue' : `Queued ${index + 1}`}
                     </div>
-                    <div className="whitespace-pre-wrap break-words">{item.text}</div>
+                    <div className="whitespace-pre-wrap break-words">{item.displayText}</div>
+                    {item.attachmentPaths.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {item.attachmentPaths.map((attachmentPath) => (
+                          <span
+                            key={`${item.id}-${attachmentPath}`}
+                            className="inline-flex items-center gap-1 rounded-full border border-amber-300/80 bg-white/80 px-2 py-0.5 text-[10px] dark:border-amber-400/30 dark:bg-amber-950/30"
+                            title={attachmentPath}
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            <span className="max-w-40 truncate">{getBaseName(attachmentPath)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -1253,6 +1362,29 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
           </div>
         ) : null}
         <div className="relative rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-[#30363d] dark:bg-[#0d1117]">
+          {pendingAttachmentPaths.length > 0 ? (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {pendingAttachmentPaths.map((attachmentPath) => (
+                <span
+                  key={attachmentPath}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-300 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  title={attachmentPath}
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                  <span className="max-w-52 truncate">{getBaseName(attachmentPath)}</span>
+                  <button
+                    type="button"
+                    className="rounded text-slate-500 transition hover:text-red-500 dark:text-slate-400 dark:hover:text-red-300"
+                    onClick={() => removePendingAttachment(attachmentPath)}
+                    title="Remove attachment"
+                    aria-label={`Remove ${getBaseName(attachmentPath)}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <textarea
             ref={textareaRef}
             className="max-h-28 min-h-20 w-full resize-y border-none bg-transparent font-mono text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400 dark:text-slate-100 dark:placeholder:text-slate-500"
@@ -1272,6 +1404,9 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
             }}
             onKeyUp={(event) => {
               setCursorPosition(event.currentTarget.selectionStart);
+            }}
+            onPaste={(event) => {
+              void handleComposerPaste(event);
             }}
             onKeyDown={(event) => {
               if (showSuggestions && suggestionList.length > 0) {
@@ -1330,13 +1465,18 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
           ) : null}
           <div className="mt-3 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-              {isTurnActive ? (
+              {isPastingAttachments ? (
+                <span className="inline-flex items-center gap-1">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Saving pasted image...
+                </span>
+              ) : isTurnActive ? (
                 <span className="inline-flex items-center gap-1">
                   <PlayCircle className="h-3.5 w-3.5" />
                   Turn in progress
                 </span>
               ) : (
-                <span>Press Ctrl+Enter to send</span>
+                <span>Paste images with Cmd/Ctrl+V · Press Ctrl+Enter to send</span>
               )}
             </div>
             <button
