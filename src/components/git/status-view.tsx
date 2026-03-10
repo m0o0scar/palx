@@ -352,7 +352,7 @@ function StatusFileTreeItem({
 export function StatusView({ repoPath }: { repoPath: string }) {
     const { resolvedTheme } = useTheme();
     const { data: status, isLoading, isError, error, refetch } = useGitStatus(repoPath);
-    const { data: branches } = useGitBranches(repoPath);
+    const { data: branches, refetch: refetchBranches } = useGitBranches(repoPath);
     const action = useGitAction();
     const [subject, setSubject] = useState('');
     const [body, setBody] = useState('');
@@ -522,7 +522,9 @@ export function StatusView({ repoPath }: { repoPath: string }) {
         setAutoCommitCommand('');
         setAutoCommitIsFirstCommit(false);
         setIsAutoCommitCommandInjected(false);
-    }, []);
+        setSelectedFile(null);
+        void Promise.all([refetch(), refetchBranches()]);
+    }, [refetch, refetchBranches]);
 
     const handleAutoCommitTerminalLoad = useCallback(() => {
         if (!autoCommitModalOpen || !autoCommitCommand || !autoCommitTerminalRef.current || isAutoCommitCommandInjected) {
