@@ -4744,7 +4744,7 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                 Credential
               </span>
               <select
-                className="h-7 min-w-[210px] rounded border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-[#30363d] dark:bg-[#161b22] dark:text-slate-200"
+                className="h-7 min-w-[210px] max-w-[300px] rounded border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-[#30363d] dark:bg-[#161b22] dark:text-slate-200"
                 value={repoCredentialSelection}
                 onChange={(event) => {
                   void handleRepoCredentialSelectionChange(event.target.value);
