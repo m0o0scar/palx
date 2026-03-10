@@ -69,6 +69,7 @@ const HOME_REPO_DISCOVERY_IDLE_TIMEOUT_MS = 1500;
 const HOME_REPO_DISCOVERY_MAX_AUTOSTART = 6;
 
 const SESSION_MODE_STORAGE_KEY = 'viba:new-session-mode';
+const AGENT_RUNTIME_PRESETS_STORAGE_KEY_PREFIX = 'viba:agent-runtime-presets:';
 const SESSION_TITLE_MAX_LENGTH = 120;
 const SUPPORTED_AGENT_PROVIDERS = ['codex', 'gemini', 'cursor'] as const;
 const AGENT_PROVIDER_FALLBACK_LABELS: Record<string, string> = {
@@ -91,6 +92,11 @@ type WorkspacePreparationState = {
   contextFingerprint: string;
   projectPath: string;
   expiresAt: string;
+};
+
+type AgentRuntimePreset = {
+  provider: AgentProvider;
+  model: string;
 };
 
 type GitRepoSelectorProps = {
@@ -276,6 +282,7 @@ export default function GitRepoSelector({
   const [agentProviders, setAgentProviders] = useState<ProviderCatalogEntry[]>([]);
   const [selectedAgentProvider, setSelectedAgentProvider] = useState<AgentProvider>('codex');
   const [selectedAgentModel, setSelectedAgentModel] = useState('');
+  const [agentRuntimePresets, setAgentRuntimePresets] = useState<AgentRuntimePreset[]>([]);
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<ReasoningEffort | ''>('');
   const [agentStatus, setAgentStatus] = useState<AppStatus | null>(null);
   const [isLoadingAgentStatus, setIsLoadingAgentStatus] = useState(false);
@@ -313,8 +320,12 @@ export default function GitRepoSelector({
   const ttydWarmupStartedRef = useRef(false);
   const latestStartupScriptRef = useRef('');
   const latestSelectedAgentProviderRef = useRef<AgentProvider>('codex');
+  const runtimePresetsStorageReadyKeyRef = useRef<string | null>(null);
 
   const collapsedSessionSetupLabel = 'Show Session Setup';
+  const runtimePresetsStorageKey = mode === 'new' && selectedRepo
+    ? `${AGENT_RUNTIME_PRESETS_STORAGE_KEY_PREFIX}${selectedRepo}`
+    : null;
 
   const notifySessionsChanged = useCallback(() => {
     notifySessionsUpdated();
@@ -588,6 +599,56 @@ export default function GitRepoSelector({
       // Ignore localStorage errors.
     }
   }, [mode]);
+
+  useEffect(() => {
+    if (!runtimePresetsStorageKey) {
+      runtimePresetsStorageReadyKeyRef.current = null;
+      setAgentRuntimePresets([]);
+      return;
+    }
+
+    try {
+      const rawValue = window.localStorage.getItem(runtimePresetsStorageKey);
+      if (!rawValue) {
+        setAgentRuntimePresets([]);
+      } else {
+        const parsed = JSON.parse(rawValue);
+        if (Array.isArray(parsed)) {
+          const normalized = parsed
+            .map((entry) => {
+              if (!entry || typeof entry !== 'object') return null;
+              const provider = normalizeAgentProvider(
+                'provider' in entry && typeof entry.provider === 'string' ? entry.provider : '',
+              );
+              const model = 'model' in entry && typeof entry.model === 'string'
+                ? entry.model.trim()
+                : '';
+              if (!model) return null;
+              return { provider, model } satisfies AgentRuntimePreset;
+            })
+            .filter((entry): entry is AgentRuntimePreset => Boolean(entry));
+          setAgentRuntimePresets(normalized);
+        } else {
+          setAgentRuntimePresets([]);
+        }
+      }
+    } catch {
+      setAgentRuntimePresets([]);
+    } finally {
+      runtimePresetsStorageReadyKeyRef.current = runtimePresetsStorageKey;
+    }
+  }, [runtimePresetsStorageKey]);
+
+  useEffect(() => {
+    if (!runtimePresetsStorageKey) return;
+    if (runtimePresetsStorageReadyKeyRef.current !== runtimePresetsStorageKey) return;
+
+    try {
+      window.localStorage.setItem(runtimePresetsStorageKey, JSON.stringify(agentRuntimePresets));
+    } catch {
+      // Ignore localStorage errors.
+    }
+  }, [agentRuntimePresets, runtimePresetsStorageKey]);
 
   useEffect(() => {
     if (mode === 'new' && !selectedRepo) {
@@ -1275,6 +1336,40 @@ export default function GitRepoSelector({
   const handleAgentModelChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedAgentModel(event.target.value);
   };
+
+  const handleSaveAgentRuntimePreset = useCallback(() => {
+    const normalizedModel = selectedAgentModel.trim();
+    if (!normalizedModel) {
+      setAgentSetupMessage('Select a model before saving a preset.');
+      return;
+    }
+
+    setAgentRuntimePresets((previous) => {
+      const exists = previous.some((entry) => (
+        entry.provider === selectedAgentProvider && entry.model === normalizedModel
+      ));
+      if (exists) {
+        return previous;
+      }
+
+      return [...previous, { provider: selectedAgentProvider, model: normalizedModel }];
+    });
+    setAgentSetupMessage('Runtime preset saved.');
+  }, [selectedAgentModel, selectedAgentProvider]);
+
+  const handleApplyAgentRuntimePreset = useCallback((preset: AgentRuntimePreset) => {
+    setSelectedAgentProvider(preset.provider);
+    setSelectedAgentModel(preset.model);
+    setAgentSetupMessage(null);
+    setIsWaitingForLogin(false);
+    setWaitingForLoginProvider(null);
+  }, []);
+
+  const handleRemoveAgentRuntimePreset = useCallback((preset: AgentRuntimePreset) => {
+    setAgentRuntimePresets((previous) => previous.filter((entry) => (
+      !(entry.provider === preset.provider && entry.model === preset.model)
+    )));
+  }, []);
 
   const handleReasoningEffortChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedReasoningEffort(event.target.value as ReasoningEffort | '');
@@ -2824,6 +2919,39 @@ export default function GitRepoSelector({
 
                   {showSessionAdvanced && (
                     <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-[#30363d] dark:bg-[#0d1117]/55">
+                      <div className="space-y-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Presets</span>
+                        <div className="flex flex-wrap gap-2">
+                          {agentRuntimePresets.length > 0 ? agentRuntimePresets.map((preset) => (
+                            <span
+                              key={`${preset.provider}:${preset.model}`}
+                              className="inline-flex max-w-full items-center rounded-full border border-slate-300 bg-white text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                            >
+                              <button
+                                type="button"
+                                className="max-w-[260px] truncate px-3 py-1 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/50"
+                                onClick={() => handleApplyAgentRuntimePreset(preset)}
+                                title={`Use ${agentProviderLabel(preset.provider, agentProviders)} • ${preset.model}`}
+                                disabled={loading}
+                              >
+                                {agentProviderLabel(preset.provider, agentProviders)} • {preset.model}
+                              </button>
+                              <button
+                                type="button"
+                                className="px-2 text-slate-500 transition hover:text-red-500 disabled:opacity-60 dark:text-slate-400 dark:hover:text-red-400"
+                                onClick={() => handleRemoveAgentRuntimePreset(preset)}
+                                title="Remove preset"
+                                disabled={loading}
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </span>
+                          )) : (
+                            <span className="text-xs text-slate-500 dark:text-slate-400">No presets saved.</span>
+                          )}
+                        </div>
+                      </div>
+
                       <label className="flex flex-col gap-2">
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Agent Runtime</span>
                         <div className="relative">
@@ -2873,6 +3001,14 @@ export default function GitRepoSelector({
                             ) : null}
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-200 dark:hover:bg-[#161b22]"
+                              onClick={handleSaveAgentRuntimePreset}
+                              disabled={loading || !selectedAgentModel.trim()}
+                            >
+                              Save Preset
+                            </button>
                             <button
                               type="button"
                               className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-200 dark:hover:bg-[#161b22]"
