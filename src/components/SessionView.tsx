@@ -10,25 +10,31 @@ import {
     mergeSessionToBase,
     rebaseSessionOntoBase,
     updateSessionBaseBranch,
-    writeSessionPromptFile
 } from '@/app/actions/session';
 import {
+    startTtydProcess,
     setTmuxSessionMouseMode,
     setTmuxSessionStatusVisibility,
     terminateTmuxSessionRole,
 } from '@/app/actions/git';
 import { getConfig, updateConfig } from '@/app/actions/config';
-import { Trash2, ExternalLink, Play, GitMerge, GitPullRequestArrow, GitBranch, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, ChevronRight, Grip, ChevronDown, Plus, MousePointer2, ArrowLeft, ArrowRight, RotateCw, ScrollText, TextCursorInput, X } from 'lucide-react';
+import { Trash2, ExternalLink, Play, GitMerge, GitPullRequestArrow, GitBranch, ArrowUp, ArrowDown, FolderOpen, ChevronLeft, Grip, ChevronDown, Plus, RotateCw, ScrollText, TextCursorInput, X, Info } from 'lucide-react';
+import AgentSessionPane, { type AgentSessionHeaderMeta, type AgentSessionPaneHandle } from './AgentSessionPane';
 import SessionFileBrowser from './SessionFileBrowser';
 import { SessionRepoViewer, type SessionRepoViewerOption } from './SessionRepoViewer';
-import { buildAgentStartupPrompt } from '@/lib/agent-startup-prompt';
 import { getBaseName } from '@/lib/path';
 import { notifySessionsUpdated } from '@/lib/session-updates';
-import { buildTtydTerminalSrc, parseTerminalSessionEnvironmentsFromSrc, type TerminalSessionEnvironment } from '@/lib/terminal-session';
+import {
+    buildTtydTerminalSrc,
+    parseTerminalSessionEnvironmentsFromSrc,
+    parseTerminalWorkingDirectoryFromSrc,
+    type TerminalSessionEnvironment,
+    type TerminalShellKind,
+} from '@/lib/terminal-session';
 import { normalizePreviewUrl } from '@/lib/url';
 import { sanitizeBranchName } from '@/lib/utils';
 import { useTerminalLink, type TerminalWindow } from '@/hooks/useTerminalLink';
-import { quoteShellArg } from '@/lib/shell';
+import { buildShellExportEnvironmentCommand, buildShellSetDirectoryCommand } from '@/lib/shell';
 import {
     applyThemeToTerminalIframe,
     applyThemeToTerminalWindow,
@@ -36,7 +42,7 @@ import {
     THEME_MODE_STORAGE_KEY,
     THEME_REFRESH_EVENT,
 } from '@/lib/ttyd-theme';
-import type { SessionGitRepoContext, SessionWorkspaceMode } from '@/lib/types';
+import type { SessionAgentRunState, SessionGitRepoContext, SessionWorkspaceMode } from '@/lib/types';
 
 const SUPPORTED_IDES = [
     { id: 'vscode', name: 'VS Code', protocol: 'vscode' },
@@ -57,12 +63,8 @@ type TerminalBootstrapState = 'idle' | 'in_progress' | 'done';
 type TerminalBootstrapRegistry = Record<string, TerminalBootstrapState>;
 type TerminalInteractionMode = 'scroll' | 'select';
 type TerminalOnWriteParsedDisposable = { dispose?: () => void };
-type TerminalStartupScriptState = { injected: boolean; timer: number | null };
 type TerminalWithOnWriteParsed = NonNullable<TerminalWindow['term']> & {
     onWriteParsed?: (callback: () => void) => TerminalOnWriteParsedDisposable | void;
-};
-type TerminalWithClearLineShortcutState = NonNullable<TerminalWindow['term']> & {
-    __vibaClearLineShortcutInstalled?: boolean;
 };
 type CleanupRef = { current: (() => void) | null };
 
@@ -75,8 +77,6 @@ const TERMINAL_HEADER_HEIGHT = 36;
 const TERMINAL_BOOTSTRAP_STORAGE_PREFIX = 'viba:terminal-bootstrap:';
 const TERMINAL_BOOTSTRAP_RUNTIME_KEY = '__vibaTerminalBootstrapRegistry';
 const SHELL_PROMPT_PATTERN = /(?:\$|%|#|>) $/;
-const CODEX_ENV_PREFIX = 'NO_COLOR=1 FORCE_COLOR=0 TERM=xterm';
-const CODEX_COMMON_FLAGS = '-c tui.theme="ansi" --sandbox danger-full-access --ask-for-approval on-request --search';
 const TERMINAL_LOADING_OVERLAY_CLASS = 'pointer-events-none absolute inset-0 z-10 flex items-center justify-center';
 const FOLDER_MODE_GIT_DISABLED_REASON = 'Git controls are unavailable in folder mode because no repository context is active.';
 const MAIN_TERMINAL_TAB_ID = 'terminal';
@@ -95,10 +95,36 @@ const getFloatingTerminalTabIdFromSlot = (slot: TerminalBootstrapSlot): string |
 
 const clampAgentPaneRatio = (value: number): number => Math.max(0.2, Math.min(0.8, value));
 
-const buildExportEnvironmentCommand = (environments: TerminalSessionEnvironment[]): string => {
+const formatAgentRunState = (runState: SessionAgentRunState | 'idle' | null | undefined): string => {
+    if (!runState) return 'idle';
+    return runState.replace(/_/g, ' ');
+};
+
+const agentRunStateTone = (runState: SessionAgentRunState | 'idle' | null | undefined): string => {
+    switch (runState) {
+        case 'running':
+            return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200';
+        case 'queued':
+            return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200';
+        case 'completed':
+            return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200';
+        case 'cancelled':
+            return 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/30 dark:bg-slate-500/10 dark:text-slate-200';
+        case 'error':
+            return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200';
+        case 'needs_auth':
+            return 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-200';
+        default:
+            return 'border-slate-200 bg-slate-50 text-slate-700 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-300';
+    }
+};
+
+const buildExportEnvironmentCommand = (
+    environments: TerminalSessionEnvironment[],
+    shellKind: TerminalShellKind,
+): string => {
     if (environments.length === 0) return '';
-    const assignments = environments.map((env) => `${env.name}=${quoteShellArg(env.value)}`);
-    return `export ${assignments.join(' ')}`;
+    return buildShellExportEnvironmentCommand(environments, shellKind);
 };
 
 const loadConfiguredIde = async (): Promise<string | null> => {
@@ -122,111 +148,6 @@ const loadConfiguredIde = async (): Promise<string | null> => {
     return configuredIdePromise;
 };
 
-type PreviewComponentStackEntry = {
-    name?: unknown;
-    source?: {
-        fileName?: unknown;
-    } | null;
-};
-
-const normalizePickerSourceFileName = (value: string): string => {
-    let normalized = value.trim();
-    if (!normalized) return '';
-
-    normalized = normalized.replace(/[#?].*$/, '');
-
-    if (/^file:\/\//i.test(normalized)) {
-        try {
-            const asUrl = new URL(normalized);
-            normalized = decodeURIComponent(asUrl.pathname);
-        } catch {
-            // Keep original value when URL parsing fails
-        }
-    } else if (/^https?:\/\//i.test(normalized)) {
-        try {
-            const asUrl = new URL(normalized);
-            normalized = decodeURIComponent(asUrl.pathname);
-        } catch {
-            // Keep original value when URL parsing fails
-        }
-    }
-
-    normalized = normalized
-        .replace(/^webpack(?:-internal)?:\/\/\/?/, '')
-        .replace(/^rsc:\/\//, '')
-        .replace(/^\(.*?\)\//, '')
-        .replace(/^\/\.\//, '/')
-        .replace(/^\.\//, '');
-
-    return normalized.trim();
-};
-
-const joinPath = (base: string, relative: string): string => {
-    const normalizedBase = base.replace(/\/+$/, '');
-    const normalizedRelative = relative.replace(/^\/+/, '');
-    return `${normalizedBase}/${normalizedRelative}`;
-};
-
-const resolveComponentSourcePath = (rawSourceFileName: string, workspaceRoot: string): string | null => {
-    const normalizedWorkspaceRoot = workspaceRoot.trim().replace(/\/+$/, '');
-    if (!normalizedWorkspaceRoot) return null;
-
-    const normalizedSource = normalizePickerSourceFileName(rawSourceFileName);
-    if (!normalizedSource) return null;
-
-    if (normalizedSource.startsWith('/')) {
-        return normalizedSource;
-    }
-
-    const relativeCandidates = new Set<string>();
-    relativeCandidates.add(normalizedSource.replace(/^\.\/+/, ''));
-
-    const srcIndex = normalizedSource.indexOf('/src/');
-    if (srcIndex >= 0) {
-        relativeCandidates.add(normalizedSource.slice(srcIndex + 1));
-    }
-
-    if (normalizedSource.startsWith('src/')) {
-        relativeCandidates.add(normalizedSource);
-    }
-
-    for (const relative of relativeCandidates) {
-        if (!relative) continue;
-        return joinPath(normalizedWorkspaceRoot, relative);
-    }
-
-    return null;
-};
-
-const buildComponentReferenceText = (reactStack: unknown[], workspaceRoot: string): string | null => {
-    for (const entry of reactStack) {
-        if (!entry || typeof entry !== 'object') continue;
-
-        const componentEntry = entry as PreviewComponentStackEntry;
-        const componentName = typeof componentEntry.name === 'string' ? componentEntry.name.trim() : '';
-        if (!componentName) continue;
-
-        const sourceFileName = typeof componentEntry.source?.fileName === 'string'
-            ? componentEntry.source.fileName.trim()
-            : '';
-        const sourcePath = sourceFileName ? resolveComponentSourcePath(sourceFileName, workspaceRoot) : null;
-
-        if (sourcePath) {
-            return `${componentName} (${sourcePath})`;
-        }
-    }
-
-    return null;
-};
-
-const normalizeComponentLookupName = (value: string): string => {
-    const trimmed = value.trim();
-    if (!trimmed) return '';
-
-    const match = trimmed.match(/[A-Za-z_$][\w$]*/);
-    return match ? match[0] : '';
-};
-
 export interface SessionViewProps {
     repo: string;
     repoDisplayName?: string;
@@ -238,7 +159,6 @@ export interface SessionViewProps {
     gitRepos?: SessionGitRepoContext[];
     sessionName: string;
     agent?: string;
-    startupScript?: string;
     devServerScript?: string;
     initialMessage?: string;
     attachmentPaths?: string[];
@@ -249,7 +169,7 @@ export interface SessionViewProps {
     onExit: (force?: boolean) => void;
     isResume?: boolean;
     terminalPersistenceMode?: 'tmux' | 'shell';
-    onSessionStart?: () => void;
+    terminalShellKind?: TerminalShellKind;
     agentTerminalSrc?: string;
     floatingTerminalSrc?: string;
 }
@@ -264,20 +184,11 @@ export function SessionView({
     activeRepoPath,
     gitRepos = [],
     sessionName,
-    agent,
-    startupScript,
     devServerScript,
-    initialMessage,
-    attachmentPaths,
-    attachmentNames,
-    projectGitRepoRelativePaths = [],
-    title,
-    sessionMode = 'fast',
     onExit,
     isResume,
-    terminalPersistenceMode = 'shell',
-    onSessionStart,
-    agentTerminalSrc: agentTerminalSrcOverride,
+    terminalPersistenceMode: initialTerminalPersistenceMode = 'shell',
+    terminalShellKind: initialTerminalShellKind = 'posix',
     floatingTerminalSrc: floatingTerminalSrcOverride,
 }: SessionViewProps) {
     const headerButtonLabelClass = 'hidden min-[1900px]:inline';
@@ -340,10 +251,8 @@ export function SessionView({
         return options;
     }, [normalizedGitRepos]);
 
-    const iframeRef = useRef<HTMLIFrameElement>(null);
+    const agentPaneRef = useRef<AgentSessionPaneHandle>(null);
     const terminalFramesRef = useRef<Record<string, HTMLIFrameElement | null>>({});
-    const terminalBootstrapRef = useRef<HTMLIFrameElement>(null);
-    const previewIframeRef = useRef<HTMLIFrameElement>(null);
     const previewAddressInputRef = useRef<HTMLInputElement>(null);
     const splitContainerRef = useRef<HTMLDivElement>(null);
     const splitResizeRef = useRef({ startX: 0, startRatio: DEFAULT_AGENT_PANE_RATIO });
@@ -353,24 +262,30 @@ export function SessionView({
     const terminalProcessMonitorCleanupRef = useRef<(() => void) | null>(null);
     const terminalAutoScrollCleanupRef = useRef<Record<string, (() => void) | null>>({});
     const iframeBeforeUnloadCleanupRef = useRef<Record<string, (() => void) | null>>({});
-    const terminalStartupScriptStateRef = useRef<Record<string, TerminalStartupScriptState>>({});
-    const agentTerminalSrc = useMemo(
-        () => agentTerminalSrcOverride || buildTtydTerminalSrc(sessionName, 'agent', null, {
-            workingDirectory: sessionWorkspaceRootPath,
-        }),
-        [agentTerminalSrcOverride, sessionName, sessionWorkspaceRootPath],
-    );
+    const [terminalPersistenceMode, setTerminalPersistenceMode] = useState<'tmux' | 'shell'>(initialTerminalPersistenceMode);
+    const [terminalShellKind, setTerminalShellKind] = useState<TerminalShellKind>(initialTerminalShellKind);
+    const [isTerminalServiceReady, setIsTerminalServiceReady] = useState(false);
+    const [isTerminalServiceStarting, setIsTerminalServiceStarting] = useState(false);
     const floatingTerminalSrc = useMemo(
         () => floatingTerminalSrcOverride || buildTtydTerminalSrc(sessionName, MAIN_TERMINAL_TAB_ID, null, {
+            persistenceMode: terminalPersistenceMode,
+            shellKind: terminalShellKind,
             workingDirectory: sessionWorkspaceRootPath,
         }),
-        [floatingTerminalSrcOverride, sessionName, sessionWorkspaceRootPath],
+        [floatingTerminalSrcOverride, sessionName, sessionWorkspaceRootPath, terminalPersistenceMode, terminalShellKind],
     );
     const shellBootstrapEnvironmentCommand = useMemo(() => {
         if (terminalPersistenceMode !== 'shell') return '';
-        const environments = parseTerminalSessionEnvironmentsFromSrc(agentTerminalSrc);
-        return buildExportEnvironmentCommand(environments);
-    }, [agentTerminalSrc, terminalPersistenceMode]);
+        const environments = parseTerminalSessionEnvironmentsFromSrc(floatingTerminalSrc);
+        const workingDirectory = parseTerminalWorkingDirectoryFromSrc(floatingTerminalSrc);
+        const exportCommand = buildExportEnvironmentCommand(environments, terminalShellKind);
+        const directoryCommand = workingDirectory
+            ? buildShellSetDirectoryCommand(workingDirectory, terminalShellKind)
+            : '';
+        return [exportCommand, directoryCommand]
+            .filter(Boolean)
+            .join(terminalShellKind === 'powershell' ? '; ' : ' && ');
+    }, [floatingTerminalSrc, terminalPersistenceMode, terminalShellKind]);
 
     const terminalBootstrapStateRef = useRef<Record<string, TerminalBootstrapState>>({
         agent: 'idle',
@@ -386,32 +301,6 @@ export function SessionView({
     });
     const tmuxSilentScrollRequestKeyRef = useRef<string | null>(null);
     const tmuxSilentScrollAppliedKeyRef = useRef<string | null>(null);
-
-    const getTerminalStartupScriptState = useCallback((slot: TerminalBootstrapSlot): TerminalStartupScriptState => {
-        const existing = terminalStartupScriptStateRef.current[slot];
-        if (existing) return existing;
-        const created: TerminalStartupScriptState = { injected: false, timer: null };
-        terminalStartupScriptStateRef.current[slot] = created;
-        return created;
-    }, []);
-
-    const clearTerminalStartupScriptState = useCallback((slot: TerminalBootstrapSlot): void => {
-        const existing = terminalStartupScriptStateRef.current[slot];
-        if (!existing) return;
-        if (existing.timer !== null) {
-            window.clearTimeout(existing.timer);
-        }
-        delete terminalStartupScriptStateRef.current[slot];
-    }, []);
-
-    const resetAllTerminalStartupScriptStates = useCallback((): void => {
-        for (const state of Object.values(terminalStartupScriptStateRef.current)) {
-            if (state.timer !== null) {
-                window.clearTimeout(state.timer);
-            }
-        }
-        terminalStartupScriptStateRef.current = {};
-    }, []);
 
     const getTerminalLinkCleanupRef = useCallback((slot: TerminalBootstrapSlot): CleanupRef => {
         const existing = terminalFrameLinkCleanupRefs.current[slot];
@@ -553,18 +442,11 @@ export function SessionView({
         };
         tmuxSilentScrollRequestKeyRef.current = null;
         tmuxSilentScrollAppliedKeyRef.current = null;
-        resetAllTerminalStartupScriptStates();
-    }, [resetAllTerminalStartupScriptStates, sessionName]);
+    }, [sessionName]);
 
     useEffect(() => {
         setActiveSessionRepoPath(activeRepoPath || normalizedGitRepos[0]?.sourceRepoPath || legacyRepo);
     }, [activeRepoPath, legacyRepo, normalizedGitRepos, sessionName]);
-
-    useEffect(() => {
-        return () => {
-            resetAllTerminalStartupScriptStates();
-        };
-    }, [resetAllTerminalStartupScriptStates]);
 
     useEffect(() => {
         cleanupAllIframeResources();
@@ -618,6 +500,9 @@ export function SessionView({
     }, [getRuntimeBootstrapKey, getRuntimeBootstrapRegistry, getTerminalBootstrapKey]);
 
     const hasTerminalBootstrapped = useCallback((slot: TerminalBootstrapSlot): boolean => {
+        if (terminalPersistenceMode !== 'tmux') {
+            return false;
+        }
         if (terminalBootstrapStateRef.current[slot] === 'done') {
             return true;
         }
@@ -629,10 +514,17 @@ export function SessionView({
         } catch {
             return false;
         }
-    }, [getRuntimeBootstrapState, getTerminalBootstrapKey]);
+    }, [getRuntimeBootstrapState, getTerminalBootstrapKey, terminalPersistenceMode]);
 
     const beginTerminalBootstrap = useCallback((slot: TerminalBootstrapSlot): boolean => {
         const current = terminalBootstrapStateRef.current[slot] || 'idle';
+        if (terminalPersistenceMode !== 'tmux') {
+            if (current === 'in_progress') {
+                return false;
+            }
+            terminalBootstrapStateRef.current[slot] = 'in_progress';
+            return true;
+        }
         const runtimeState = getRuntimeBootstrapState(slot);
         if (current === 'done' || current === 'in_progress' || runtimeState === 'done' || runtimeState === 'in_progress') {
             return false;
@@ -640,7 +532,7 @@ export function SessionView({
         terminalBootstrapStateRef.current[slot] = 'in_progress';
         setRuntimeBootstrapState(slot, 'in_progress');
         return true;
-    }, [getRuntimeBootstrapState, setRuntimeBootstrapState]);
+    }, [getRuntimeBootstrapState, setRuntimeBootstrapState, terminalPersistenceMode]);
 
     const resetTerminalBootstrap = useCallback((slot: TerminalBootstrapSlot): void => {
         if (terminalBootstrapStateRef.current[slot] !== 'done') {
@@ -653,13 +545,16 @@ export function SessionView({
 
     const markTerminalBootstrapped = useCallback((slot: TerminalBootstrapSlot): void => {
         terminalBootstrapStateRef.current[slot] = 'done';
+        if (terminalPersistenceMode !== 'tmux') {
+            return;
+        }
         setRuntimeBootstrapState(slot, 'done');
         try {
             window.sessionStorage.setItem(getTerminalBootstrapKey(slot), '1');
         } catch {
             // Ignore storage failures (private mode / disabled storage).
         }
-    }, [getTerminalBootstrapKey, setRuntimeBootstrapState]);
+    }, [getTerminalBootstrapKey, setRuntimeBootstrapState, terminalPersistenceMode]);
 
     const isShellPromptReady = useCallback((term: TerminalWindow['term']): boolean => {
         const activeBuffer = term?.buffer?.active;
@@ -744,53 +639,8 @@ export function SessionView({
         stopTerminalProcessMonitor();
     }, [sessionName, stopTerminalProcessMonitor]);
 
-    const injectTerminalStartupScript = useCallback((
-        slot: TerminalBootstrapSlot,
-        iframe: HTMLIFrameElement,
-        win: TerminalWindow,
-        term: NonNullable<TerminalWindow['term']>
-    ): boolean => {
-        if (isResume) return false;
-
-        const script = startupScript?.trim();
-        const startupState = getTerminalStartupScriptState(slot);
-        if (!script || startupState.injected) return false;
-
-        const pressEnter = () => {
-            const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
-            if (textarea) {
-                textarea.dispatchEvent(new KeyboardEvent('keypress', {
-                    bubbles: true,
-                    cancelable: true,
-                    charCode: 13,
-                    keyCode: 13,
-                    key: 'Enter',
-                    view: win
-                }));
-            } else {
-                term.paste('\r');
-            }
-        };
-
-        startupState.injected = true;
-        if (startupState.timer !== null) {
-            window.clearTimeout(startupState.timer);
-        }
-        startupState.timer = window.setTimeout(() => {
-            startupState.timer = null;
-            try {
-                term.paste(script);
-                pressEnter();
-            } catch (error) {
-                startupState.injected = false;
-                console.error('Failed to inject startup script into terminal iframe:', error);
-            }
-        }, 500);
-
-        return true;
-    }, [getTerminalStartupScriptState, isResume, startupScript]);
-
     const [feedback, setFeedback] = useState<string>('Initializing...');
+    const [agentHeaderMeta, setAgentHeaderMeta] = useState<AgentSessionHeaderMeta | null>(null);
     const [cleanupPhase, setCleanupPhase] = useState<CleanupPhase>('idle');
     const [cleanupError, setCleanupError] = useState<string | null>(null);
     const [isStartingDevServer, setIsStartingDevServer] = useState(false);
@@ -815,14 +665,11 @@ export function SessionView({
     const [previewInputUrl, setPreviewInputUrl] = useState('');
     const [previewUrl, setPreviewUrl] = useState('');
     const [loadedPreviewTargetUrl, setLoadedPreviewTargetUrl] = useState('');
-    const [isPreviewPickerActive, setIsPreviewPickerActive] = useState(false);
-    const [isResolvingElement, setIsResolvingElement] = useState(false);
     const [isRepoViewActive, setIsRepoViewActive] = useState(false);
     const [agentPaneRatio, setAgentPaneRatio] = useState(DEFAULT_AGENT_PANE_RATIO);
     const [isSplitResizing, setIsSplitResizing] = useState(false);
     const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(true);
     const [isMobileViewport, setIsMobileViewport] = useState(false);
-    const [isAgentTerminalThemeReady, setIsAgentTerminalThemeReady] = useState(false);
     const [floatingTerminalThemeReadyByTab, setFloatingTerminalThemeReadyByTab] = useState<Record<string, boolean>>({
         [MAIN_TERMINAL_TAB_ID]: false,
     });
@@ -839,12 +686,13 @@ export function SessionView({
         const nextSources: Record<string, string> = {};
         for (const tabId of terminalTabIds) {
             nextSources[tabId] = buildTtydTerminalSrc(sessionName, tabId, floatingTerminalEnvironments, {
+                persistenceMode: terminalPersistenceMode,
+                shellKind: terminalShellKind,
                 workingDirectory: sessionWorkspaceRootPath,
             });
         }
         return nextSources;
-    }, [floatingTerminalEnvironments, sessionName, sessionWorkspaceRootPath, terminalTabIds]);
-    const activeFloatingTerminalSrc = terminalTabSources[activeTerminalTabId] || floatingTerminalSrc;
+    }, [floatingTerminalEnvironments, sessionName, sessionWorkspaceRootPath, terminalPersistenceMode, terminalShellKind, terminalTabIds]);
     const activeFloatingTerminalBootstrapSlot = useMemo(
         () => getFloatingTerminalBootstrapSlot(activeTerminalTabId),
         [activeTerminalTabId],
@@ -861,29 +709,67 @@ export function SessionView({
     }, []);
 
     useEffect(() => {
-        setIsAgentTerminalThemeReady(false);
-    }, [agentTerminalSrc, sessionName]);
-
-    useEffect(() => {
         setTerminalTabIds([MAIN_TERMINAL_TAB_ID]);
         setActiveTerminalTabId(MAIN_TERMINAL_TAB_ID);
         setFloatingTerminalThemeReadyByTab({ [MAIN_TERMINAL_TAB_ID]: false });
+        setIsTerminalServiceReady(false);
+        setIsTerminalServiceStarting(false);
+        setTerminalPersistenceMode(initialTerminalPersistenceMode);
+        setTerminalShellKind(initialTerminalShellKind);
         terminalFramesRef.current = {};
-    }, [sessionName]);
+    }, [initialTerminalPersistenceMode, initialTerminalShellKind, sessionName]);
 
     useEffect(() => {
         activeTerminalTabIdRef.current = activeTerminalTabId;
     }, [activeTerminalTabId]);
 
-    const focusTerminalInputForSlot = useCallback((slot: TerminalBootstrapSlot): boolean => {
-        const iframe = (() => {
-            if (slot === 'agent') {
-                return iframeRef.current;
+    const ensureTerminalService = useCallback(async (): Promise<boolean> => {
+        if (isTerminalServiceReady) {
+            return true;
+        }
+        if (isTerminalServiceStarting) {
+            return false;
+        }
+
+        setIsTerminalServiceStarting(true);
+        try {
+            const result = await startTtydProcess();
+            if (!result.success) {
+                setFeedback(result.error || 'Failed to start terminal service');
+                return false;
             }
+
+            setTerminalPersistenceMode(result.persistenceMode === 'tmux' ? 'tmux' : 'shell');
+            setTerminalShellKind(result.shellKind === 'powershell' ? 'powershell' : 'posix');
+            setIsTerminalServiceReady(true);
+            return true;
+        } catch (error) {
+            console.error('Failed to start terminal service:', error);
+            setFeedback(error instanceof Error ? error.message : 'Failed to start terminal service');
+            return false;
+        } finally {
+            setIsTerminalServiceStarting(false);
+        }
+    }, [isTerminalServiceReady, isTerminalServiceStarting]);
+
+    useEffect(() => {
+        if (isRightPanelCollapsed || isRepoViewActive) {
+            return;
+        }
+
+        void ensureTerminalService();
+    }, [ensureTerminalService, isRepoViewActive, isRightPanelCollapsed]);
+
+    const focusTerminalInputForSlot = useCallback((slot: TerminalBootstrapSlot): boolean => {
+        if (slot === 'agent') {
+            agentPaneRef.current?.focusComposer();
+            return true;
+        }
+
+        const iframe = (() => {
             const floatingTabId = getFloatingTerminalTabIdFromSlot(slot);
             if (!floatingTabId) return null;
-            return terminalFramesRef.current[floatingTabId]
-                || (floatingTabId === activeTerminalTabId ? terminalBootstrapRef.current : null);
+            return terminalFramesRef.current[floatingTabId] || null;
         })();
         if (!iframe) return false;
         try {
@@ -900,7 +786,7 @@ export function SessionView({
         } catch {
             return false;
         }
-    }, [activeTerminalTabId]);
+    }, []);
 
     const maybeRestoreRecentTerminalFocusAfterThemeChange = useCallback(() => {
         const recentBlur = recentTerminalBlurRef.current;
@@ -921,11 +807,6 @@ export function SessionView({
     }, [activeFloatingTerminalBootstrapSlot, focusTerminalInputForSlot]);
 
     const applyThemeToTerminalFrames = useCallback(() => {
-        const agentThemeApplied = applyThemeToTerminalIframe(iframeRef.current);
-        if (agentThemeApplied) {
-            setIsAgentTerminalThemeReady(true);
-        }
-
         const themedTabs = new Set<string>();
         for (const tabId of terminalTabIds) {
             if (applyThemeToTerminalIframe(terminalFramesRef.current[tabId])) {
@@ -1077,7 +958,6 @@ export function SessionView({
         cleanupBeforeUnloadGuard(bootstrapSlot);
         cleanupTerminalAutoScroll(bootstrapSlot);
         clearTerminalBootstrapState(bootstrapSlot);
-        clearTerminalStartupScriptState(bootstrapSlot);
         void (async () => {
             const result = await terminateTmuxSessionRole(sessionName, tabId);
             if (!result.success) {
@@ -1089,7 +969,6 @@ export function SessionView({
         cleanupTerminalAutoScroll,
         cleanupTerminalLinkHandler,
         clearTerminalBootstrapState,
-        clearTerminalStartupScriptState,
         sessionName,
         terminalTabIds,
     ]);
@@ -1183,16 +1062,40 @@ export function SessionView({
         setIsRightPanelCollapsed((previous) => !previous);
     }, []);
 
-    const handleRepoButtonClick = useCallback(() => {
+    const handlePreviewButtonClick = useCallback(() => {
+        if (isRightPanelCollapsed) {
+            setIsRepoViewActive(false);
+            setIsRightPanelCollapsed(false);
+            return;
+        }
+
+        if (!isRepoViewActive) {
+            setIsRightPanelCollapsed(true);
+            return;
+        }
+
+        setIsRepoViewActive(false);
+    }, [isRepoViewActive, isRightPanelCollapsed]);
+
+    const handleChangesButtonClick = useCallback(() => {
         if (isFolderMode) {
             setFeedback(FOLDER_MODE_GIT_DISABLED_REASON);
             return;
         }
+
         if (isRightPanelCollapsed) {
+            setIsRepoViewActive(true);
             setIsRightPanelCollapsed(false);
+            return;
         }
-        setIsRepoViewActive((previous) => !previous);
-    }, [isFolderMode, isRightPanelCollapsed]);
+
+        if (isRepoViewActive) {
+            setIsRightPanelCollapsed(true);
+            return;
+        }
+
+        setIsRepoViewActive(true);
+    }, [isFolderMode, isRepoViewActive, isRightPanelCollapsed]);
 
     useEffect(() => {
         if (!isSplitResizing) return;
@@ -1310,6 +1213,10 @@ export function SessionView({
         window.open(uri, '_blank');
     };
 
+    const handleOpenAgentDetails = useCallback(() => {
+        agentPaneRef.current?.openAgentDetails();
+    }, []);
+
     const applyTerminalInteractionMode = useCallback(async (
         mode: TerminalInteractionMode,
         options?: { silent?: boolean }
@@ -1322,7 +1229,7 @@ export function SessionView({
         }
 
         const mouseEnabled = mode === 'scroll';
-        const roles = Array.from(new Set(['agent', ...terminalTabIds]));
+        const roles = Array.from(new Set(terminalTabIds));
         const results = await Promise.all(
             roles.map((role) => setTmuxSessionMouseMode(sessionName, role, mouseEnabled)),
         );
@@ -1375,7 +1282,7 @@ export function SessionView({
 
     useEffect(() => {
         if (terminalPersistenceMode !== 'tmux') return;
-        const roles = Array.from(new Set(['agent', ...terminalTabIds])).sort();
+        const roles = Array.from(new Set(terminalTabIds)).sort();
         const requestKey = `${sessionName}:scroll:${roles.join(',')}`;
         if (
             tmuxSilentScrollAppliedKeyRef.current === requestKey
@@ -1458,43 +1365,12 @@ export function SessionView({
         await runCleanup(true);
     };
 
-    const pasteIntoAgentIframe = useCallback((text: string): Promise<boolean> => {
-        return new Promise((resolve) => {
-            const iframe = iframeRef.current;
-            if (!iframe) {
-                resolve(false);
-                return;
-            }
-
-            const checkAndPaste = (attempts = 0) => {
-                if (attempts > 30) {
-                    resolve(false);
-                    return;
-                }
-
-                try {
-                    const win = iframe.contentWindow as TerminalWindow | null;
-                    if (!win || !win.term) {
-                        setTimeout(() => checkAndPaste(attempts + 1), 300);
-                        return;
-                    }
-
-                    win.term.paste(text);
-
-                    const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
-                    if (textarea) {
-                        (textarea as HTMLElement).focus();
-                    }
-                    win.focus();
-                    resolve(true);
-                } catch (e) {
-                    console.error('Failed to paste into agent iframe:', e);
-                    setTimeout(() => checkAndPaste(attempts + 1), 300);
-                }
-            };
-
-            checkAndPaste();
-        });
+    const insertIntoAgentComposer = useCallback((text: string): Promise<boolean> => {
+        const inserted = agentPaneRef.current?.insertText(text) ?? false;
+        if (inserted) {
+            agentPaneRef.current?.focusComposer();
+        }
+        return Promise.resolve(inserted);
     }, []);
 
     const handleInsertFilePaths = useCallback(async (paths: string[]) => {
@@ -1502,62 +1378,14 @@ export function SessionView({
 
         setIsInsertingFilePaths(true);
         const textToInsert = `${paths.join(' ')} `;
-        const inserted = await pasteIntoAgentIframe(textToInsert);
+        const inserted = await insertIntoAgentComposer(textToInsert);
         setFeedback(
             inserted
                 ? `Inserted ${paths.length} file path${paths.length === 1 ? '' : 's'} into agent input`
                 : 'Failed to insert file paths into agent input'
         );
         setIsInsertingFilePaths(false);
-    }, [pasteIntoAgentIframe]);
-
-    const resolveComponentSourcePathByNames = useCallback(async (componentNames: string[]): Promise<{ resolvedName: string; sourcePath: string } | null> => {
-        const normalizedNames = componentNames.map(normalizeComponentLookupName).filter(Boolean);
-        if (normalizedNames.length === 0) return null;
-
-        const roots = Array.from(
-            new Set(
-                [repo, worktree]
-                    .map((root) => (root || '').trim())
-                    .filter(Boolean)
-            )
-        );
-        if (roots.length === 0) return null;
-
-        for (const workspaceRoot of roots) {
-            try {
-                const response = await fetch('/api/component-source/resolve', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        componentNames: normalizedNames,
-                        workspaceRoot,
-                    }),
-                });
-
-                const payload = await response.json().catch(() => null) as { resolvedName?: string; sourcePath?: string; error?: string } | null;
-                if (!response.ok) {
-                    console.warn('Component source resolve miss', {
-                        componentNames: normalizedNames,
-                        workspaceRoot,
-                        error: payload?.error || response.statusText,
-                    });
-                    continue;
-                }
-
-                const sourcePath = typeof payload?.sourcePath === 'string' ? payload.sourcePath.trim() : '';
-                const resolvedName = typeof payload?.resolvedName === 'string' ? payload.resolvedName.trim() : '';
-
-                if (sourcePath && resolvedName) return { sourcePath, resolvedName };
-            } catch (error) {
-                console.error('Failed to resolve component source path:', error);
-            }
-        }
-
-        return null;
-    }, [repo, worktree]);
+    }, [insertIntoAgentComposer]);
 
     const loadBaseBranchOptions = useCallback(async () => {
         if (!sessionName || isFolderMode || !repo) {
@@ -1623,33 +1451,6 @@ export function SessionView({
         return () => window.clearInterval(timer);
     }, [currentBaseBranch, loadSessionDivergence, sessionName]);
 
-    const handleBaseBranchChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-        if (!sessionName) return;
-
-        const nextBaseBranch = e.target.value.trim();
-        if (!nextBaseBranch || nextBaseBranch === currentBaseBranch) return;
-
-        setIsUpdatingBaseBranch(true);
-        setFeedback(`Updating base branch to ${nextBaseBranch}...`);
-
-        try {
-            const result = await updateSessionBaseBranch(sessionName, nextBaseBranch, repo);
-            if (result.success && result.baseBranch) {
-                setCurrentBaseBranch(result.baseBranch);
-                setFeedback(`Base branch updated to ${result.baseBranch}`);
-                await loadBaseBranchOptions();
-                await loadSessionDivergence();
-            } else {
-                setFeedback(`Failed to update base branch: ${result.error}`);
-            }
-        } catch (error) {
-            console.error('Failed to update base branch:', error);
-            setFeedback('Failed to update base branch');
-        } finally {
-            setIsUpdatingBaseBranch(false);
-        }
-    };
-
     const runMerge = async (): Promise<boolean> => {
         if (!sessionName) return false;
         if (!currentBaseBranch) return false;
@@ -1704,14 +1505,17 @@ export function SessionView({
 
         try {
             if (isNewBranch) {
+                setIsUpdatingBaseBranch(true);
                 const updateResult = await updateSessionBaseBranch(sessionName, targetBranch, repo);
                 if (!updateResult.success) {
                     setFeedback(`Failed to update base branch: ${updateResult.error}`);
+                    setIsUpdatingBaseBranch(false);
                     setIsRebasing(false);
                     return;
                 }
                 setCurrentBaseBranch(updateResult.baseBranch!);
                 await loadBaseBranchOptions();
+                setIsUpdatingBaseBranch(false);
             }
 
             const result = await rebaseSessionOntoBase(sessionName, repo);
@@ -1725,6 +1529,7 @@ export function SessionView({
             console.error('Rebase request failed:', e);
             setFeedback('Rebase failed');
         } finally {
+            setIsUpdatingBaseBranch(false);
             setIsRebasing(false);
         }
     }, [currentBaseBranch, loadBaseBranchOptions, loadSessionDivergence, repo, sessionName]);
@@ -1792,25 +1597,7 @@ export function SessionView({
         }
     }, [handleRebaseSelect, newBaseBranchFrom, newBaseBranchName, repo, sessionName]);
 
-    const stopPreviewProxy = useCallback(async (target: string): Promise<void> => {
-        const normalized = normalizePreviewUrl(target);
-        if (!normalized) return;
-
-        try {
-            await fetch('/api/preview-proxy/stop', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ target: normalized }),
-                keepalive: true,
-            });
-        } catch (error) {
-            console.error('Failed to stop preview proxy:', error);
-        }
-    }, []);
-
-    const loadPreviewViaProxy = useCallback(async (rawUrl: string, openPreview: boolean): Promise<boolean> => {
+    const loadPreview = useCallback(async (rawUrl: string, openPreview: boolean): Promise<boolean> => {
         const normalized = normalizePreviewUrl(rawUrl);
         if (!normalized) {
             setFeedback('Please enter a preview URL');
@@ -1818,32 +1605,11 @@ export function SessionView({
         }
 
         setPreviewInputUrl(normalized);
-        setIsPreviewPickerActive(false);
         setFeedback(`Loading preview: ${normalized}`);
 
         try {
-            const previousTargetUrl = loadedPreviewTargetUrl;
-
-            const response = await fetch('/api/preview-proxy/start', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    target: normalized,
-                }),
-            });
-
-            const payload = await response.json().catch(() => null) as { error?: string; proxyUrl?: string } | null;
-            if (!response.ok || !payload?.proxyUrl) {
-                throw new Error(payload?.error || 'Failed to start preview proxy');
-            }
-
-            setPreviewUrl(payload.proxyUrl);
+            setPreviewUrl(normalized);
             setLoadedPreviewTargetUrl(normalized);
-            if (previousTargetUrl && previousTargetUrl !== normalized) {
-                void stopPreviewProxy(previousTargetUrl);
-            }
             if (openPreview) {
                 setIsPreviewVisible(true);
             }
@@ -1851,43 +1617,10 @@ export function SessionView({
             return true;
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to load preview';
-            console.error('Failed to load preview via proxy:', error);
+            console.error('Failed to load preview:', error);
             setFeedback(`Failed to load preview: ${message}`);
             return false;
         }
-    }, [loadedPreviewTargetUrl, stopPreviewProxy]);
-
-    const handleTogglePreviewPicker = useCallback(() => {
-        if (!previewUrl) {
-            setFeedback('Load a preview before picking elements');
-            return;
-        }
-
-        const previewWindow = previewIframeRef.current?.contentWindow;
-        if (!previewWindow) {
-            setFeedback('Preview is not ready yet');
-            return;
-        }
-
-        const nextState = !isPreviewPickerActive;
-        previewWindow.postMessage({
-            type: 'viba:preview-picker-toggle',
-            active: nextState,
-        }, '*');
-
-        setIsPreviewPickerActive(nextState);
-        setFeedback(nextState ? 'Picker enabled: click an element in the preview' : 'Picker disabled');
-    }, [isPreviewPickerActive, previewUrl]);
-
-    const postPreviewControlMessage = useCallback((payload: { action?: PreviewNavigationAction; type: string }) => {
-        const previewWindow = previewIframeRef.current?.contentWindow;
-        if (!previewWindow) {
-            setFeedback('Preview is not ready yet');
-            return false;
-        }
-
-        previewWindow.postMessage(payload, '*');
-        return true;
     }, []);
 
     const handlePreviewNavigate = useCallback((action: PreviewNavigationAction) => {
@@ -1896,14 +1629,19 @@ export function SessionView({
             return;
         }
 
-        if (!postPreviewControlMessage({ type: 'viba:preview-navigation', action })) {
+        if (action !== 'reload') {
+            setFeedback('Back/forward preview controls were removed with the preview proxy');
             return;
         }
 
-        if (action === 'reload') {
-            setFeedback('Reloading preview...');
+        const normalizedTarget = normalizePreviewUrl(loadedPreviewTargetUrl || previewInputUrl || previewUrl);
+        if (!normalizedTarget) {
+            setFeedback('Preview target URL is unavailable');
+            return;
         }
-    }, [postPreviewControlMessage, previewUrl]);
+        setPreviewUrl(normalizedTarget);
+        setFeedback('Reloading preview...');
+    }, [loadedPreviewTargetUrl, previewInputUrl, previewUrl]);
 
     const handleUnloadPreview = useCallback(() => {
         if (!previewUrl) {
@@ -1911,21 +1649,13 @@ export function SessionView({
             return;
         }
 
-        if (loadedPreviewTargetUrl) {
-            void stopPreviewProxy(loadedPreviewTargetUrl);
-        }
         setPreviewUrl('');
         setLoadedPreviewTargetUrl('');
-        setIsPreviewPickerActive(false);
         setFeedback('Preview unloaded');
-    }, [loadedPreviewTargetUrl, previewUrl, stopPreviewProxy]);
-
-    const handlePreviewIframeLoad = useCallback(() => {
-        postPreviewControlMessage({ type: 'viba:preview-location-request' });
-    }, [postPreviewControlMessage]);
+    }, [previewUrl]);
 
     const { attachTerminalLinkHandler } = useTerminalLink({
-        onLoadPreview: loadPreviewViaProxy
+        onLoadPreview: (url, openPreview) => loadPreview(url, openPreview)
     });
 
     useEffect(() => {
@@ -1941,162 +1671,13 @@ export function SessionView({
         };
     }, [isPreviewVisible, previewInputUrl]);
 
-    useEffect(() => {
-        return () => {
-            if (loadedPreviewTargetUrl) {
-                void stopPreviewProxy(loadedPreviewTargetUrl);
-            }
-        };
-    }, [loadedPreviewTargetUrl, stopPreviewProxy]);
-
-    useEffect(() => {
-        const handlePreviewMessage = (event: MessageEvent) => {
-            if (!previewIframeRef.current || event.source !== previewIframeRef.current.contentWindow) return;
-
-            const payload = event.data as {
-                active?: boolean;
-                element?: unknown;
-                type?: string;
-                url?: unknown;
-            } | null;
-            if (!payload || typeof payload !== 'object') return;
-
-            if (payload.type === 'viba:preview-picker-state') {
-                setIsPreviewPickerActive(Boolean(payload.active));
-                return;
-            }
-
-            if (payload.type === 'viba:preview-picker-ready') {
-                const previewWindow = previewIframeRef.current?.contentWindow;
-                if (previewWindow) {
-                    previewWindow.postMessage({ type: 'viba:preview-location-request' }, '*');
-                }
-                return;
-            }
-
-            if (payload.type === 'viba:preview-link-open') {
-                if (typeof payload.url === 'string' && payload.url.trim().length > 0) {
-                    window.open(payload.url, '_blank', 'noopener,noreferrer');
-                }
-                return;
-            }
-
-            if (payload.type === 'viba:preview-location-change') {
-                if (typeof payload.url === 'string' && payload.url.trim().length > 0) {
-                    setPreviewInputUrl(payload.url);
-                    setLoadedPreviewTargetUrl(payload.url);
-                }
-                return;
-            }
-
-            if (payload.type === 'viba:preview-element-selected') {
-                const selectedElement = (payload.element && typeof payload.element === 'object')
-                    ? payload.element as { reactComponentStack?: unknown[]; selector?: string | null }
-                    : null;
-                const reactStack = Array.isArray(selectedElement?.reactComponentStack)
-                    ? selectedElement.reactComponentStack
-                    : [];
-                const componentReference = buildComponentReferenceText(reactStack, worktree || repo);
-                const firstReactComponent = reactStack[0] && typeof reactStack[0] === 'object'
-                    ? (reactStack[0] as { name?: unknown }).name
-                    : undefined;
-                const fallbackName = typeof firstReactComponent === 'string' && firstReactComponent.trim().length > 0
-                    ? firstReactComponent.trim()
-                    : '';
-                const builtInComponents = new Set([
-                    'Suspense', 'ErrorBoundary', 'Router', 'AppRouter', 'LayoutRouter',
-                    'RenderFromTemplateContext', 'ScrollAndFocusHandler', 'InnerLayoutRouter',
-                    'RedirectErrorBoundary', 'NotFoundBoundary', 'LoadingBoundary',
-                    'ReactDevOverlay', 'HotReload', 'AppContainer', 'Route', 'Link', 'Image',
-                    'OuterLayoutRouter', 'Head', 'StringRefs', 'Fragment', 'Profiler',
-                    'StrictMode', 'SuspenseList', 'Script', 'Page', '__next_root_layout_boundary__'
-                ]);
-
-                const stackComponentNames = Array.from(
-                    new Set(
-                        reactStack
-                            .map((entry) => {
-                                if (!entry || typeof entry !== 'object') return '';
-                                const name = (entry as { name?: unknown }).name;
-                                return typeof name === 'string' ? name.trim() : '';
-                            })
-                            .filter((name) => {
-                                if (!name) return false;
-                                if (builtInComponents.has(name)) return false;
-                                if (name.startsWith('styled.') || name.startsWith('Styled(')) return false;
-                                return true;
-                            })
-                    )
-                );
-
-                console.log('Filtered stack component names:', stackComponentNames);
-
-                const identifier = componentReference
-                    || fallbackName
-                    || (typeof selectedElement?.selector === 'string' ? selectedElement.selector : '');
-
-                console.log('Preview selected element:', selectedElement);
-                console.log('Preview selected reactComponentStack:', reactStack);
-                console.log('Preview selected identifier:', identifier);
-                setIsPreviewPickerActive(false);
-
-                if (!identifier) {
-                    setFeedback('Element selected. No identifier was resolved.');
-                    return;
-                }
-
-                void (async () => {
-                    let finalIdentifier = componentReference || '';
-
-                    if (!finalIdentifier && stackComponentNames.length > 0) {
-                        setIsResolvingElement(true);
-                        try {
-                            const result = await resolveComponentSourcePathByNames(stackComponentNames);
-                            if (result?.resolvedName && result?.sourcePath) {
-                                finalIdentifier = `${result.resolvedName} (${result.sourcePath})`;
-                            }
-                        } finally {
-                            setIsResolvingElement(false);
-                        }
-                    }
-
-                    if (!finalIdentifier) {
-                        if (stackComponentNames.length > 0) {
-                            setFeedback('Element selected, but source file path could not be resolved for the component');
-                            return;
-                        }
-                        finalIdentifier = identifier;
-                    }
-
-                    console.log('Final resolved component identifier:', finalIdentifier);
-
-                    const inserted = await pasteIntoAgentIframe(`${finalIdentifier} `);
-                    setFeedback(
-                        inserted
-                            ? `Element identifier sent to agent: ${finalIdentifier}`
-                            : 'Element selected, but failed to send identifier to agent input'
-                    );
-                })();
-            }
-        };
-
-        window.addEventListener('message', handlePreviewMessage);
-        return () => {
-            window.removeEventListener('message', handlePreviewMessage);
-        };
-    }, [pasteIntoAgentIframe, repo, resolveComponentSourcePathByNames, worktree]);
-
-    useEffect(() => {
-        setIsPreviewPickerActive(false);
-    }, [previewUrl]);
-
     const handlePreviewSubmit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        void loadPreviewViaProxy(previewInputUrl, true);
+        void loadPreview(previewInputUrl, true);
     };
 
     const handleOpenPreviewInNewTab = useCallback(() => {
-        const preferredTarget = previewInputUrl.trim() || previewUrl;
+        const preferredTarget = loadedPreviewTargetUrl.trim() || previewInputUrl.trim() || previewUrl;
         const normalizedTarget = normalizePreviewUrl(preferredTarget);
 
         if (!normalizedTarget) {
@@ -2106,12 +1687,20 @@ export function SessionView({
 
         window.open(normalizedTarget, '_blank', 'noopener,noreferrer');
         setFeedback(`Opened preview in new tab: ${normalizedTarget}`);
-    }, [previewInputUrl, previewUrl]);
+    }, [loadedPreviewTargetUrl, previewInputUrl, previewUrl]);
 
-    const handleStartDevServer = () => {
+    const handleStartDevServer = async () => {
         const script = devServerScript?.trim();
+        if (!script || isTerminalForegroundProcessRunning) return;
+
+        const terminalReady = await ensureTerminalService();
+        if (!terminalReady) return;
+
         const iframe = terminalFramesRef.current[activeTerminalTabId];
-        if (!script || !iframe || isTerminalForegroundProcessRunning) return;
+        if (!iframe) {
+            setFeedback('Terminal is still starting');
+            return;
+        }
 
         // Auto-show terminal if minimized
         setIsTerminalMinimized(false);
@@ -2162,243 +1751,12 @@ export function SessionView({
 
         checkAndInject();
     };
-
-    const handleIframeLoad = () => {
-        if (!iframeRef.current) return;
-        const iframe = iframeRef.current;
-        setIsAgentTerminalThemeReady(false);
-
-        // Safety check for Same-Origin to avoid errors if proxy isn't working
-        try {
-            // Just accessing contentWindow to see if it throws
-            const _ = iframe.contentWindow;
-        } catch (e) {
-            setFeedback("Error: Cross-Origin access blocked. Ensure proxy is working.");
-            return;
-        }
-
-        installBeforeUnloadGuard('agent', iframe);
-
-        setFeedback('Connecting to terminal...');
-
-        const checkAndInject = (attempts = 0) => {
-            if (attempts > 30) {
-                setFeedback('Timeout waiting for terminal to be ready');
-                return;
-            }
-
-            try {
-                const win = iframe.contentWindow as TerminalWindow | null;
-                if (win && win.term) {
-                    ensureTmuxStatusBarHidden('agent');
-                    const term = win.term;
-                    attachTerminalLinkHandler(iframe, agentFrameLinkCleanupRef, {
-                        directOpenBehavior: 'new_tab',
-                        modifierOpenBehavior: 'new_tab',
-                    });
-
-                    // Clear current input line on Cmd+Backspace/Cmd+Delete.
-                    const terminalWithShortcutState = term as TerminalWithClearLineShortcutState;
-                    if (!terminalWithShortcutState.__vibaClearLineShortcutInstalled && typeof term.attachCustomKeyEventHandler === 'function') {
-                        const existingCustomKeyEventHandler = term.customKeyEventHandler;
-                        term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-                            if (event.type === 'keydown' && event.metaKey && (event.key === 'Backspace' || event.key === 'Delete')) {
-                                const coreService = term._core?.coreService;
-                                if (coreService && typeof coreService.triggerDataEvent === 'function') {
-                                    coreService.triggerDataEvent('\x15', true);
-                                } else {
-                                    const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
-                                    if (textarea) {
-                                        textarea.dispatchEvent(new KeyboardEvent('keydown', {
-                                            bubbles: true,
-                                            cancelable: true,
-                                            key: 'u',
-                                            keyCode: 85,
-                                            ctrlKey: true,
-                                            view: win
-                                        }));
-                                    } else {
-                                        term.paste('\x15');
-                                    }
-                                }
-                                return false;
-                            }
-
-                            if (typeof existingCustomKeyEventHandler === 'function') {
-                                try {
-                                    return existingCustomKeyEventHandler.call(term, event) !== false;
-                                } catch (error) {
-                                    console.error('Existing terminal key handler failed:', error);
-                                }
-                            }
-                            return true;
-                        });
-                        terminalWithShortcutState.__vibaClearLineShortcutInstalled = true;
-                    }
-
-                    // Ensure terminal palette stays in sync with app/OS theme.
-                    const themeApplied = applyThemeToTerminalWindow(win);
-                    if (themeApplied) {
-                        setIsAgentTerminalThemeReady(true);
-                    }
-
-                    const alreadyBootstrapped = hasTerminalBootstrapped('agent');
-                    const shouldSkipResumeInjection = Boolean(isResume) && terminalPersistenceMode === 'tmux';
-                    if (alreadyBootstrapped || shouldSkipResumeInjection) {
-                        if (shouldSkipResumeInjection && !alreadyBootstrapped) {
-                            markTerminalBootstrapped('agent');
-                            setFeedback('Attached to persisted terminal');
-                        } else {
-                            setFeedback('Reconnected to terminal');
-                        }
-                        win.focus();
-                        const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
-                        if (textarea) (textarea as HTMLElement).focus();
-                        return;
-                    }
-
-                    if (!isShellPromptReady(term) && attempts < 10) {
-                        setTimeout(() => checkAndInject(attempts + 1), 200);
-                        return;
-                    }
-
-                    if (!beginTerminalBootstrap('agent')) {
-                        setFeedback('Reconnected to terminal');
-                        win.focus();
-                        const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
-                        if (textarea) (textarea as HTMLElement).focus();
-                        return;
-                    }
-
-                    // Attempt injection
-
-                    // User instructions:
-                    // 1. paste cd command
-                    // 2. dispatch keypress 13
-
-                    const targetPath = sessionWorkspaceRootPath || worktree || repo;
-                    const cmd = `cd ${quoteShellArg(targetPath)}`;
-                    // Send cd command
-                    term.paste(cmd);
-
-                    // Helper to press enter
-                    const pressEnter = () => {
-                        const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
-                        if (textarea) {
-                            textarea.dispatchEvent(new KeyboardEvent('keypress', {
-                                bubbles: true,
-                                cancelable: true,
-                                charCode: 13,
-                                keyCode: 13,
-                                key: 'Enter',
-                                view: win
-                            }));
-                        } else {
-                            term.paste('\r');
-                        }
-                    };
-
-                    pressEnter();
-                    markTerminalBootstrapped('agent');
-
-                    // Inject agent command if present
-                    if (agent) {
-                        const startAgentProcess = async () => {
-                            let agentCmd = '';
-                            const withCodexLogin = (cmd: string): string =>
-                                `[ -n "$OPENAI_API_KEY" ] && { printenv OPENAI_API_KEY | codex login --with-api-key || exit 1; }; ${cmd}`;
-
-                            if (isResume) {
-                                agentCmd = withCodexLogin(`${CODEX_ENV_PREFIX} codex resume --last ${CODEX_COMMON_FLAGS}`);
-                            } else {
-                                const trimmedInitialMessage = initialMessage?.trim() || '';
-                                const taskContent = trimmedInitialMessage;
-                                const normalizedAttachmentPaths = (
-                                    attachmentPaths && attachmentPaths.length > 0
-                                        ? attachmentPaths
-                                        : (attachmentNames || [])
-                                            .map((name) => `${sessionWorkspaceRootPath || worktree || repo}-attachments/${name}`)
-                                )
-                                    .map((entry) => entry.trim())
-                                    .filter(Boolean);
-                                const resolvedAttachmentPaths = Array.from(new Set(normalizedAttachmentPaths));
-                                let safeMessage = '';
-
-                                const fullMessage = buildAgentStartupPrompt({
-                                    taskDescription: taskContent,
-                                    attachmentPaths: resolvedAttachmentPaths,
-                                    sessionMode,
-                                    sessionName,
-                                    notificationApiUrl: `${window.location.origin}/api/notifications`,
-                                    workspaceMode,
-                                    gitRepos: normalizedGitRepos,
-                                    discoveredRepoRelativePaths: projectGitRepoRelativePaths,
-                                });
-
-                                // Send startup prompt only when task description is provided.
-                                if (fullMessage) {
-                                    try {
-                                        const result = await writeSessionPromptFile(sessionName, fullMessage);
-                                        if (result.success && result.filePath) {
-                                            safeMessage = ` "$(cat ${quoteShellArg(result.filePath)})"`;
-                                        } else {
-                                            console.error('Failed to write prompt file, falling back to inline prompt', result.error);
-                                            safeMessage = ` ${quoteShellArg(fullMessage)}`;
-                                        }
-                                    } catch (err) {
-                                        console.error('Exception writing prompt file', err);
-                                        safeMessage = ` ${quoteShellArg(fullMessage)}`;
-                                    }
-                                }
-
-                                agentCmd = withCodexLogin(`${CODEX_ENV_PREFIX} codex ${CODEX_COMMON_FLAGS}${safeMessage}`);
-                            }
-
-                            if (agentCmd) {
-                                term.paste(agentCmd);
-                                pressEnter();
-                                setFeedback(isResume ? 'Resumed session with codex' : 'Session started with codex');
-
-                                if (!isResume && onSessionStart) {
-                                    onSessionStart();
-                                }
-                            }
-                        };
-
-                        setTimeout(() => startAgentProcess(), 500); // Wait a bit for cd to finish
-                    } else {
-                        setFeedback(`Session started ${worktree ? '(Worktree)' : ''}`);
-                        if (!isResume && onSessionStart) {
-                            onSessionStart();
-                        }
-                    }
-
-                    // Focus the iframe
-                    win.focus();
-                    const textarea = iframe.contentDocument?.querySelector("textarea.xterm-helper-textarea");
-                    if (textarea) (textarea as HTMLElement).focus();
-
-                } else {
-                    // Not ready yet
-                    setTimeout(() => checkAndInject(attempts + 1), 500);
-                }
-            } catch (e) {
-                resetTerminalBootstrap('agent');
-                console.error("Access error during injection:", e);
-                setFeedback('Error accessing terminal: ' + String(e));
-            }
-        };
-
-        // Small delay to allow scripts to run
-        setTimeout(() => checkAndInject(), 1000);
-    };
-
     const handleTerminalLoad = (iframeFromEvent?: HTMLIFrameElement | null, tabIdFromEvent?: string) => {
         const tabId = tabIdFromEvent || activeTerminalTabId;
         const iframe = iframeFromEvent
-            || terminalFramesRef.current[tabId]
-            || (tabId === activeTerminalTabIdRef.current ? terminalBootstrapRef.current : null);
+            || terminalFramesRef.current[tabId];
         if (!iframe) return;
+        const tabSrc = terminalTabSources[tabId] || floatingTerminalSrc;
         const isActiveTerminalFrame = (): boolean => (
             tabId === activeTerminalTabIdRef.current && iframe === terminalFramesRef.current[tabId]
         );
@@ -2412,22 +1770,14 @@ export function SessionView({
 
         // Safety check
         try {
-            const _ = iframe.contentWindow;
-        } catch (e) {
+            void iframe.contentWindow;
+        } catch {
             console.error("Secondary terminal: Cross-Origin access blocked.");
             return;
         }
 
-        const isBootstrapOnlyFrame = iframe === terminalBootstrapRef.current;
         const linkCleanupRef = getTerminalLinkCleanupRef(bootstrapSlot);
-
-        if (!isBootstrapOnlyFrame) {
-            installBeforeUnloadGuard(bootstrapSlot, iframe);
-        } else {
-            cleanupBeforeUnloadGuard(bootstrapSlot);
-            cleanupTerminalLinkHandler(bootstrapSlot);
-            cleanupTerminalAutoScroll(bootstrapSlot);
-        }
+        installBeforeUnloadGuard(bootstrapSlot, iframe);
 
         const checkAndInject = (attempts = 0) => {
             if (attempts > 30) {
@@ -2439,13 +1789,11 @@ export function SessionView({
                 if (win && win.term) {
                     ensureTmuxStatusBarHidden(tabId);
                     const term = win.term;
-                    if (!isBootstrapOnlyFrame) {
-                        attachTerminalLinkHandler(iframe, linkCleanupRef, {
-                            onLinkActivated: () => setIsTerminalMinimized(true),
-                            directOpenBehavior: 'preview',
-                            modifierOpenBehavior: 'new_tab',
-                        });
-                    }
+                    attachTerminalLinkHandler(iframe, linkCleanupRef, {
+                        onLinkActivated: () => setIsTerminalMinimized(true),
+                        directOpenBehavior: 'preview',
+                        modifierOpenBehavior: 'new_tab',
+                    });
 
                     // Ensure terminal palette stays in sync with app/OS theme.
                     const themeApplied = applyThemeToTerminalWindow(win);
@@ -2457,18 +1805,13 @@ export function SessionView({
                         startTerminalProcessMonitor(iframe, term);
                     }
 
-                    if (!isBootstrapOnlyFrame) {
-                        installTerminalAutoScroll(bootstrapSlot, iframe, term);
-                    }
+                    installTerminalAutoScroll(bootstrapSlot, iframe, term);
 
                     const alreadyBootstrapped = hasTerminalBootstrapped(bootstrapSlot);
                     const shouldSkipResumeInjection = Boolean(isResume) && terminalPersistenceMode === 'tmux';
                     if (alreadyBootstrapped || shouldSkipResumeInjection) {
                         if (shouldSkipResumeInjection && !alreadyBootstrapped) {
                             markTerminalBootstrapped(bootstrapSlot);
-                        }
-                        if (alreadyBootstrapped) {
-                            injectTerminalStartupScript(bootstrapSlot, iframe, win, term);
                         }
                         if (isActiveTerminalFrame()) {
                             win.focus();
@@ -2513,12 +1856,10 @@ export function SessionView({
                     }
                     markTerminalBootstrapped(bootstrapSlot);
 
-                    if (tabId === MAIN_TERMINAL_TAB_ID) {
-                        injectTerminalStartupScript(bootstrapSlot, iframe, win, term);
-                    } else {
-                        const targetPath = sessionWorkspaceRootPath || worktree || repo;
-                        if (targetPath) {
-                            term.paste(`cd ${quoteShellArg(targetPath)}`);
+                    if (tabId !== MAIN_TERMINAL_TAB_ID) {
+                        const targetPath = parseTerminalWorkingDirectoryFromSrc(tabSrc) || sessionWorkspaceRootPath || worktree || repo;
+                        if (targetPath && !shellBootstrapEnvironmentCommand) {
+                            term.paste(buildShellSetDirectoryCommand(targetPath, terminalShellKind));
                             pressEnter();
                         }
                     }
@@ -2581,11 +1922,12 @@ export function SessionView({
             : 'Run dev server script in terminal';
     const isMobileRightPanelOverlay = isMobileViewport;
     const isMobileOverlayExpanded = isMobileRightPanelOverlay && !isRightPanelCollapsed;
+    const isPreviewPanelActive = !isRightPanelCollapsed && !isRepoViewActive;
+    const isChangesPanelActive = !isRightPanelCollapsed && isRepoViewActive;
     const renderedTerminalTabIds = terminalPersistenceMode === 'tmux'
         ? [activeTerminalTabId]
         : terminalTabIds;
     const showDesktopSplitHandle = !isRightPanelCollapsed && !isMobileRightPanelOverlay;
-    const showInlineRightPanelToggle = !isMobileRightPanelOverlay || !isRightPanelCollapsed;
     const rightPanelWrapperClass = isMobileRightPanelOverlay
         ? `absolute inset-0 z-30 h-full transition-[opacity,transform] duration-300 ease-in-out ${isRightPanelCollapsed
             ? 'pointer-events-none translate-x-2 opacity-0'
@@ -2608,17 +1950,6 @@ export function SessionView({
 
     return (
         <div className={`flex h-screen w-full flex-col overflow-hidden bg-[#f6f6f8] dark:bg-[#0d1117] ${(isResizing || isSplitResizing) ? 'select-none' : ''}`}>
-            {isRightPanelCollapsed && (
-                <iframe
-                    ref={terminalBootstrapRef}
-                    src={activeFloatingTerminalSrc}
-                    className="pointer-events-none absolute left-0 top-0 h-0 w-0 border-none opacity-0"
-                    allow="clipboard-read; clipboard-write"
-                    onLoad={(event) => handleTerminalLoad(event.currentTarget, activeTerminalTabId)}
-                    aria-hidden="true"
-                    tabIndex={-1}
-                />
-            )}
             {(isResizing || isSplitResizing) && (
                 <div className={`fixed inset-0 z-[9999] ${isResizing ? 'cursor-row-resize' : 'cursor-col-resize'}`} />
             )}
@@ -2736,14 +2067,27 @@ export function SessionView({
                     <div className="flex items-center overflow-hidden rounded border border-base-content/20 bg-base-100 dark:border-[#30363d] dark:bg-[#0d1117]">
                         <button
                             type="button"
-                            className={`btn btn-ghost btn-xs h-6 min-h-6 rounded-none border-none px-2 hover:bg-base-content/10 dark:hover:bg-[#30363d]/60 ${isRepoViewActive ? 'bg-slate-100 text-slate-900 dark:bg-[#30363d] dark:text-slate-100' : 'text-slate-700 dark:text-slate-300'}`}
-                            onClick={handleRepoButtonClick}
+                            className={`btn btn-ghost btn-xs h-6 min-h-6 rounded-none border-none px-2 hover:bg-base-content/10 dark:hover:bg-[#30363d]/60 ${isPreviewPanelActive ? 'bg-slate-100 text-slate-900 dark:bg-[#30363d] dark:text-slate-100' : 'text-slate-700 dark:text-slate-300'}`}
+                            onClick={handlePreviewButtonClick}
+                            aria-pressed={isPreviewPanelActive}
+                            title={isPreviewPanelActive
+                                ? 'Hide preview and terminal panel'
+                                : 'Show preview and terminal panel'}
+                        >
+                            <Play className="h-3 w-3" />
+                            <span className={headerButtonLabelClass}>Preview</span>
+                        </button>
+                        <div className="h-4 w-[1px] bg-base-content/10 dark:bg-[#30363d]"></div>
+                        <button
+                            type="button"
+                            className={`btn btn-ghost btn-xs h-6 min-h-6 rounded-none border-none px-2 hover:bg-base-content/10 dark:hover:bg-[#30363d]/60 ${isChangesPanelActive ? 'bg-slate-100 text-slate-900 dark:bg-[#30363d] dark:text-slate-100' : 'text-slate-700 dark:text-slate-300'}`}
+                            onClick={handleChangesButtonClick}
                             disabled={isFolderMode}
-                            aria-pressed={isRepoViewActive}
+                            aria-pressed={isChangesPanelActive}
                             title={isFolderMode
                                 ? gitControlsDisabledReason
-                                : isRepoViewActive
-                                    ? 'Show preview and terminal panel'
+                                : isChangesPanelActive
+                                    ? 'Hide repository viewer'
                                     : 'Show repository viewer'}
                         >
                             <GitBranch className="h-3 w-3" />
@@ -2862,6 +2206,26 @@ export function SessionView({
                             Agent Activity
                         </span>
                         <div className="flex min-w-0 items-center justify-end gap-2 overflow-x-auto py-1 text-xs font-medium normal-case">
+                            {agentHeaderMeta ? (
+                                <div className="flex min-w-0 max-w-[440px] items-center gap-1.5 overflow-hidden whitespace-nowrap rounded border border-slate-200 bg-white px-2 py-0.5 dark:border-[#30363d] dark:bg-[#0d1117]">
+                                    <span
+                                        className="min-w-0 max-w-[140px] truncate text-slate-700 dark:text-slate-200"
+                                        title={agentHeaderMeta.providerName || 'Agent'}
+                                    >
+                                        {agentHeaderMeta.providerName || 'Agent'}
+                                    </span>
+                                    <span className="shrink-0 text-slate-300 dark:text-slate-500">/</span>
+                                    <span
+                                        className="min-w-0 max-w-[180px] truncate text-slate-500 dark:text-slate-400"
+                                        title={agentHeaderMeta.model || 'n/a'}
+                                    >
+                                        {agentHeaderMeta.model || 'n/a'}
+                                    </span>
+                                    <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${agentRunStateTone(agentHeaderMeta.runState)}`}>
+                                        {formatAgentRunState(agentHeaderMeta.runState)}
+                                    </span>
+                                </div>
+                            ) : null}
                             <div className="flex shrink-0 items-center overflow-hidden rounded border border-slate-200 bg-white dark:border-[#30363d] dark:bg-[#0d1117]">
                                 <select
                                     className="select select-xs h-6 min-h-6 rounded-none border-none bg-slate-100 pr-7 text-slate-700 focus:outline-none dark:bg-[#161b22] dark:text-slate-300"
@@ -2895,53 +2259,24 @@ export function SessionView({
                                     <span className="agent-activity-action-label">Add Files</span>
                                 </button>
                             </div>
-                            <div className="flex shrink-0 items-center overflow-hidden rounded border border-slate-200 bg-white dark:border-[#30363d] dark:bg-[#0d1117]">
-                                <button
-                                    className={`btn btn-ghost btn-xs h-6 min-h-6 w-7 rounded-none border-none p-0 text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-[#30363d]/60 ${terminalInteractionMode === 'select' ? 'text-warning' : ''}`}
-                                    onClick={handleToggleTerminalInteractionMode}
-                                    disabled={terminalPersistenceMode !== 'tmux' || isUpdatingTerminalInteractionMode}
-                                    title={terminalPersistenceMode === 'tmux'
-                                        ? (terminalInteractionMode === 'scroll'
-                                            ? 'Switch to text select mode for easier copy'
-                                            : 'Switch to scroll mode for wheel scrollback')
-                                        : 'Mode toggle is available only in tmux persistence mode'}
-                                    aria-label={terminalInteractionMode === 'scroll' ? 'Switch to text mode' : 'Switch to scroll mode'}
-                                >
-                                    {isUpdatingTerminalInteractionMode ? (
-                                        <span className="loading loading-spinner loading-xs"></span>
-                                    ) : (
-                                        terminalInteractionMode === 'scroll'
-                                            ? <ScrollText className="h-3.5 w-3.5" />
-                                            : <TextCursorInput className="h-3.5 w-3.5" />
-                                    )}
-                                </button>
-                            </div>
+                            <button
+                                type="button"
+                                className="btn btn-ghost btn-xs h-6 min-h-6 w-6 shrink-0 border border-slate-200 bg-white p-0 text-slate-700 hover:bg-slate-100 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-300 dark:hover:bg-[#30363d]/60"
+                                onClick={handleOpenAgentDetails}
+                                title="Agent details"
+                                aria-label="Agent details"
+                            >
+                                <Info className="h-3.5 w-3.5" />
+                            </button>
                         </div>
                     </div>
-                    <div className="relative min-h-0 flex-1">
-                        {!isAgentTerminalThemeReady && (
-                            <div className={TERMINAL_LOADING_OVERLAY_CLASS}>
-                                <span className="loading loading-spinner loading-md text-slate-400 dark:text-slate-500" />
-                            </div>
-                        )}
-                        <iframe
-                            ref={(node) => {
-                                iframeRef.current = node;
-                                if (!node) {
-                                    cleanupTerminalLinkHandler('agent');
-                                    cleanupBeforeUnloadGuard('agent');
-                                }
-                            }}
-                            src={agentTerminalSrc}
-                            className={`h-full w-full border-none transition-opacity duration-200 ${isAgentTerminalThemeReady ? 'opacity-100' : 'opacity-0 pointer-events-none'} ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
-                            allow="clipboard-read; clipboard-write"
-                            onFocus={() => {
-                                recentTerminalBlurRef.current = null;
-                            }}
-                            onBlur={() => {
-                                recentTerminalBlurRef.current = { slot: 'agent', at: Date.now() };
-                            }}
-                            onLoad={handleIframeLoad}
+                    <div className="min-h-0 flex-1">
+                        <AgentSessionPane
+                            ref={agentPaneRef}
+                            sessionId={sessionName}
+                            workspacePath={sessionWorkspaceRootPath || worktree || repo}
+                            onFeedback={setFeedback}
+                            onHeaderMetaChange={setAgentHeaderMeta}
                         />
                     </div>
                 </div>
@@ -2979,19 +2314,6 @@ export function SessionView({
                 <div
                     className={rightPanelWrapperClass}
                 >
-                    {showInlineRightPanelToggle && (
-                        <button
-                            className={`btn btn-ghost btn-xs absolute top-3 z-20 h-7 w-7 min-h-7 rounded-full border border-slate-200 bg-white/95 p-0 text-slate-600 shadow-sm hover:bg-slate-100 dark:border-[#30363d] dark:bg-[#161b22]/95 dark:text-slate-300 dark:hover:bg-[#30363d]/80 ${isMobileRightPanelOverlay ? 'left-3' : 'left-0 -translate-x-1/2'}`}
-                            onClick={handleToggleRightPanelCollapse}
-                            type="button"
-                            title={isRightPanelCollapsed ? 'Expand right panel' : 'Collapse right panel'}
-                            aria-label={isRightPanelCollapsed ? 'Expand right panel' : 'Collapse right panel'}
-                            aria-pressed={isRightPanelCollapsed}
-                        >
-                            {isRightPanelCollapsed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </button>
-                    )}
-
                     {!isRightPanelCollapsed && (
                         <div className={rightPanelShellClass}>
                             {isRepoViewActive ? (
@@ -3013,26 +2335,6 @@ export function SessionView({
                                             <span className="h-2.5 w-2.5 rounded-full bg-yellow-400" />
                                             <span className="h-2.5 w-2.5 rounded-full bg-green-400" />
                                         </div>
-                                        <button
-                                            className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#30363d]/60"
-                                            type="button"
-                                            onClick={() => handlePreviewNavigate('back')}
-                                            disabled={!previewUrl}
-                                            title="Go back"
-                                            aria-label="Go back"
-                                        >
-                                            <ArrowLeft className="h-3.5 w-3.5" />
-                                        </button>
-                                        <button
-                                            className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#30363d]/60"
-                                            type="button"
-                                            onClick={() => handlePreviewNavigate('forward')}
-                                            disabled={!previewUrl}
-                                            title="Go forward"
-                                            aria-label="Go forward"
-                                        >
-                                            <ArrowRight className="h-3.5 w-3.5" />
-                                        </button>
                                         <button
                                             className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#30363d]/60"
                                             type="button"
@@ -3063,19 +2365,6 @@ export function SessionView({
                                             spellCheck={false}
                                         />
                                         <button
-                                            className={`btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 ${isPreviewPickerActive ? 'text-success' : 'text-slate-500 dark:text-slate-400'} hover:bg-slate-100 dark:hover:bg-[#30363d]/60`}
-                                            type="button"
-                                            onClick={handleTogglePreviewPicker}
-                                            disabled={!previewUrl || isResolvingElement}
-                                            title={isPreviewPickerActive ? 'Disable picker' : 'Pick element from preview'}
-                                        >
-                                            {isResolvingElement ? (
-                                                <span className="loading loading-spinner loading-xs w-3 h-3"></span>
-                                            ) : (
-                                                <MousePointer2 className="h-3 w-3" />
-                                            )}
-                                        </button>
-                                        <button
                                             className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#30363d]/60"
                                             type="button"
                                             onClick={handleOpenPreviewInNewTab}
@@ -3099,11 +2388,9 @@ export function SessionView({
                                             </div>
                                         ) : previewUrl ? (
                                             <iframe
-                                                ref={previewIframeRef}
                                                 src={previewUrl}
                                                 className={`h-full w-full border-none ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
                                                 title="Dev server preview"
-                                                onLoad={handlePreviewIframeLoad}
                                                 sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-same-origin allow-scripts allow-downloads"
                                             />
                                         ) : (
@@ -3181,8 +2468,28 @@ export function SessionView({
 
                                             <div className="flex shrink-0 items-center gap-2">
                                                 <button
+                                                    className={`btn btn-ghost btn-xs h-6 min-h-6 w-7 border-none p-0 text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-[#30363d]/60 ${terminalInteractionMode === 'select' ? 'text-warning' : ''}`}
+                                                    onClick={handleToggleTerminalInteractionMode}
+                                                    disabled={terminalPersistenceMode !== 'tmux' || isUpdatingTerminalInteractionMode}
+                                                    title={terminalPersistenceMode === 'tmux'
+                                                        ? (terminalInteractionMode === 'scroll'
+                                                            ? 'Switch to text select mode for easier copy'
+                                                            : 'Switch to scroll mode for wheel scrollback')
+                                                        : 'Mode toggle is available only in tmux persistence mode'}
+                                                    aria-label={terminalInteractionMode === 'scroll' ? 'Switch to text mode' : 'Switch to scroll mode'}
+                                                    type="button"
+                                                >
+                                                    {isUpdatingTerminalInteractionMode ? (
+                                                        <span className="loading loading-spinner loading-xs"></span>
+                                                    ) : (
+                                                        terminalInteractionMode === 'scroll'
+                                                            ? <ScrollText className="h-3.5 w-3.5" />
+                                                            : <TextCursorInput className="h-3.5 w-3.5" />
+                                                    )}
+                                                </button>
+                                                <button
                                                     className="btn btn-ghost btn-xs h-6 min-h-6 border-none px-2 text-slate-700 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-[#30363d]/60"
-                                                    onClick={handleStartDevServer}
+                                                    onClick={() => void handleStartDevServer()}
                                                     disabled={isDevButtonDisabled}
                                                     title={devButtonTitle}
                                                     type="button"
@@ -3206,47 +2513,55 @@ export function SessionView({
                                                 ? 'h-0 overflow-hidden'
                                                 : 'min-h-0 flex-1 overflow-hidden border-t border-slate-200 bg-white dark:border-[#30363d] dark:bg-[#22272e]'}`}
                                         >
-                                            {!isFloatingTerminalThemeReady && (
+                                            {isTerminalServiceReady && !isFloatingTerminalThemeReady && (
                                                 <div className={TERMINAL_LOADING_OVERLAY_CLASS}>
                                                     <span className="loading loading-spinner loading-md text-slate-400 dark:text-slate-500" />
                                                 </div>
                                             )}
-                                            {renderedTerminalTabIds.map((tabId) => {
-                                                const isActiveTab = tabId === activeTerminalTabId;
-                                                const isTabThemeReady = Boolean(floatingTerminalThemeReadyByTab[tabId]);
-                                                const tabSrc = terminalTabSources[tabId] || floatingTerminalSrc;
-                                                const bootstrapSlot = getFloatingTerminalBootstrapSlot(tabId);
-                                                return (
-                                                    <iframe
-                                                        key={tabId}
-                                                        ref={(node) => {
-                                                            if (node) {
-                                                                terminalFramesRef.current[tabId] = node;
-                                                            } else {
-                                                                cleanupTerminalLinkHandler(bootstrapSlot);
-                                                                cleanupBeforeUnloadGuard(bootstrapSlot);
-                                                                cleanupTerminalAutoScroll(bootstrapSlot);
-                                                                delete terminalFramesRef.current[tabId];
-                                                            }
-                                                        }}
-                                                        src={tabSrc}
-                                                        className={`absolute inset-0 h-full w-full border-none transition-opacity duration-200 ${isActiveTab
-                                                            ? (isTabThemeReady ? 'opacity-100' : 'opacity-0 pointer-events-none')
-                                                            : 'opacity-0 pointer-events-none'} ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
-                                                        allow="clipboard-read; clipboard-write"
-                                                        onFocus={() => {
-                                                            recentTerminalBlurRef.current = null;
-                                                        }}
-                                                        onBlur={() => {
-                                                            recentTerminalBlurRef.current = {
-                                                                slot: getFloatingTerminalBootstrapSlot(tabId),
-                                                                at: Date.now(),
-                                                            };
-                                                        }}
-                                                        onLoad={(event) => handleTerminalLoad(event.currentTarget, tabId)}
-                                                    />
-                                                );
-                                            })}
+                                            {!isTerminalServiceReady ? (
+                                                <div className="flex h-full items-center justify-center px-6 text-center text-xs text-slate-500 dark:text-slate-400">
+                                                    {isTerminalServiceStarting
+                                                        ? 'Starting terminal service...'
+                                                        : 'Open this panel to start the auxiliary terminal.'}
+                                                </div>
+                                            ) : (
+                                                renderedTerminalTabIds.map((tabId) => {
+                                                    const isActiveTab = tabId === activeTerminalTabId;
+                                                    const isTabThemeReady = Boolean(floatingTerminalThemeReadyByTab[tabId]);
+                                                    const tabSrc = terminalTabSources[tabId] || floatingTerminalSrc;
+                                                    const bootstrapSlot = getFloatingTerminalBootstrapSlot(tabId);
+                                                    return (
+                                                        <iframe
+                                                            key={tabId}
+                                                            ref={(node) => {
+                                                                if (node) {
+                                                                    terminalFramesRef.current[tabId] = node;
+                                                                } else {
+                                                                    cleanupTerminalLinkHandler(bootstrapSlot);
+                                                                    cleanupBeforeUnloadGuard(bootstrapSlot);
+                                                                    cleanupTerminalAutoScroll(bootstrapSlot);
+                                                                    delete terminalFramesRef.current[tabId];
+                                                                }
+                                                            }}
+                                                            src={tabSrc}
+                                                            className={`absolute inset-0 h-full w-full border-none transition-opacity duration-200 ${isActiveTab
+                                                                ? (isTabThemeReady ? 'opacity-100' : 'opacity-0 pointer-events-none')
+                                                                : 'opacity-0 pointer-events-none'} ${(isResizing || isSplitResizing) ? 'pointer-events-none' : ''}`}
+                                                            allow="clipboard-read; clipboard-write"
+                                                            onFocus={() => {
+                                                                recentTerminalBlurRef.current = null;
+                                                            }}
+                                                            onBlur={() => {
+                                                                recentTerminalBlurRef.current = {
+                                                                    slot: getFloatingTerminalBootstrapSlot(tabId),
+                                                                    at: Date.now(),
+                                                                };
+                                                            }}
+                                                            onLoad={(event) => handleTerminalLoad(event.currentTarget, tabId)}
+                                                        />
+                                                    );
+                                                })
+                                            )}
                                         </div>
                                     </div>
                                 </div>

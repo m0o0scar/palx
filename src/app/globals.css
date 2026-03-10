@@ -251,3 +251,198 @@ button {
   word-wrap: break-word !important;
   overflow-wrap: anywhere !important;
 }
+
+/* Session markdown code blocks: GitHub light/dark themes */
+.markdown-message pre code.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 1em;
+}
+
+.markdown-message code.hljs {
+  padding: 3px 5px;
+}
+
+.markdown-message .hljs {
+  color: #24292e;
+  background: #fff;
+}
+
+.markdown-message .hljs-doctag,
+.markdown-message .hljs-keyword,
+.markdown-message .hljs-meta .hljs-keyword,
+.markdown-message .hljs-template-tag,
+.markdown-message .hljs-template-variable,
+.markdown-message .hljs-type,
+.markdown-message .hljs-variable.language_ {
+  color: #d73a49;
+}
+
+.markdown-message .hljs-title,
+.markdown-message .hljs-title.class_,
+.markdown-message .hljs-title.class_.inherited__,
+.markdown-message .hljs-title.function_ {
+  color: #6f42c1;
+}
+
+.markdown-message .hljs-attr,
+.markdown-message .hljs-attribute,
+.markdown-message .hljs-literal,
+.markdown-message .hljs-meta,
+.markdown-message .hljs-number,
+.markdown-message .hljs-operator,
+.markdown-message .hljs-selector-attr,
+.markdown-message .hljs-selector-class,
+.markdown-message .hljs-selector-id,
+.markdown-message .hljs-variable {
+  color: #005cc5;
+}
+
+.markdown-message .hljs-meta .hljs-string,
+.markdown-message .hljs-regexp,
+.markdown-message .hljs-string {
+  color: #032f62;
+}
+
+.markdown-message .hljs-built_in,
+.markdown-message .hljs-symbol {
+  color: #e36209;
+}
+
+.markdown-message .hljs-code,
+.markdown-message .hljs-comment,
+.markdown-message .hljs-formula {
+  color: #6a737d;
+}
+
+.markdown-message .hljs-name,
+.markdown-message .hljs-quote,
+.markdown-message .hljs-selector-pseudo,
+.markdown-message .hljs-selector-tag {
+  color: #22863a;
+}
+
+.markdown-message .hljs-subst {
+  color: #24292e;
+}
+
+.markdown-message .hljs-section {
+  color: #005cc5;
+  font-weight: 700;
+}
+
+.markdown-message .hljs-bullet {
+  color: #735c0f;
+}
+
+.markdown-message .hljs-emphasis {
+  color: #24292e;
+  font-style: italic;
+}
+
+.markdown-message .hljs-strong {
+  color: #24292e;
+  font-weight: 700;
+}
+
+.markdown-message .hljs-addition {
+  color: #22863a;
+  background-color: #f0fff4;
+}
+
+.markdown-message .hljs-deletion {
+  color: #b31d28;
+  background-color: #ffeef0;
+}
+
+:root.dark .markdown-message .hljs {
+  color: #c9d1d9;
+  background: #0d1117;
+}
+
+:root.dark .markdown-message .hljs-doctag,
+:root.dark .markdown-message .hljs-keyword,
+:root.dark .markdown-message .hljs-meta .hljs-keyword,
+:root.dark .markdown-message .hljs-template-tag,
+:root.dark .markdown-message .hljs-template-variable,
+:root.dark .markdown-message .hljs-type,
+:root.dark .markdown-message .hljs-variable.language_ {
+  color: #ff7b72;
+}
+
+:root.dark .markdown-message .hljs-title,
+:root.dark .markdown-message .hljs-title.class_,
+:root.dark .markdown-message .hljs-title.class_.inherited__,
+:root.dark .markdown-message .hljs-title.function_ {
+  color: #d2a8ff;
+}
+
+:root.dark .markdown-message .hljs-attr,
+:root.dark .markdown-message .hljs-attribute,
+:root.dark .markdown-message .hljs-literal,
+:root.dark .markdown-message .hljs-meta,
+:root.dark .markdown-message .hljs-number,
+:root.dark .markdown-message .hljs-operator,
+:root.dark .markdown-message .hljs-selector-attr,
+:root.dark .markdown-message .hljs-selector-class,
+:root.dark .markdown-message .hljs-selector-id,
+:root.dark .markdown-message .hljs-variable {
+  color: #79c0ff;
+}
+
+:root.dark .markdown-message .hljs-meta .hljs-string,
+:root.dark .markdown-message .hljs-regexp,
+:root.dark .markdown-message .hljs-string {
+  color: #a5d6ff;
+}
+
+:root.dark .markdown-message .hljs-built_in,
+:root.dark .markdown-message .hljs-symbol {
+  color: #ffa657;
+}
+
+:root.dark .markdown-message .hljs-code,
+:root.dark .markdown-message .hljs-comment,
+:root.dark .markdown-message .hljs-formula {
+  color: #8b949e;
+}
+
+:root.dark .markdown-message .hljs-name,
+:root.dark .markdown-message .hljs-quote,
+:root.dark .markdown-message .hljs-selector-pseudo,
+:root.dark .markdown-message .hljs-selector-tag {
+  color: #7ee787;
+}
+
+:root.dark .markdown-message .hljs-subst {
+  color: #c9d1d9;
+}
+
+:root.dark .markdown-message .hljs-section {
+  color: #1f6feb;
+  font-weight: 700;
+}
+
+:root.dark .markdown-message .hljs-bullet {
+  color: #f2cc60;
+}
+
+:root.dark .markdown-message .hljs-emphasis {
+  color: #c9d1d9;
+  font-style: italic;
+}
+
+:root.dark .markdown-message .hljs-strong {
+  color: #c9d1d9;
+  font-weight: 700;
+}
+
+:root.dark .markdown-message .hljs-addition {
+  color: #aff5b4;
+  background-color: #033a16;
+}
+
+:root.dark .markdown-message .hljs-deletion {
+  color: #ffdcd7;
+  background-color: #67060c;
+}

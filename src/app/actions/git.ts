@@ -1,23 +1,21 @@
 'use server';
 
+import fsSync from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import simpleGit from 'simple-git';
-import { getGitRepoCredential } from '@/app/actions/config';
 import { getAgentApiCredentialSecret } from '@/lib/agent-api-credentials';
-import { getAllCredentials, getCredentialById, getCredentialToken } from '@/lib/credentials';
-import type { Credential } from '@/lib/credentials';
 import {
   buildTtydTerminalSrc,
-  detectGitRemoteProvider,
   getTmuxSessionName,
-  mergeGitTerminalSessionEnvironments,
-  parseGitRemoteHost,
-  ResolvedGitTerminalSessionEnvironment,
   TerminalSessionEnvironment,
+  TerminalPersistenceMode,
   TerminalSessionRole,
+  TerminalShellKind,
 } from '@/lib/terminal-session';
+import { buildTerminalProcessEnv } from '@/lib/terminal-process-env';
+import { resolveGitSessionEnvironments } from '@/lib/git-session-auth';
 import { listRepoEntries } from '@/lib/repo-entry-list';
 import { getProjects } from '@/lib/store';
 
@@ -37,7 +35,7 @@ export type SupportedAgentCli = 'codex';
 
 type AgentCliConfig = {
   executable: string;
-  installCommand: string;
+  getInstallCommand: () => { command: string; args: string[] };
 };
 
 type ResolveRepoCardIconResult = {
@@ -49,7 +47,10 @@ type ResolveRepoCardIconResult = {
 const AGENT_CLI_CONFIG: Record<SupportedAgentCli, AgentCliConfig> = {
   codex: {
     executable: 'codex',
-    installCommand: 'npm i -g openai/codex',
+    getInstallCommand: () => ({
+      command: process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      args: ['i', '-g', 'openai/codex'],
+    }),
   },
 };
 const CODEX_SKILL_TARGET_AGENTS = ['codex'] as const;
@@ -382,6 +383,76 @@ type ProcessResult = {
   output: string;
 };
 
+function getWindowsExecutableNames(command: string): string[] {
+  if (process.platform !== 'win32') {
+    return [command];
+  }
+
+  const pathExtEntries = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD')
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const lowerCommand = command.toLowerCase();
+  if (pathExtEntries.some((entry) => lowerCommand.endsWith(entry.toLowerCase()))) {
+    return [command];
+  }
+
+  return [command, ...pathExtEntries.map((entry) => `${command}${entry}`)];
+}
+
+function resolveCommandPath(command: string): string | null {
+  const pathEntries = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const candidateName of getWindowsExecutableNames(command)) {
+    if (!candidateName) continue;
+
+    if (candidateName.includes(path.sep) && fsSync.existsSync(candidateName)) {
+      return candidateName;
+    }
+
+    for (const directory of pathEntries) {
+      const candidatePath = path.join(directory, candidateName);
+      if (fsSync.existsSync(candidatePath)) {
+        return candidatePath;
+      }
+    }
+  }
+
+  return null;
+}
+
+function isCommandAvailable(command: string): boolean {
+  return Boolean(resolveCommandPath(command));
+}
+
+function getTerminalShellKind(): TerminalShellKind {
+  return process.platform === 'win32' ? 'powershell' : 'posix';
+}
+
+function getShellCommandForTtyd(): { command: string; args: string[]; shellKind: TerminalShellKind } {
+  if (process.platform === 'win32') {
+    const powershellCommand = isCommandAvailable('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
+    return {
+      command: powershellCommand,
+      args: ['-NoLogo'],
+      shellKind: 'powershell',
+    };
+  }
+
+  return {
+    command: 'bash',
+    args: [],
+    shellKind: 'posix',
+  };
+}
+
+function resolveTerminalPersistenceMode(): TerminalPersistenceMode {
+  if (process.platform === 'win32') {
+    return 'shell';
+  }
+
+  return isCommandAvailable('tmux') ? 'tmux' : 'shell';
+}
+
 async function runProcess(
   command: string,
   args: string[],
@@ -389,8 +460,9 @@ async function runProcess(
 ): Promise<ProcessResult> {
   const { spawn } = await import('child_process');
   return new Promise<ProcessResult>((resolve) => {
+    const resolvedCommand = resolveCommandPath(command) || command;
     const outputChunks: string[] = [];
-    const child = spawn(command, args, {
+    const child = spawn(resolvedCommand, args, {
       cwd: options?.cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -458,14 +530,15 @@ async function ensureCodexSkillsInstalledForCodex(): Promise<void> {
     return;
   }
 
-  const npxVersionResult = await runProcess('npx', ['--version']);
+  const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const npxVersionResult = await runProcess(npxCommand, ['--version']);
   if (npxVersionResult.exitCode !== 0) {
     console.warn('Skipping Codex skill installation: npx is not available.');
     return;
   }
 
   for (const skillDefinition of missingSkills) {
-    const addResult = await runProcess('npx', [
+    const addResult = await runProcess(npxCommand, [
       'skills',
       'add',
       skillDefinition.repoUrl,
@@ -596,16 +669,8 @@ export async function checkAgentCliInstalled(
   }
 
   try {
-    const { spawn } = await import('child_process');
     const cliConfig = AGENT_CLI_CONFIG[normalizedCli];
-
-    const exitCode = await new Promise<number>((resolve) => {
-      const child = spawn('bash', ['-lc', `command -v ${cliConfig.executable}`], { stdio: 'ignore' });
-      child.on('close', (code) => resolve(code ?? 1));
-      child.on('error', () => resolve(1));
-    });
-
-    return { success: true, installed: exitCode === 0 };
+    return { success: true, installed: isCommandAvailable(cliConfig.executable) };
   } catch (error) {
     console.error('Failed to detect coding agent CLI:', error);
     return { success: false, installed: false, error: 'Failed to detect coding agent CLI installation status.' };
@@ -619,40 +684,19 @@ export async function installAgentCli(agentCli: string): Promise<{ success: bool
   }
 
   try {
-    const { spawn } = await import('child_process');
     const cliConfig = AGENT_CLI_CONFIG[normalizedCli];
+    const installCommand = cliConfig.getInstallCommand();
+    const result = await runProcess(installCommand.command, installCommand.args, { cwd: os.homedir() });
 
-    const outputChunks: string[] = [];
-    const exitCode = await new Promise<number>((resolve) => {
-      const child = spawn('bash', ['-lc', cliConfig.installCommand], {
-        cwd: os.homedir(),
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      child.stdout.on('data', (chunk: Buffer) => {
-        outputChunks.push(chunk.toString());
-      });
-
-      child.stderr.on('data', (chunk: Buffer) => {
-        outputChunks.push(chunk.toString());
-      });
-
-      child.on('close', (code) => resolve(code ?? 1));
-      child.on('error', () => resolve(1));
-    });
-
-    if (exitCode === 0) {
+    if (result.exitCode === 0) {
       if (normalizedCli === 'codex') {
         await ensureCodexSkillsInstalledForCodex();
       }
       return { success: true };
     }
-
-    const detail = outputChunks.join('').trim();
     return {
       success: false,
-      error: detail || `Failed to install ${normalizedCli} CLI.`,
+      error: result.output || `Failed to install ${normalizedCli} CLI.`,
     };
   } catch (error) {
     console.error('Failed to install coding agent CLI:', error);
@@ -664,77 +708,15 @@ export async function installAgentCli(agentCli: string): Promise<{ success: bool
 declare global {
   var ttydProcess: ReturnType<typeof import('child_process').spawn> | undefined;
   var ttydPersistenceMode: 'tmux' | 'shell' | undefined;
+  var ttydShellKind: TerminalShellKind | undefined;
 }
 
 type TerminalSessionSources = {
   agentTerminalSrc: string;
   floatingTerminalSrc: string;
+  persistenceMode: TerminalPersistenceMode;
+  shellKind: TerminalShellKind;
 };
-
-function toTerminalSessionEnvironment(
-  credential: Credential,
-  token: string,
-): TerminalSessionEnvironment {
-  return credential.type === 'github'
-    ? { name: 'GITHUB_TOKEN', value: token }
-    : { name: 'GITLAB_TOKEN', value: token };
-}
-
-function getGitLabCredentialHost(credential: Credential): string | null {
-  if (credential.type !== 'gitlab') return null;
-
-  try {
-    return new URL(credential.serverUrl).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-function pickCandidateCredential(
-  credentials: Credential[],
-  provider: 'github' | 'gitlab',
-  remoteHost: string | null,
-): Credential | null {
-  if (provider === 'github') {
-    return credentials.find((credential) => credential.type === 'github') || null;
-  }
-
-  if (remoteHost) {
-    const hostMatch = credentials.find((credential) => (
-      credential.type === 'gitlab'
-      && getGitLabCredentialHost(credential) === remoteHost
-    ));
-    if (hostMatch) return hostMatch;
-  }
-
-  return credentials.find((credential) => credential.type === 'gitlab') || null;
-}
-
-async function getPrimaryRemoteUrl(repoPath: string): Promise<string | null> {
-  const git = simpleGit(repoPath);
-
-  try {
-    const originUrl = (await git.raw(['remote', 'get-url', 'origin'])).trim();
-    if (originUrl) return originUrl;
-  } catch {
-    // Fallback to first available remote below.
-  }
-
-  try {
-    const remotes = await git.getRemotes(true);
-    for (const remote of remotes) {
-      const fetchUrl = remote.refs?.fetch?.trim();
-      if (fetchUrl) return fetchUrl;
-
-      const pushUrl = remote.refs?.push?.trim();
-      if (pushUrl) return pushUrl;
-    }
-  } catch {
-    // Ignore and fallback to null.
-  }
-
-  return null;
-}
 
 function resolveAgentCliFromSession(agentCli: string | undefined): SupportedAgentCli | null {
   if (!agentCli) return null;
@@ -760,90 +742,8 @@ function toAgentTerminalSessionEnvironments(
   ];
 }
 
-async function resolveGitTerminalSessionEnvironmentForRepo(
-  repoPath: string,
-): Promise<ResolvedGitTerminalSessionEnvironment | null> {
-  const remoteUrl = await getPrimaryRemoteUrl(repoPath);
-  if (!remoteUrl) return null;
-
-  const allCredentials = await getAllCredentials();
-  const provider = detectGitRemoteProvider(remoteUrl, {
-    gitlabHosts: allCredentials.flatMap((credential) => {
-      if (credential.type !== 'gitlab') return [];
-      const host = getGitLabCredentialHost(credential);
-      return host ? [host] : [];
-    }),
-  });
-  if (!provider) return null;
-
-  const remoteHost = parseGitRemoteHost(remoteUrl);
-  const credentialId = await getGitRepoCredential(repoPath);
-  if (credentialId) {
-    const selectedCredential = await getCredentialById(credentialId);
-    if (!selectedCredential) {
-      console.warn(`Selected credential ${credentialId} for ${repoPath} was not found.`);
-      return null;
-    }
-
-    if (provider === 'github' && selectedCredential.type !== 'github') {
-      console.warn(`Selected credential ${selectedCredential.id} does not match GitHub remote for ${repoPath}.`);
-      return null;
-    }
-
-    if (provider === 'gitlab' && selectedCredential.type !== 'gitlab') {
-      console.warn(`Selected credential ${selectedCredential.id} does not match GitLab remote for ${repoPath}.`);
-      return null;
-    }
-
-    if (selectedCredential.type === 'gitlab' && remoteHost) {
-      const credentialHost = getGitLabCredentialHost(selectedCredential);
-      if (credentialHost && credentialHost !== remoteHost) {
-        console.warn(
-          `Selected GitLab credential ${selectedCredential.id} targets ${credentialHost}, but ${repoPath} uses ${remoteHost}.`,
-        );
-        return null;
-      }
-    }
-
-    const token = await getCredentialToken(selectedCredential.id);
-    if (!token) {
-      console.warn(`Could not load token for selected credential ${selectedCredential.id} on ${repoPath}.`);
-      return null;
-    }
-
-    return {
-      sourceRepoPath: repoPath,
-      environment: toTerminalSessionEnvironment(selectedCredential, token),
-      credentialId: selectedCredential.id,
-      explicit: true,
-    };
-  }
-
-  const credential = pickCandidateCredential(allCredentials, provider, remoteHost);
-  if (!credential) return null;
-
-  const token = await getCredentialToken(credential.id);
-  if (!token) return null;
-
-  return {
-    sourceRepoPath: repoPath,
-    environment: toTerminalSessionEnvironment(credential, token),
-    credentialId: credential.id,
-    explicit: false,
-  };
-}
-
 async function resolveGitTerminalSessionEnvironments(repoPaths: string[]): Promise<TerminalSessionEnvironment[]> {
-  const uniqueRepoPaths = Array.from(new Set(repoPaths.map((repoPath) => repoPath.trim()).filter(Boolean)));
-  if (uniqueRepoPaths.length === 0) return [];
-
-  const candidates = (await Promise.all(
-    uniqueRepoPaths.map((repoPath) => resolveGitTerminalSessionEnvironmentForRepo(repoPath)),
-  )).filter((candidate): candidate is ResolvedGitTerminalSessionEnvironment => candidate !== null);
-
-  return mergeGitTerminalSessionEnvironments(candidates, {
-    onConflict: (message) => console.warn(message),
-  });
+  return await resolveGitSessionEnvironments(repoPaths);
 }
 
 async function resolveAgentApiTerminalSessionEnvironments(agentCli: string | undefined): Promise<TerminalSessionEnvironment[]> {
@@ -856,26 +756,51 @@ async function resolveAgentApiTerminalSessionEnvironments(agentCli: string | und
   return toAgentTerminalSessionEnvironments(normalizedAgentCli, credential.apiKey, credential.apiProxy);
 }
 
+export async function getSessionTerminalEnvironments(
+  repoPaths: string[],
+  agentCli?: string,
+): Promise<TerminalSessionEnvironment[]> {
+  const [gitEnvironments, agentEnvironments] = await Promise.all([
+    resolveGitTerminalSessionEnvironments(repoPaths),
+    resolveAgentApiTerminalSessionEnvironments(agentCli),
+  ]);
+  return [...gitEnvironments, ...agentEnvironments];
+}
+
 export async function getSessionTerminalSources(
   sessionName: string,
   repoPaths: string[],
   agentCli?: string,
 ): Promise<TerminalSessionSources> {
+  const persistenceMode = resolveTerminalPersistenceMode();
+  const shellKind = getTerminalShellKind();
   const fallback: TerminalSessionSources = {
-    agentTerminalSrc: buildTtydTerminalSrc(sessionName, 'agent'),
-    floatingTerminalSrc: buildTtydTerminalSrc(sessionName, 'terminal'),
+    agentTerminalSrc: buildTtydTerminalSrc(sessionName, 'agent', undefined, {
+      persistenceMode,
+      shellKind,
+    }),
+    floatingTerminalSrc: buildTtydTerminalSrc(sessionName, 'terminal', undefined, {
+      persistenceMode,
+      shellKind,
+    }),
+    persistenceMode,
+    shellKind,
   };
 
   try {
-    const [gitEnvironments, agentEnvironments] = await Promise.all([
-      resolveGitTerminalSessionEnvironments(repoPaths),
-      resolveAgentApiTerminalSessionEnvironments(agentCli),
-    ]);
-    const environments = [...gitEnvironments, ...agentEnvironments];
+    const environments = await getSessionTerminalEnvironments(repoPaths, agentCli);
 
     return {
-      agentTerminalSrc: buildTtydTerminalSrc(sessionName, 'agent', environments),
-      floatingTerminalSrc: buildTtydTerminalSrc(sessionName, 'terminal', environments),
+      agentTerminalSrc: buildTtydTerminalSrc(sessionName, 'agent', environments, {
+        persistenceMode,
+        shellKind,
+      }),
+      floatingTerminalSrc: buildTtydTerminalSrc(sessionName, 'terminal', environments, {
+        persistenceMode,
+        shellKind,
+      }),
+      persistenceMode,
+      shellKind,
     };
   } catch (error) {
     console.error('Failed to resolve terminal session environment:', error);
@@ -883,43 +808,43 @@ export async function getSessionTerminalSources(
   }
 }
 
-export async function startTtydProcess(): Promise<{ success: boolean; persistenceMode?: 'tmux' | 'shell'; error?: string }> {
+export async function startTtydProcess(): Promise<{
+  success: boolean;
+  persistenceMode?: 'tmux' | 'shell';
+  shellKind?: TerminalShellKind;
+  error?: string;
+}> {
   if (global.ttydProcess) {
     if (global.ttydPersistenceMode === 'tmux') {
       try {
         const { spawnSync } = await import('child_process');
+        const terminalEnv = buildTerminalProcessEnv();
+        spawnSync('tmux', ['set-environment', '-gu', 'NODE_ENV'], {
+          stdio: 'ignore',
+          env: terminalEnv as NodeJS.ProcessEnv,
+        });
         spawnSync('tmux', ['set-option', '-g', 'mouse', 'on'], {
           stdio: 'ignore',
-          env: process.env,
+          env: terminalEnv as NodeJS.ProcessEnv,
         });
       } catch (error) {
         console.error('Failed to apply tmux mouse option:', error);
       }
     }
-    return { success: true, persistenceMode: global.ttydPersistenceMode || 'shell' };
+    return {
+      success: true,
+      persistenceMode: global.ttydPersistenceMode || 'shell',
+      shellKind: global.ttydShellKind || getTerminalShellKind(),
+    };
   }
 
   try {
     const { spawn, spawnSync } = await import('child_process');
-
-    // Omit variables that can cause conflicts for nested Next.js/terminal processes.
-    const {
-      TURBOPACK: _turbopack,
-      PORT: _port,
-      NODE_ENV: _nodeEnv,
-      COLORTERM: _colorTerm,
-      FORCE_COLOR: _forceColor,
-      CLICOLOR: _cliColor,
-      CLICOLOR_FORCE: _cliColorForce,
-      ...env
-    } = process.env;
+    const terminalEnv = buildTerminalProcessEnv();
 
     const workingDir = os.homedir();
-    const hasTmux =
-      spawnSync('which', ['tmux'], {
-        stdio: 'ignore',
-        env: process.env,
-      }).status === 0;
+    const hasTmux = resolveTerminalPersistenceMode() === 'tmux';
+    const shellCommand = getShellCommandForTtyd();
 
     const ttydArgs = [
       '-p', '7681',
@@ -937,15 +862,19 @@ export async function startTtydProcess(): Promise<{ success: boolean; persistenc
       // Keep deep history and wheel scrollback in tmux-backed ttyd sessions.
       spawnSync('tmux', ['start-server'], {
         stdio: 'ignore',
-        env: process.env,
+        env: terminalEnv as NodeJS.ProcessEnv,
+      });
+      spawnSync('tmux', ['set-environment', '-gu', 'NODE_ENV'], {
+        stdio: 'ignore',
+        env: terminalEnv as NodeJS.ProcessEnv,
       });
       spawnSync('tmux', ['set-option', '-g', 'mouse', 'on'], {
         stdio: 'ignore',
-        env: process.env,
+        env: terminalEnv as NodeJS.ProcessEnv,
       });
       spawnSync('tmux', ['set-option', '-g', 'history-limit', String(TMUX_HISTORY_LIMIT)], {
         stdio: 'ignore',
-        env: process.env,
+        env: terminalEnv as NodeJS.ProcessEnv,
       });
 
       // Use URL args so each iframe can attach to a dedicated tmux session.
@@ -953,41 +882,36 @@ export async function startTtydProcess(): Promise<{ success: boolean; persistenc
       persistenceMode = 'tmux';
     } else {
       console.warn('tmux is unavailable; falling back to non-persistent ttyd shell mode.');
-      ttydArgs.push('bash');
+      ttydArgs.push(shellCommand.command, ...shellCommand.args);
     }
 
     const child = spawn('ttyd', ttydArgs, {
       stdio: 'ignore',
       detached: false,
       cwd: workingDir,
-      env: {
-        ...env,
-        NODE_ENV: 'development',
-        TERM: 'xterm',
-        NO_COLOR: '1',
-        CLICOLOR: '0',
-        CLICOLOR_FORCE: '0',
-        FORCE_COLOR: '0',
-      },
+      env: terminalEnv as NodeJS.ProcessEnv,
     });
 
     child.on('error', (err) => {
       console.error('Failed to start ttyd:', err);
       global.ttydProcess = undefined;
       global.ttydPersistenceMode = undefined;
+      global.ttydShellKind = undefined;
     });
 
     child.on('exit', () => {
       global.ttydProcess = undefined;
       global.ttydPersistenceMode = undefined;
+      global.ttydShellKind = undefined;
     });
 
     global.ttydProcess = child;
     global.ttydPersistenceMode = persistenceMode;
+    global.ttydShellKind = shellCommand.shellKind;
 
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    return { success: true, persistenceMode };
+    return { success: true, persistenceMode, shellKind: shellCommand.shellKind };
   } catch (error) {
     console.error('Error starting ttyd:', error);
     return { success: false, error: 'Failed to start ttyd. Make sure ttyd is installed and in your PATH.' };
@@ -999,6 +923,10 @@ export async function setTmuxSessionMouseMode(
   role: TerminalSessionRole,
   enabled: boolean
 ): Promise<{ success: boolean; error?: string }> {
+  if (process.platform === 'win32' || !isCommandAvailable('tmux')) {
+    return { success: true };
+  }
+
   try {
     const { spawnSync } = await import('child_process');
     const tmuxSession = getTmuxSessionName(sessionName, role);
@@ -1034,6 +962,10 @@ export async function setTmuxSessionStatusVisibility(
   role: TerminalSessionRole,
   visible: boolean
 ): Promise<{ success: boolean; applied: boolean; error?: string }> {
+  if (process.platform === 'win32' || !isCommandAvailable('tmux')) {
+    return { success: true, applied: false };
+  }
+
   try {
     const { spawnSync } = await import('child_process');
     const tmuxSession = getTmuxSessionName(sessionName, role);
@@ -1068,16 +1000,12 @@ export async function terminateTmuxSessionRole(
   sessionName: string,
   role: TerminalSessionRole,
 ): Promise<{ success: boolean; removed: boolean; error?: string }> {
+  if (process.platform === 'win32' || !isCommandAvailable('tmux')) {
+    return { success: true, removed: false };
+  }
+
   try {
     const { spawnSync } = await import('child_process');
-    const tmuxExists =
-      spawnSync('which', ['tmux'], {
-        stdio: 'ignore',
-        env: process.env,
-      }).status === 0;
-
-    if (!tmuxExists) return { success: true, removed: false };
-
     const tmuxSession = getTmuxSessionName(sessionName, role);
     const hasSessionResult = spawnSync('tmux', ['has-session', '-t', tmuxSession], {
       stdio: 'ignore',
@@ -1105,15 +1033,12 @@ export async function terminateTmuxSessionRole(
 }
 
 export async function terminateSessionTerminalSessions(sessionName: string): Promise<void> {
+  if (process.platform === 'win32' || !isCommandAvailable('tmux')) {
+    return;
+  }
+
   try {
     const { spawnSync } = await import('child_process');
-    const tmuxExists =
-      spawnSync('which', ['tmux'], {
-        stdio: 'ignore',
-        env: process.env,
-      }).status === 0;
-
-    if (!tmuxExists) return;
 
     const prefixRole = '__viba_session_role__';
     const prefix = getTmuxSessionName(sessionName, prefixRole).replace(prefixRole, '');
@@ -1271,7 +1196,8 @@ export async function listRepoFiles(repoPath: string, query: string = ''): Promi
 
 export async function saveAttachments(worktreePath: string, formData: FormData): Promise<string[]> {
   try {
-    const attachmentsDir = `${worktreePath}-attachments`;
+    const worktreeLabel = path.basename(worktreePath.trim() || 'workspace').replace(/[^a-zA-Z0-9._-]/g, '_') || 'workspace';
+    const attachmentsDir = path.join(os.tmpdir(), 'viba-attachments', worktreeLabel);
     await fs.mkdir(attachmentsDir, { recursive: true });
 
     const files = Array.from(formData.entries());
@@ -1279,10 +1205,28 @@ export async function saveAttachments(worktreePath: string, formData: FormData):
     const savePromises = files.map(async ([, entry]) => {
       if (entry instanceof File) {
         const buffer = Buffer.from(await entry.arrayBuffer());
-        const safeName = entry.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const fullPath = path.join(attachmentsDir, safeName);
+        const rawName = entry.name.trim() || `attachment-${Date.now()}`;
+        const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_') || `attachment-${Date.now()}`;
+        const parsed = path.parse(safeName);
+        const baseName = parsed.name || `attachment-${Date.now()}`;
+        const extension = parsed.ext || '';
+        let candidateName = `${baseName}${extension}`;
+        let fullPath = path.join(attachmentsDir, candidateName);
+        let suffix = 1;
+
+        while (true) {
+          try {
+            await fs.access(fullPath);
+            candidateName = `${baseName}-${suffix}${extension}`;
+            fullPath = path.join(attachmentsDir, candidateName);
+            suffix += 1;
+          } catch {
+            break;
+          }
+        }
+
         await fs.writeFile(fullPath, buffer);
-        return safeName;
+        return fullPath;
       }
       return null;
     });

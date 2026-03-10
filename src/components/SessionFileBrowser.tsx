@@ -1,11 +1,10 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import Image from 'next/image';
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { getHomeDirectory, listPathEntries, saveAttachments } from '@/app/actions/git';
 import { getConfig, updateConfig } from '@/app/actions/config';
 import { ArrowLeft, Clipboard, FileText, Folder, Grid2x2, House, List, Pin, PinOff } from 'lucide-react';
-import { getDirName } from '@/lib/path';
+import { getBaseName, getDirName } from '@/lib/path';
 import { useDialogKeyboardShortcuts } from '@/hooks/useDialogKeyboardShortcuts';
 
 const DEFAULT_VIEW_MODE_STORAGE_KEY = 'viba:session-file-browser:view-mode';
@@ -16,6 +15,120 @@ type FileSystemItem = {
   isDirectory: boolean;
   isGitRepo: boolean;
 };
+
+type GridFileTileProps = {
+  item: FileSystemItem;
+  isSelected: boolean;
+  isImage: boolean;
+  isSelectable: boolean;
+  isPinned: boolean;
+  isThumbnailBroken: boolean;
+  onItemClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onPinClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onThumbnailError: () => void;
+};
+
+const ThumbnailPreview = memo(function ThumbnailPreview({
+  item,
+  isImage,
+  isThumbnailBroken,
+  onThumbnailError,
+}: Pick<GridFileTileProps, 'item' | 'isImage' | 'isThumbnailBroken' | 'onThumbnailError'>) {
+  const [hasLoaded, setHasLoaded] = useState(false);
+
+  useEffect(() => {
+    setHasLoaded(false);
+  }, [item.path]);
+
+  if (isImage && !isThumbnailBroken) {
+    return (
+      <>
+        <FileText className={`w-10 h-10 opacity-40 transition-opacity ${hasLoaded ? 'opacity-0' : 'opacity-40'}`} />
+        {/* Keep the image absolutely bounded to the tile and hidden until it has loaded to avoid full-size first paint. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`/api/file-thumbnail?path=${encodeURIComponent(item.path)}`}
+          alt={item.name}
+          loading="lazy"
+          decoding="async"
+          className={`absolute inset-0 h-full w-full object-contain p-2 transition-opacity ${hasLoaded ? 'opacity-100' : 'opacity-0'}`}
+          onLoad={() => setHasLoaded(true)}
+          onError={onThumbnailError}
+        />
+      </>
+    );
+  }
+
+  if (item.isDirectory) {
+    return <Folder className="w-10 h-10 opacity-80" />;
+  }
+
+  return <FileText className="w-10 h-10 opacity-80" />;
+}, (prev, next) =>
+  prev.item.path === next.item.path
+  && prev.item.name === next.item.name
+  && prev.item.isDirectory === next.item.isDirectory
+  && prev.isImage === next.isImage
+  && prev.isThumbnailBroken === next.isThumbnailBroken
+);
+
+const GridFileTile = memo(function GridFileTile({
+  item,
+  isSelected,
+  isImage,
+  isSelectable,
+  isPinned,
+  isThumbnailBroken,
+  onItemClick,
+  onPinClick,
+  onThumbnailError,
+}: GridFileTileProps) {
+  return (
+    <button
+      type="button"
+      className={`rounded-lg border text-left overflow-hidden transition-colors ${isSelected
+        ? 'border-primary bg-primary/15'
+        : 'border-base-300 hover:bg-base-100'
+        } ${!isSelectable ? 'opacity-50' : ''}`}
+      onClick={onItemClick}
+      title={item.path}
+    >
+      <div className="aspect-[4/3] bg-base-300 flex items-center justify-center overflow-hidden relative p-2">
+        <ThumbnailPreview
+          item={item}
+          isImage={isImage}
+          isThumbnailBroken={isThumbnailBroken}
+          onThumbnailError={onThumbnailError}
+        />
+        {item.isDirectory && (
+          <button
+            type="button"
+            className={`absolute top-1 right-1 btn btn-xs btn-circle ${isPinned ? 'btn-primary' : 'btn-ghost bg-base-100/70'}`}
+            onClick={onPinClick}
+            title={isPinned ? 'Unpin folder' : 'Pin folder'}
+          >
+            <Pin className={`w-3 h-3 ${isPinned ? 'fill-current' : ''}`} />
+          </button>
+        )}
+      </div>
+      <div className="px-2 py-2">
+        <div className="truncate text-sm font-medium" title={item.name}>{item.name}</div>
+        <div className="text-[10px] opacity-70">
+          {item.isDirectory ? 'folder' : !isSelectable ? 'unsupported' : isImage ? 'image' : 'file'}
+        </div>
+      </div>
+    </button>
+  );
+}, (prev, next) =>
+  prev.item.path === next.item.path
+  && prev.item.name === next.item.name
+  && prev.item.isDirectory === next.item.isDirectory
+  && prev.isSelected === next.isSelected
+  && prev.isImage === next.isImage
+  && prev.isSelectable === next.isSelectable
+  && prev.isPinned === next.isPinned
+  && prev.isThumbnailBroken === next.isThumbnailBroken
+);
 
 interface SessionFileBrowserProps {
   initialPath?: string;
@@ -352,6 +465,10 @@ export default function SessionFileBrowser({
     await savePinnedFolderShortcuts([...pinnedFolderShortcuts, folderPath]);
   };
 
+  const handleThumbnailError = useCallback((filePath: string) => {
+    setBrokenThumbnails((prev) => (prev[filePath] ? prev : { ...prev, [filePath]: true }));
+  }, []);
+
   const handleConfirm = useCallback(async () => {
     if (selectedPaths.length === 0) return;
     await onConfirm(selectedPaths);
@@ -381,7 +498,7 @@ export default function SessionFileBrowser({
             onClick={handleGoUp}
             className="btn btn-sm btn-square btn-ghost"
             title="Go Up"
-            disabled={currentPath === '/' || !currentPath}
+            disabled={!currentPath || getDirName(currentPath) === currentPath}
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -444,7 +561,7 @@ export default function SessionFileBrowser({
             <div className="flex items-center gap-2 overflow-x-auto">
               {pinnedFolderShortcuts.map((folderPath) => {
                 const isCurrent = folderPath === currentPath;
-                const label = folderPath.split('/').filter(Boolean).pop() || folderPath;
+                const label = getBaseName(folderPath) || folderPath;
                 return (
                   <div key={folderPath} className="join shrink-0">
                     <button
@@ -528,58 +645,25 @@ export default function SessionFileBrowser({
                 const isSelected = selectedSet.has(item.path);
                 const isImage = !item.isDirectory && isImageFile(item.name);
                 const isSelectable = item.isDirectory || isAllowedFileType(item.name);
-                const thumbnailUrl = `/api/file-thumbnail?path=${encodeURIComponent(item.path)}`;
+                const isPinned = pinnedFolderShortcuts.includes(item.path);
+                const isThumbnailBroken = Boolean(brokenThumbnails[item.path]);
 
                 return (
-                  <button
+                  <GridFileTile
                     key={item.path}
-                    type="button"
-                    className={`rounded-lg border text-left overflow-hidden transition-colors ${isSelected
-                      ? 'border-primary bg-primary/15'
-                      : 'border-base-300 hover:bg-base-100'
-                      } ${!isSelectable ? 'opacity-50' : ''}`}
-                    onClick={(e) => handleItemClick(item, index, e)}
-                    title={item.path}
-                  >
-                    <div className="aspect-[4/3] bg-base-300 flex items-center justify-center overflow-hidden relative p-2">
-                      {isImage && !brokenThumbnails[item.path] ? (
-                        <Image
-                          src={thumbnailUrl}
-                          alt={item.name}
-                          fill
-                          sizes="(max-width: 768px) 50vw, (max-width: 1280px) 33vw, 25vw"
-                          className="object-contain"
-                          unoptimized
-                          onError={() =>
-                            setBrokenThumbnails((prev) => ({ ...prev, [item.path]: true }))
-                          }
-                        />
-                      ) : item.isDirectory ? (
-                        <Folder className="w-10 h-10 opacity-80" />
-                      ) : (
-                        <FileText className="w-10 h-10 opacity-80" />
-                      )}
-                      {item.isDirectory && (
-                        <button
-                          type="button"
-                          className={`absolute top-1 right-1 btn btn-xs btn-circle ${pinnedFolderShortcuts.includes(item.path) ? 'btn-primary' : 'btn-ghost bg-base-100/70'}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void handleTogglePinFolder(item.path);
-                          }}
-                          title={pinnedFolderShortcuts.includes(item.path) ? 'Unpin folder' : 'Pin folder'}
-                        >
-                          <Pin className={`w-3 h-3 ${pinnedFolderShortcuts.includes(item.path) ? 'fill-current' : ''}`} />
-                        </button>
-                      )}
-                    </div>
-                    <div className="px-2 py-2">
-                      <div className="truncate text-sm font-medium" title={item.name}>{item.name}</div>
-                      <div className="text-[10px] opacity-70">
-                        {item.isDirectory ? 'folder' : !isSelectable ? 'unsupported' : isImage ? 'image' : 'file'}
-                      </div>
-                    </div>
-                  </button>
+                    item={item}
+                    isSelected={isSelected}
+                    isImage={isImage}
+                    isSelectable={isSelectable}
+                    isPinned={isPinned}
+                    isThumbnailBroken={isThumbnailBroken}
+                    onItemClick={(e) => handleItemClick(item, index, e)}
+                    onPinClick={(e) => {
+                      e.stopPropagation();
+                      void handleTogglePinFolder(item.path);
+                    }}
+                    onThumbnailError={() => handleThumbnailError(item.path)}
+                  />
                 );
               })}
             </div>

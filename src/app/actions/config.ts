@@ -1,10 +1,16 @@
 'use server';
 
 import { getLocalDb } from '@/lib/local-db';
+import {
+  normalizeNullableProviderReasoningEffort,
+  normalizeProviderReasoningEffort,
+} from '@/lib/agent/reasoning';
+import type { AgentProvider, ReasoningEffort } from '@/lib/types';
 
 export interface ProjectSettings {
-  agentProvider?: string;
+  agentProvider?: AgentProvider;
   agentModel?: string;
+  agentReasoningEffort?: ReasoningEffort;
   startupScript?: string;
   devServerScript?: string;
   alias?: string | null;
@@ -48,6 +54,7 @@ type ProjectSettingsRow = {
   project_path: string;
   agent_provider: string | null;
   agent_model: string | null;
+  agent_reasoning_effort: string | null;
   startup_script: string | null;
   dev_server_script: string | null;
   alias: string | null;
@@ -55,12 +62,28 @@ type ProjectSettingsRow = {
 
 function toProjectSettings(row: ProjectSettingsRow): ProjectSettings {
   const settings: ProjectSettings = {};
-  if (row.agent_provider !== null) settings.agentProvider = row.agent_provider;
+  if (row.agent_provider !== null) settings.agentProvider = row.agent_provider as AgentProvider;
   if (row.agent_model !== null) settings.agentModel = row.agent_model;
+  const normalizedReasoning = normalizeProviderReasoningEffort(
+    row.agent_provider,
+    row.agent_reasoning_effort,
+  );
+  if (normalizedReasoning) settings.agentReasoningEffort = normalizedReasoning;
   if (row.startup_script !== null) settings.startupScript = row.startup_script;
   if (row.dev_server_script !== null) settings.devServerScript = row.dev_server_script;
   if (row.alias !== null) settings.alias = row.alias;
   return settings;
+}
+
+function normalizeProjectSettings(settings: ProjectSettings): ProjectSettings {
+  const normalizedProvider = settings.agentProvider;
+  return {
+    ...settings,
+    agentReasoningEffort: normalizeProviderReasoningEffort(
+      normalizedProvider,
+      settings.agentReasoningEffort,
+    ),
+  };
 }
 
 function writeConfig(config: Config): void {
@@ -97,19 +120,26 @@ function writeConfig(config: Config): void {
     db.prepare('DELETE FROM app_config_project_settings').run();
     const insertProjectSettings = db.prepare(`
       INSERT INTO app_config_project_settings (
-        project_path, agent_provider, agent_model, startup_script, dev_server_script, alias
+        project_path, agent_provider, agent_model, agent_reasoning_effort,
+        startup_script, dev_server_script, alias
       ) VALUES (
-        @projectPath, @agentProvider, @agentModel, @startupScript, @devServerScript, @alias
+        @projectPath, @agentProvider, @agentModel, @agentReasoningEffort,
+        @startupScript, @devServerScript, @alias
       )
     `);
     for (const [projectPath, projectSettings] of Object.entries(nextConfig.projectSettings)) {
+      const normalizedProjectSettings = normalizeProjectSettings(projectSettings);
       insertProjectSettings.run({
         projectPath,
-        agentProvider: projectSettings.agentProvider ?? null,
-        agentModel: projectSettings.agentModel ?? null,
-        startupScript: projectSettings.startupScript ?? null,
-        devServerScript: projectSettings.devServerScript ?? null,
-        alias: projectSettings.alias ?? null,
+        agentProvider: normalizedProjectSettings.agentProvider ?? null,
+        agentModel: normalizedProjectSettings.agentModel ?? null,
+        agentReasoningEffort: normalizeNullableProviderReasoningEffort(
+          normalizedProjectSettings.agentProvider,
+          normalizedProjectSettings.agentReasoningEffort,
+        ),
+        startupScript: normalizedProjectSettings.startupScript ?? null,
+        devServerScript: normalizedProjectSettings.devServerScript ?? null,
+        alias: normalizedProjectSettings.alias ?? null,
       });
     }
   });
@@ -139,7 +169,8 @@ export async function getConfig(): Promise<Config> {
 
   const projectSettingsRows = db.prepare(`
     SELECT
-      project_path, agent_provider, agent_model, startup_script, dev_server_script, alias
+      project_path, agent_provider, agent_model, agent_reasoning_effort,
+      startup_script, dev_server_script, alias
     FROM app_config_project_settings
   `).all() as ProjectSettingsRow[];
 
@@ -195,12 +226,16 @@ export async function getProjectAlias(projectPath: string): Promise<string | nul
 export async function updateProjectSettings(projectPath: string, updates: Partial<ProjectSettings>): Promise<Config> {
   const currentConfig = await getConfig();
   const currentProjectSettings = currentConfig.projectSettings[projectPath] || {};
+  const nextProjectSettings = normalizeProjectSettings({
+    ...currentProjectSettings,
+    ...updates,
+  });
 
   const newConfig: Config = {
     ...currentConfig,
     projectSettings: {
       ...currentConfig.projectSettings,
-      [projectPath]: { ...currentProjectSettings, ...updates },
+      [projectPath]: nextProjectSettings,
     },
   };
 

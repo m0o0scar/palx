@@ -60,7 +60,7 @@ export function HomeRepoCard({
   onMouseLeave,
 }: HomeRepoCardProps) {
   const projectName = projectDisplayName || getBaseName(project);
-  const cardGradient = getStableRepoCardGradient(projectName);
+  const cardGradient = getStableRepoCardGradient(normalizePathForComparison(project));
   const [isGitRepoMenuOpen, setIsGitRepoMenuOpen] = useState(false);
   const gitRepoMenuRef = useRef<HTMLDivElement | null>(null);
   const projectIconUrl = projectIconPath

@@ -23,9 +23,9 @@
     "README.md"
   ],
   "scripts": {
-    "dev": "node ./bin/viba.mjs --dev --port \"$(npx gfport 3200)\"",
+    "dev": "gfport 3200 -- next dev --webpack -p {PORT}",
     "build": "next build --webpack",
-    "prepack": "rm -rf .next && npm run build",
+    "prepack": "node -e \"require('node:fs').rmSync('.next',{recursive:true,force:true})\" && npm run build",
     "start": "node ./bin/viba.mjs",
     "lint": "eslint",
     "test": "node --experimental-strip-types --test src/**/*.test.ts test/**/*.test.mjs",
@@ -40,6 +40,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.15.0",
     "@alexbruf/react-diff-viewer": "^3.1.5",
     "@auth0/nextjs-auth0": "^4.16.0",
     "@tanstack/react-query": "^5.90.21",
@@ -54,6 +55,9 @@
     "next-themes": "^0.4.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "remark-gfm": "^4.0.1",
     "simple-git": "^3.30.0",
     "tailwind-merge": "^3.4.0",
     "uuid": "^13.0.0",
@@ -65,6 +69,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "@types/ws": "^8.18.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",

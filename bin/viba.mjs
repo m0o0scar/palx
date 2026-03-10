@@ -32,16 +32,52 @@ function getNextBin() {
   return require.resolve("next/dist/bin/next");
 }
 
+function getWindowsExecutableNames(command) {
+  if (!command || process.platform !== "win32") {
+    return [command];
+  }
+
+  const pathExtEntries = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const lowerCommand = command.toLowerCase();
+  if (pathExtEntries.some((ext) => lowerCommand.endsWith(ext))) {
+    return [command];
+  }
+
+  return [command, ...pathExtEntries.map((ext) => `${command}${ext}`)];
+}
+
+function resolveCommand(command) {
+  const pathEntries = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  for (const candidateName of getWindowsExecutableNames(command)) {
+    if (!candidateName) {
+      continue;
+    }
+
+    if (candidateName.includes(path.sep) && fs.existsSync(candidateName)) {
+      return candidateName;
+    }
+
+    for (const directory of pathEntries) {
+      const candidate = path.join(directory, candidateName);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
 function isCommandAvailable(command) {
-  const result = spawnSync("which", [command], {
-    stdio: "ignore",
-    env: process.env,
-  });
-  return result.status === 0;
+  return Boolean(resolveCommand(command));
 }
 
 function runCommand(command, args) {
-  const result = spawnSync(command, args, {
+  const resolvedCommand = resolveCommand(command) || command;
+  const result = spawnSync(resolvedCommand, args, {
     cwd: APP_ROOT,
     env: process.env,
     stdio: "inherit",
@@ -50,6 +86,13 @@ function runCommand(command, args) {
 }
 
 export function getBrowserOpenCommand(url, platform = process.platform) {
+  if (platform === "win32") {
+    return {
+      command: "cmd.exe",
+      args: ["/c", "start", "", url],
+    };
+  }
+
   if (platform === "darwin") {
     return {
       command: "open",
@@ -80,6 +123,23 @@ export function shouldAutoOpenBrowser(env = process.env, mode = "start") {
 }
 
 export function getInstallStrategies(packageName) {
+  if (process.platform === "win32") {
+    return [
+      {
+        label: "winget",
+        requiredCommands: ["winget"],
+        command: "winget",
+        args: ["install", "--id", "tsl0922.ttyd", "--accept-source-agreements", "--accept-package-agreements"],
+      },
+      {
+        label: "scoop",
+        requiredCommands: ["scoop"],
+        command: "scoop",
+        args: ["install", packageName],
+      },
+    ];
+  }
+
   if (process.platform === "darwin") {
     return [
       {
@@ -225,7 +285,8 @@ function ensureCodexSkillsInstalled() {
     return;
   }
 
-  if (!isCommandAvailable("npx")) {
+  const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+  if (!isCommandAvailable(npxCommand)) {
     console.warn("Skipping Codex skill installation: npx is not available.");
     return;
   }
@@ -233,7 +294,7 @@ function ensureCodexSkillsInstalled() {
   for (const skillDefinition of missingSkills) {
     console.log(`Ensuring Codex skill '${skillDefinition.name}' is installed from ${skillDefinition.sourceUrl}...`);
     const addResult = spawnSync(
-      "npx",
+      resolveCommand(npxCommand) || npxCommand,
       [
         "skills",
         "add",
@@ -286,6 +347,25 @@ async function findAvailablePort(startPort, maxAttempts = 20) {
     }
   }
   throw new Error(`Could not find an available port in range ${startPort}-${startPort + maxAttempts - 1}.`);
+}
+
+export async function resolveStartupPort(
+  { port: requestedPort, portExplicit = false, env = process.env },
+  { findAvailablePortImpl = findAvailablePort } = {},
+) {
+  const envPort = Number.parseInt(env.PORT || "", 10);
+  const preferredPort =
+    requestedPort ??
+    (Number.isInteger(envPort) && envPort > 0 && envPort <= 65535 ? envPort : DEFAULT_PORT);
+
+  if (portExplicit || env.PORT) {
+    return { port: preferredPort, preferredPort };
+  }
+
+  return {
+    port: await findAvailablePortImpl(preferredPort),
+    preferredPort,
+  };
 }
 
 function runNext(args) {
@@ -357,7 +437,7 @@ function openInDefaultBrowser(url) {
   }
 
   try {
-    const child = spawn(openCommand.command, openCommand.args, {
+    const child = spawn(resolveCommand(openCommand.command) || openCommand.command, openCommand.args, {
       cwd: APP_ROOT,
       env: process.env,
       stdio: "ignore",
@@ -401,20 +481,14 @@ async function main() {
     }
 
     ensureCommandInstalled("ttyd");
-    ensureCommandInstalled("tmux");
+    if (process.platform !== "win32") {
+      ensureCommandInstalled("tmux");
+    }
     ensureCodexSkillsInstalled();
 
-    const envPort = Number.parseInt(process.env.PORT || "", 10);
-    const preferredPort =
-      options.port ??
-      (Number.isInteger(envPort) && envPort > 0 && envPort <= 65535 ? envPort : DEFAULT_PORT);
-
-    let port = preferredPort;
-    if (!options.portExplicit && !process.env.PORT) {
-      port = await findAvailablePort(preferredPort);
-      if (port !== preferredPort) {
-        console.log(`Port ${preferredPort} is in use. Using ${port} instead.`);
-      }
+    const { port, preferredPort } = await resolveStartupPort(options);
+    if (port !== preferredPort) {
+      console.log(`Port ${preferredPort} is in use. Using ${port} instead.`);
     }
 
     if (options.mode === "dev") {

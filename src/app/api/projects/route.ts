@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getProjects, addProject, updateProject, removeProject } from '@/lib/store';
 import { z } from 'zod';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 export async function GET() {
   const projects = getProjects();
@@ -33,13 +34,21 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { path: projectPath, name, displayName } = addProjectSchema.parse(body);
+    const normalizedProjectPath = path.resolve(projectPath);
 
-    const stat = await fs.stat(projectPath);
+    const existingProject = getProjects().find((project) => (
+      path.resolve(project.path) === normalizedProjectPath
+    ));
+    if (existingProject) {
+      return NextResponse.json(existingProject);
+    }
+
+    const stat = await fs.stat(normalizedProjectPath);
     if (!stat.isDirectory()) {
       return NextResponse.json({ error: 'Path is not a directory' }, { status: 400 });
     }
 
-    const project = addProject(projectPath, name, displayName);
+    const project = addProject(normalizedProjectPath, name, displayName);
     return NextResponse.json(project);
   } catch (error) {
     if (error instanceof z.ZodError) {

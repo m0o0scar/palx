@@ -4,19 +4,20 @@
 
 User-facing behavior:
 - Receives in-browser notifications tied to a specific session.
-- Displays native browser notifications (when permission granted) for session updates.
+- Displays native browser notifications (when permission granted) for agent completion and attention-needed states.
 - Keeps session lists synchronized across tabs/windows via local storage event signaling.
 
 System-facing behavior:
-- Exposes a local notification ingress API for agent processes.
+- Derives notification payloads from Palx-managed agent runtime state.
 - Spins up an in-process WebSocket server and routes notifications by `sessionId`.
 
 ## Key Modules and Responsibilities
 
 - Notification WS side server and fanout:
 - [src/lib/sessionNotificationServer.ts](../../../src/lib/sessionNotificationServer.ts)
+- Runtime-to-notification derivation:
+- [src/lib/agent/session-manager.ts](../../../src/lib/agent/session-manager.ts)
 - Notification APIs:
-- `POST /api/notifications` ([src/app/api/notifications/route.ts](../../../src/app/api/notifications/route.ts))
 - `GET /api/notifications/socket?sessionId=...` ([src/app/api/notifications/socket/route.ts](../../../src/app/api/notifications/socket/route.ts))
 - Session page socket client + browser notification display:
 - [src/app/session/[sessionId]/SessionPageClient.tsx](../../../src/app/session/%5BsessionId%5D/SessionPageClient.tsx)
@@ -26,9 +27,6 @@ System-facing behavior:
 ## Public Interfaces
 
 ### HTTP + WS interfaces
-- `POST /api/notifications` body:
-- `{ sessionId: string, title: string, description: string }`
-- Validates required strings and publishes to session WS subscribers.
 - `GET /api/notifications/socket?sessionId=...`
 - Returns JSON with `wsUrl` to connect to.
 - WebSocket payload shape:
@@ -46,8 +44,8 @@ System-facing behavior:
 
 ```mermaid
 sequenceDiagram
-  participant Agent as Local agent process
-  participant API as api_notifications
+  participant SessionMgr as session_manager
+  participant API as api_notifications_socket
   participant Notify as sessionNotificationServer
   participant SessionPage as SessionPageClient
   participant Browser as Notification API
@@ -56,22 +54,20 @@ sequenceDiagram
   API->>Notify: ensure server + build ws url
   SessionPage->>Notify: open WebSocket
 
-  Agent->>API: POST session notification
-  API->>Notify: publishSessionNotification
+  SessionMgr->>Notify: publishSessionNotification
   Notify-->>SessionPage: WS message
   SessionPage->>Browser: new Notification(title, description)
 ```
 
 ## Error Handling and Edge Cases
 
-- `POST /api/notifications` returns `400` for missing fields, `500` for publish failures ([src/app/api/notifications/route.ts](../../../src/app/api/notifications/route.ts)).
 - Socket route returns `400` when `sessionId` is missing ([src/app/api/notifications/socket/route.ts](../../../src/app/api/notifications/socket/route.ts)).
 - Session client uses reconnect with exponential backoff when socket initialization or connection fails ([src/app/session/[sessionId]/SessionPageClient.tsx](../../../src/app/session/%5BsessionId%5D/SessionPageClient.tsx)).
-- Middleware intentionally allows unauthenticated `POST /api/notifications` for local tool-to-app signaling ([src/proxy.ts](../../../src/proxy.ts)).
+- Derived notifications are emitted only for completed turns, auth-required states, and terminal errors.
 
 ## Observability
 
-- Notification delivery count is returned by ingress API (`delivered` count).
+- Notification delivery count is returned by `publishSessionNotification(...)` to internal callers.
 - Socket and browser-notification failures are silently retried or ignored in client to avoid breaking session load.
 
 ## Tests

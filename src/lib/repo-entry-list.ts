@@ -48,7 +48,7 @@ export async function listRepoEntries(repoPath: string, query: string = ''): Pro
       }
     }
 
-    if (!query) return allEntries.slice(0, 50);
+    if (!query) return allEntries;
 
     const lowerQuery = query.toLowerCase();
     return allEntries.filter((entry) => entry.toLowerCase().includes(lowerQuery)).slice(0, 50);

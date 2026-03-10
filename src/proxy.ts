@@ -23,10 +23,8 @@ export async function proxy(request: NextRequest) {
   const authResponse = await auth0.middleware(request);
 
   const isAuthRoute = pathname === '/auth' || pathname.startsWith('/auth/');
-  // Keep notification ingress reachable for local agent processes that are not browser-authenticated.
-  const isNotificationIngress = pathname === '/api/notifications' && request.method === 'POST';
 
-  if (isAuthRoute || isNotificationIngress) {
+  if (isAuthRoute) {
     return authResponse;
   }
 

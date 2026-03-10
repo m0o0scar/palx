@@ -57,7 +57,6 @@ This codebase exposes three interface categories:
 | Method | Path | Purpose | Main Code |
 |---|---|---|---|
 | POST | `/api/preview-proxy/start` | Ensure local preview proxy and return proxy URL | [src/app/api/preview-proxy/start/route.ts](../../src/app/api/preview-proxy/start/route.ts) |
-| POST | `/api/notifications` | Publish session notification event | [src/app/api/notifications/route.ts](../../src/app/api/notifications/route.ts) |
 | GET | `/api/notifications/socket?sessionId=...` | Return WS endpoint for session notification stream | [src/app/api/notifications/socket/route.ts](../../src/app/api/notifications/socket/route.ts) |
 
 ## Server Actions Interfaces
@@ -91,7 +90,6 @@ Implementation:
 
 - Auth0 is optional; enabled only when required env vars are set (`AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET`) in [src/lib/auth0.ts](../../src/lib/auth0.ts).
 - Middleware enforces session checks on app routes and APIs when configured: [src/proxy.ts](../../src/proxy.ts).
-- Exception: `POST /api/notifications` is left accessible to local non-browser agent processes even under Auth0 mode.
 
 ## Validation, Error Shapes, and Status Codes
 

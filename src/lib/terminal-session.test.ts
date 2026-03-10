@@ -6,6 +6,7 @@ import {
   mergeGitTerminalSessionEnvironments,
   parseGitRemoteHost,
   parseTerminalSessionEnvironmentsFromSrc,
+  parseTerminalWorkingDirectoryFromSrc,
   type ResolvedGitTerminalSessionEnvironment,
 } from './terminal-session.ts';
 
@@ -94,6 +95,19 @@ describe('buildTtydTerminalSrc', () => {
       'viba-session-1-agent',
     ]);
   });
+
+  it('builds shell-mode URLs with custom metadata', () => {
+    const url = buildTtydTerminalSrc('session-1', 'agent', [
+      { name: 'OPENAI_API_KEY', value: 'sk-example' },
+    ], {
+      persistenceMode: 'shell',
+      workingDirectory: 'C:\\repo',
+      shellKind: 'powershell',
+    });
+    const params = new URLSearchParams(url.split('?')[1] || '');
+    assert.deepStrictEqual(params.getAll('viba-env'), ['OPENAI_API_KEY=sk-example']);
+    assert.strictEqual(params.get('viba-cwd'), 'C:\\repo');
+  });
 });
 
 describe('parseTerminalSessionEnvironmentsFromSrc', () => {
@@ -115,6 +129,33 @@ describe('parseTerminalSessionEnvironmentsFromSrc', () => {
     assert.deepStrictEqual(parseTerminalSessionEnvironmentsFromSrc(src), [
       { name: 'GITHUB_TOKEN', value: 'new' },
     ]);
+  });
+
+  it('extracts shell-mode environment assignments from a ttyd URL', () => {
+    const src = '/terminal?viba-env=OPENAI_API_KEY%3Dsk-old&viba-env=OPENAI_API_KEY%3Dsk-new';
+
+    assert.deepStrictEqual(parseTerminalSessionEnvironmentsFromSrc(src), [
+      { name: 'OPENAI_API_KEY', value: 'sk-new' },
+    ]);
+  });
+});
+
+describe('parseTerminalWorkingDirectoryFromSrc', () => {
+  it('extracts tmux working directory from a ttyd URL', () => {
+    const src = buildTtydTerminalSrc('session-1', 'agent', null, {
+      workingDirectory: '/tmp/viba workspace',
+    });
+
+    assert.strictEqual(parseTerminalWorkingDirectoryFromSrc(src), '/tmp/viba workspace');
+  });
+
+  it('extracts shell-mode working directory from a ttyd URL', () => {
+    const src = buildTtydTerminalSrc('session-1', 'agent', null, {
+      persistenceMode: 'shell',
+      workingDirectory: 'C:\\repo',
+    });
+
+    assert.strictEqual(parseTerminalWorkingDirectoryFromSrc(src), 'C:\\repo');
   });
 });
 

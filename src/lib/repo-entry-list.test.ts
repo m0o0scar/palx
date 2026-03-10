@@ -50,4 +50,18 @@ describe('listRepoEntries', () => {
 
     assert.deepStrictEqual(entries, ['src/components', 'src/components/Button.tsx']);
   });
+
+  it('does not truncate the unfiltered repo entry list before the client filters it', async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'viba-repo-entries-full-'));
+    tempRoots.push(repoRoot);
+
+    for (let index = 0; index < 70; index += 1) {
+      await fs.writeFile(path.join(repoRoot, `file-${index}.ts`), `export const value${index} = ${index};\n`);
+    }
+
+    const entries = await listRepoEntries(repoRoot);
+
+    assert.equal(entries.length, 70);
+    assert.ok(entries.includes('file-69.ts'));
+  });
 });

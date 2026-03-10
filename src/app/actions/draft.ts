@@ -2,7 +2,11 @@
 
 import path from 'node:path';
 import { getLocalDb } from '@/lib/local-db';
-import type { SessionGitRepoContext } from '@/lib/types';
+import {
+  normalizeNullableProviderReasoningEffort,
+  normalizeProviderReasoningEffort,
+} from '@/lib/agent/reasoning';
+import type { AgentProvider, ReasoningEffort, SessionGitRepoContext } from '@/lib/types';
 
 export type DraftMetadata = {
   id: string;
@@ -10,8 +14,9 @@ export type DraftMetadata = {
   gitContexts: SessionGitRepoContext[];
   message: string;
   attachmentPaths: string[];
-  agentProvider: string;
+  agentProvider: AgentProvider;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   timestamp: string;
   title: string;
   startupScript: string;
@@ -32,6 +37,7 @@ type DraftRow = {
   attachment_paths_json: string;
   agent_provider: string;
   model: string;
+  reasoning_effort: string | null;
   timestamp: string;
   title: string;
   startup_script: string;
@@ -102,6 +108,10 @@ function rowToDraft(row: DraftRow): DraftMetadata {
   const projectPath = (row.project_path?.trim() || row.repo_path?.trim() || '');
   const gitContexts = parseGitContexts(row.git_contexts_json, row.repo_path, row.branch_name);
   const primaryContext = gitContexts[0];
+  const normalizedReasoningEffort = normalizeProviderReasoningEffort(
+    row.agent_provider,
+    row.reasoning_effort,
+  );
 
   return {
     id: row.id,
@@ -109,8 +119,9 @@ function rowToDraft(row: DraftRow): DraftMetadata {
     gitContexts,
     message: row.message,
     attachmentPaths: parseAttachmentPaths(row.attachment_paths_json),
-    agentProvider: row.agent_provider,
+    agentProvider: row.agent_provider as AgentProvider,
     model: row.model,
+    reasoningEffort: normalizedReasoningEffort,
     timestamp: row.timestamp,
     title: row.title,
     startupScript: row.startup_script,
@@ -157,15 +168,19 @@ export async function saveDraft(draft: DraftMetadata): Promise<{ success: boolea
 
     const gitContexts = normalizeGitContexts(draft);
     const primaryContext = gitContexts[0];
+    const normalizedReasoningEffort = normalizeProviderReasoningEffort(
+      draft.agentProvider,
+      draft.reasoningEffort,
+    );
 
     db.prepare(`
       INSERT OR REPLACE INTO drafts (
         id, project_path, repo_path, branch_name, git_contexts_json, message,
-        attachment_paths_json, agent_provider, model, timestamp, title,
+        attachment_paths_json, agent_provider, model, reasoning_effort, timestamp, title,
         startup_script, dev_server_script, session_mode
       ) VALUES (
         @id, @projectPath, @repoPath, @branchName, @gitContextsJson, @message,
-        @attachmentPathsJson, @agentProvider, @model, @timestamp, @title,
+        @attachmentPathsJson, @agentProvider, @model, @reasoningEffort, @timestamp, @title,
         @startupScript, @devServerScript, @sessionMode
       )
     `).run({
@@ -178,6 +193,10 @@ export async function saveDraft(draft: DraftMetadata): Promise<{ success: boolea
       attachmentPathsJson: JSON.stringify(draft.attachmentPaths),
       agentProvider: draft.agentProvider,
       model: draft.model,
+      reasoningEffort: normalizeNullableProviderReasoningEffort(
+        draft.agentProvider,
+        normalizedReasoningEffort,
+      ),
       timestamp: draft.timestamp,
       title: draft.title,
       startupScript: draft.startupScript,
@@ -198,7 +217,7 @@ export async function listDrafts(projectPath?: string): Promise<DraftMetadata[]>
       ? `
         SELECT
           id, project_path, repo_path, branch_name, git_contexts_json, message,
-          attachment_paths_json, agent_provider, model, timestamp, title,
+          attachment_paths_json, agent_provider, model, reasoning_effort, timestamp, title,
           startup_script, dev_server_script, session_mode
         FROM drafts
         WHERE project_path = ?
@@ -207,7 +226,7 @@ export async function listDrafts(projectPath?: string): Promise<DraftMetadata[]>
       : `
         SELECT
           id, project_path, repo_path, branch_name, git_contexts_json, message,
-          attachment_paths_json, agent_provider, model, timestamp, title,
+          attachment_paths_json, agent_provider, model, reasoning_effort, timestamp, title,
           startup_script, dev_server_script, session_mode
         FROM drafts
         ORDER BY timestamp DESC

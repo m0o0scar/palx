@@ -1,5 +1,7 @@
 export type TerminalSessionRole = string;
 export type GitRemoteProvider = 'github' | 'gitlab';
+export type TerminalPersistenceMode = 'tmux' | 'shell';
+export type TerminalShellKind = 'posix' | 'powershell';
 export type TerminalSessionEnvironment = {
   name: string;
   value: string;
@@ -12,8 +14,12 @@ export type ResolvedGitTerminalSessionEnvironment = {
 };
 export type BuildTtydTerminalSrcOptions = {
   workingDirectory?: string | null;
+  persistenceMode?: TerminalPersistenceMode;
+  shellKind?: TerminalShellKind;
 };
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const SHELL_ENV_PARAM = 'viba-env';
+const SHELL_CWD_PARAM = 'viba-cwd';
 
 type DetectGitRemoteProviderOptions = {
   gitlabHosts?: string[];
@@ -103,29 +109,47 @@ export function buildTtydTerminalSrc(
   environment?: TerminalSessionEnvironment | TerminalSessionEnvironment[] | null,
   options?: BuildTtydTerminalSrcOptions,
 ): string {
-  const tmuxSession = getTmuxSessionName(sessionName, role);
-  const params = new URLSearchParams();
-  params.append('arg', 'new-session');
   const environments = Array.isArray(environment)
     ? environment
     : environment
       ? [environment]
       : [];
+  const persistenceMode = options?.persistenceMode ?? 'tmux';
+  const params = new URLSearchParams();
+
+  if (persistenceMode === 'tmux') {
+    const tmuxSession = getTmuxSessionName(sessionName, role);
+    params.append('arg', 'new-session');
+
+    for (const env of environments) {
+      if (!env.value) continue;
+      params.append('arg', '-e');
+      params.append('arg', `${env.name}=${env.value}`);
+    }
+
+    const workingDirectory = options?.workingDirectory?.trim();
+    if (workingDirectory) {
+      params.append('arg', '-c');
+      params.append('arg', workingDirectory);
+    }
+    params.append('arg', '-A');
+    params.append('arg', '-s');
+    params.append('arg', tmuxSession);
+    return `/terminal?${params.toString()}`;
+  }
 
   for (const env of environments) {
     if (!env.value) continue;
-    params.append('arg', '-e');
-    params.append('arg', `${env.name}=${env.value}`);
+    params.append(SHELL_ENV_PARAM, `${env.name}=${env.value}`);
   }
+
   const workingDirectory = options?.workingDirectory?.trim();
   if (workingDirectory) {
-    params.append('arg', '-c');
-    params.append('arg', workingDirectory);
+    params.append(SHELL_CWD_PARAM, workingDirectory);
   }
-  params.append('arg', '-A');
-  params.append('arg', '-s');
-  params.append('arg', tmuxSession);
-  return `/terminal?${params.toString()}`;
+
+  const query = params.toString();
+  return query ? `/terminal?${query}` : '/terminal';
 }
 
 export function mergeGitTerminalSessionEnvironments(
@@ -200,5 +224,36 @@ export function parseTerminalSessionEnvironmentsFromSrc(src: string): TerminalSe
     environments.set(name, value);
   }
 
+  for (const assignment of params.getAll(SHELL_ENV_PARAM)) {
+    const separatorIndex = assignment.indexOf('=');
+    if (separatorIndex <= 0) continue;
+
+    const name = assignment.slice(0, separatorIndex).trim();
+    if (!ENV_NAME_PATTERN.test(name)) continue;
+
+    const value = assignment.slice(separatorIndex + 1);
+    if (!value) continue;
+
+    environments.set(name, value);
+  }
+
   return Array.from(environments.entries()).map(([name, value]) => ({ name, value }));
+}
+
+export function parseTerminalWorkingDirectoryFromSrc(src: string): string | null {
+  const trimmed = src.trim();
+  if (!trimmed) return null;
+
+  const queryIndex = trimmed.indexOf('?');
+  const query = queryIndex >= 0 ? trimmed.slice(queryIndex + 1) : trimmed.replace(/^\?/, '');
+  const params = new URLSearchParams(query);
+  const args = params.getAll('arg');
+
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] !== '-c') continue;
+    const workingDirectory = args[i + 1]?.trim();
+    if (workingDirectory) return workingDirectory;
+  }
+
+  return params.get(SHELL_CWD_PARAM)?.trim() || null;
 }

@@ -81,15 +81,20 @@ export function resolveExistingDirectory(targetPath: string): string {
   return normalized;
 }
 
+export function getFileManagerLaunchAttempts(directoryPath: string): CommandAttempt[] {
+  if (process.platform === 'win32') {
+    return [{ command: 'explorer.exe', args: [directoryPath] }];
+  }
+
+  if (process.platform === 'darwin') {
+    return [{ command: 'open', args: [directoryPath] }];
+  }
+
+  return [{ command: 'xdg-open', args: [directoryPath] }];
+}
+
 export async function openDirectoryInFileManager(directoryPath: string): Promise<void> {
-  const attempts: CommandAttempt[] = (() => {
-    if (process.platform === 'darwin') {
-      return [{ command: 'open', args: [directoryPath] }];
-    }
-
-    return [{ command: 'xdg-open', args: [directoryPath] }];
-  })();
-
+  const attempts = getFileManagerLaunchAttempts(directoryPath);
   try {
     await runFirstSuccessful(attempts);
   } catch (error) {
@@ -97,22 +102,33 @@ export async function openDirectoryInFileManager(directoryPath: string): Promise
   }
 }
 
-export async function openDirectoryInTerminal(directoryPath: string): Promise<void> {
-  const attempts: CommandAttempt[] = (() => {
-    if (process.platform === 'darwin') {
-      return [{ command: 'open', args: ['-a', 'Terminal', directoryPath] }];
-    }
-
+export function getTerminalLaunchAttempts(directoryPath: string): CommandAttempt[] {
+  if (process.platform === 'win32') {
+    const escapedForCmd = directoryPath.replace(/"/g, '""');
     return [
-      { command: 'gnome-terminal', args: ['--working-directory', directoryPath] },
-      { command: 'konsole', args: ['--workdir', directoryPath] },
-      { command: 'xfce4-terminal', args: ['--working-directory', directoryPath] },
-      { command: 'kitty', args: ['--directory', directoryPath] },
-      { command: 'alacritty', args: ['--working-directory', directoryPath] },
-      { command: 'x-terminal-emulator', args: ['--working-directory', directoryPath] },
+      { command: 'wt.exe', args: ['-d', directoryPath] },
+      { command: 'pwsh.exe', args: ['-NoExit', '-Command', `Set-Location -LiteralPath '${directoryPath.replace(/'/g, "''")}'`] },
+      { command: 'powershell.exe', args: ['-NoExit', '-Command', `Set-Location -LiteralPath '${directoryPath.replace(/'/g, "''")}'`] },
+      { command: 'cmd.exe', args: ['/k', `cd /d "${escapedForCmd}"`] },
     ];
-  })();
+  }
 
+  if (process.platform === 'darwin') {
+    return [{ command: 'open', args: ['-a', 'Terminal', directoryPath] }];
+  }
+
+  return [
+    { command: 'gnome-terminal', args: ['--working-directory', directoryPath] },
+    { command: 'konsole', args: ['--workdir', directoryPath] },
+    { command: 'xfce4-terminal', args: ['--working-directory', directoryPath] },
+    { command: 'kitty', args: ['--directory', directoryPath] },
+    { command: 'alacritty', args: ['--working-directory', directoryPath] },
+    { command: 'x-terminal-emulator', args: ['--working-directory', directoryPath] },
+  ];
+}
+
+export async function openDirectoryInTerminal(directoryPath: string): Promise<void> {
+  const attempts = getTerminalLaunchAttempts(directoryPath);
   try {
     await runFirstSuccessful(attempts);
   } catch (error) {

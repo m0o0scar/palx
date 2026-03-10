@@ -1,24 +1,22 @@
 import type { SessionGitRepoContext, SessionWorkspaceMode } from './types.ts';
 
 const PLAN_MODE_STARTUP_INSTRUCTION =
-  'Plan mode: inspect the relevant code first, present a concrete implementation plan, and wait for explicit user approval before any file edits or write commands.';
+  'Plan mode: in your first response of this session, inspect the relevant code, present a concrete implementation plan, and wait for explicit user approval before any file edits or write commands. After the user approves that initial plan, execute small or trivial follow-up changes directly without re-requesting approval. Request approval again only when a proposed change is substantial (for example meaningfully expands scope, changes approach, or introduces material risk).';
 const AUTO_COMMIT_INSTRUCTION =
-  'If you changed files inside a Git repository and the work for that repository is complete, commit that repository without confirmation. Use a commit message with a clear title and a detailed body explaining what changed and why. If multiple repositories changed, handle each repository separately. If no repository applies, skip Git-only steps. If GITHUB_TOKEN or GITLAB_TOKEN is set, push each changed repository after committed rounds and create or update a pull or merge request for each changed repository; include the repository path and link in the first push reply.';
+  'If you changed files inside a Git repository and the work for that repository is complete, commit that repository without confirmation. Use a commit message with a clear title and a detailed body explaining what changed and why. If multiple repositories changed, handle each repository separately. If no repository applies, skip Git-only steps. If GITHUB_TOKEN or GITLAB_TOKEN is set, push each changed repository after committed rounds and create or update a pull or merge request for each changed repository; include the repository path and link in the first push reply. Prefer provider-native CLIs when available: for GitHub, `gh auth setup-git` can wire `GITHUB_TOKEN` into `git push`; for GitLab, use `glab` with `GITLAB_TOKEN` and honor `GITLAB_HOST` for self-hosted instances.';
 const AGENT_BROWSER_SKILL_INSTRUCTION =
-  'For visual UI tasks, use the `agent-browser` skill (https://skills.sh/vercel-labs/agent-browser/agent-browser).';
+  'For visual UI tasks, prioritize Chrome remote-debug MCP tooling to attach to the user\'s current browser session. If that is unavailable, fall back to the `agent-browser` skill (https://skills.sh/vercel-labs/agent-browser/agent-browser), which may run in a standalone browser session.';
 const SYSTEMATIC_DEBUGGING_SKILL_INSTRUCTION =
   'For bugfix/debugging tasks, use the `systematic-debugging` skill (https://github.com/obra/superpowers).';
 const OPTIONAL_SKILL_DISCOVERY_INSTRUCTION =
   'If this task would benefit from another specialized workflow, you may use `npx skills` to discover and install additional skills at your discretion. Prefer trusted sources, install only what is needed, read the installed `SKILL.md` before using it, and avoid unnecessary overlapping skills.';
 const VISUAL_EVIDENCE_INSTRUCTION =
-  'When working on a visual-related feature or bugfix in a web project, after coding is complete, use `agent-browser` or equivalent Chrome MCP tooling to load the relevant page and capture screenshot(s). Do not commit evidence files to the repository; upload them as pull or merge request attachments or comments via GitHub or GitLab APIs.';
+  'When working on a visual-related feature or bugfix in a web project, after coding is complete, use Chrome remote-debug MCP tooling first to test the relevant page and capture screenshot(s) in the user\'s current browser session. If the current session is unavailable, fall back to `agent-browser` or another standalone browser automation option. Do not commit evidence files to the repository; upload them as pull or merge request attachments or comments via GitHub or GitLab APIs.';
 
 export type BuildAgentStartupPromptOptions = {
   taskDescription?: string | null;
   attachmentPaths?: string[];
   sessionMode?: 'fast' | 'plan';
-  sessionName: string;
-  notificationApiUrl: string;
   workspaceMode: SessionWorkspaceMode;
   gitRepos?: SessionGitRepoContext[];
   discoveredRepoRelativePaths?: string[];
@@ -106,8 +104,6 @@ export function buildAgentStartupPrompt({
   taskDescription,
   attachmentPaths = [],
   sessionMode = 'fast',
-  sessionName,
-  notificationApiUrl,
   workspaceMode,
   gitRepos = [],
   discoveredRepoRelativePaths = [],
@@ -131,9 +127,6 @@ export function buildAgentStartupPrompt({
   instructionLines.push(SYSTEMATIC_DEBUGGING_SKILL_INSTRUCTION);
   instructionLines.push(OPTIONAL_SKILL_DISCOVERY_INSTRUCTION);
   instructionLines.push(VISUAL_EVIDENCE_INSTRUCTION);
-  instructionLines.push(
-    `When your task is completed or you need user attention (for plan approval, permissions, or blockers), send a notification to the matching Palx session by POSTing JSON to ${notificationApiUrl} with sessionId, title, and description. Payload template: {"sessionId":"${sessionName}","title":"<short title>","description":"<clear detail about completion or required attention>"}.`,
-  );
 
   const taskSections: string[] = [trimmedTaskDescription];
   if (normalizedAttachmentPaths.length > 0) {

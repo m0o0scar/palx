@@ -40,9 +40,8 @@ flowchart LR
   NextUI -->|iframe| PreviewProxy
 
   NextUI --> NotifySocket["/api/notifications/socket"]
-  API --> NotifyIngress["/api/notifications (POST)"]
   NotifySocket --> NotifyServer[Notification WS server\n127.0.0.1:ephemeral]
-  NotifyIngress --> NotifyServer
+  SA --> NotifyServer
 ```
 
 ## Component Boundaries
@@ -68,7 +67,6 @@ flowchart LR
 
 ### Security/auth boundary
 - Optional Auth0 gate for pages and most APIs via middleware: [src/proxy.ts](../../src/proxy.ts), [src/lib/auth0.ts](../../src/lib/auth0.ts).
-- Explicit exception: unauthenticated local notification ingress (`POST /api/notifications`) to allow local agent process posting ([src/proxy.ts](../../src/proxy.ts)).
 
 ## Main Data Flows
 
@@ -89,7 +87,7 @@ flowchart TD
   L --> M[codex command injection]
 
   M --> N[Codex applies injected instructions]
-  N --> O[commits/push/PR + notifications via /api/notifications]
+  N --> O[commits/push/PR]
 ```
 
 ## Key Runtime Flows
@@ -111,4 +109,4 @@ flowchart TD
 - Session naming and branch naming format are coupled (`sessionName` timestamp UUID fragment, branch `palx/<sessionName>`) ([src/app/actions/git.ts](../../src/app/actions/git.ts)).
 - Git commands are configured non-interactive (`GIT_TERMINAL_PROMPT=0`, batch-mode SSH), so credential misconfiguration fails fast instead of hanging ([src/lib/git.ts](../../src/lib/git.ts)).
 - Metadata/config persistence is centralized in SQLite (`~/.viba/palx.db`); session prompts are intentionally separate text files in `~/.viba/session-prompts`.
-- SessionView injects operational instructions into Codex command startup for every new run (plan-mode gating, auto-commit/push/PR, skills, notification API payload) ([src/components/SessionView.tsx](../../src/components/SessionView.tsx)).
+- SessionView injects operational instructions into Codex command startup for every new run (plan-mode gating, auto-commit/push/PR, skills) ([src/components/SessionView.tsx](../../src/components/SessionView.tsx)).

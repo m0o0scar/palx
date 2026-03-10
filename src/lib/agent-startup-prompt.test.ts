@@ -108,8 +108,6 @@ describe('buildAgentStartupPrompt', () => {
       buildAgentStartupPrompt({
         taskDescription: '   ',
         attachmentPaths: ['/tmp/spec.md'],
-        sessionName: 'session-1',
-        notificationApiUrl: 'http://localhost/api/notifications',
         workspaceMode: 'folder',
       }),
       null,
@@ -119,8 +117,6 @@ describe('buildAgentStartupPrompt', () => {
   it('builds a prompt when the task description is present without attachments', () => {
     const prompt = buildAgentStartupPrompt({
       taskDescription: 'Fix the startup prompt',
-      sessionName: 'session-1',
-      notificationApiUrl: 'http://localhost/api/notifications',
       workspaceMode: 'single_worktree',
       gitRepos: [createGitRepoContext()],
       discoveredRepoRelativePaths: [''],
@@ -129,11 +125,13 @@ describe('buildAgentStartupPrompt', () => {
     assert.ok(prompt);
     assert.match(prompt!, /^# Instructions/m);
     assert.match(prompt!, /Git context: this project contains one Git repository at `\.`\./);
-    assert.match(prompt!, /For visual UI tasks, use the `agent-browser` skill/);
+    assert.match(prompt!, /For visual UI tasks, prioritize Chrome remote-debug MCP tooling to attach to the user's current browser session/);
+    assert.match(prompt!, /If that is unavailable, fall back to the `agent-browser` skill/);
     assert.match(prompt!, /For bugfix\/debugging tasks, use the `systematic-debugging` skill/);
     assert.match(prompt!, /you may use `npx skills` to discover and install additional skills at your discretion/);
     assert.match(prompt!, /# Task\n\nFix the startup prompt$/m);
     assert.doesNotMatch(prompt!, /Attachments:/);
+    assert.doesNotMatch(prompt!, /send a notification to the matching Palx session/i);
   });
 
   it('includes attachments only when a task description is present', () => {
@@ -141,17 +139,17 @@ describe('buildAgentStartupPrompt', () => {
       taskDescription: 'Review the attached spec',
       attachmentPaths: ['/tmp/spec.md', '/tmp/spec.md', ''],
       sessionMode: 'plan',
-      sessionName: 'session-2',
-      notificationApiUrl: 'http://localhost/api/notifications',
       workspaceMode: 'multi_repo_worktree',
       gitRepos: [createGitRepoContext({ relativeRepoPath: 'apps/api' })],
       discoveredRepoRelativePaths: ['apps/api', 'apps/web'],
     });
 
     assert.ok(prompt);
-    assert.match(prompt!, /Plan mode: inspect the relevant code first/);
+    assert.match(prompt!, /Plan mode: in your first response of this session/);
+    assert.match(prompt!, /After the user approves that initial plan/);
+    assert.match(prompt!, /small or trivial follow-up changes directly without re-requesting approval/);
+    assert.match(prompt!, /Request approval again only when a proposed change is substantial/);
     assert.match(prompt!, /Attachments:\n- \/tmp\/spec\.md/);
-    assert.match(prompt!, /send a notification to the matching Palx session by POSTing JSON to http:\/\/localhost\/api\/notifications/);
-    assert.match(prompt!, /Payload template: \{"sessionId":"session-2"/);
+    assert.doesNotMatch(prompt!, /send a notification to the matching Palx session/i);
   });
 });

@@ -165,7 +165,7 @@ export default function FileBrowser({ title, initialPath, onSelect, onCancel, ch
             onClick={handleGoUp}
             className="btn btn-sm btn-square btn-ghost"
             title="Go Up"
-            disabled={currentPath === '/' || !currentPath}
+            disabled={!currentPath || getDirName(currentPath) === currentPath}
           >
             <ArrowLeft className="w-4 h-4" />
           </button>

@@ -41,7 +41,7 @@ Primary references:
 ### API interfaces
 - Git APIs: [src/app/api/git](../../src/app/api/git).
 - Repo/settings/credentials APIs: [src/app/api/repos](../../src/app/api/repos), [src/app/api/settings/route.ts](../../src/app/api/settings/route.ts), [src/app/api/credentials/route.ts](../../src/app/api/credentials/route.ts).
-- Preview, notifications, FS launch: [src/app/api/preview-proxy/start/route.ts](../../src/app/api/preview-proxy/start/route.ts), [src/app/api/notifications/route.ts](../../src/app/api/notifications/route.ts), [src/app/api/fs/open/route.ts](../../src/app/api/fs/open/route.ts).
+- Preview, notifications, FS launch: [src/app/api/preview-proxy/start/route.ts](../../src/app/api/preview-proxy/start/route.ts), [src/app/api/notifications/socket/route.ts](../../src/app/api/notifications/socket/route.ts), [src/app/api/fs/open/route.ts](../../src/app/api/fs/open/route.ts).
 
 ### Domain/infrastructure libraries
 - Git domain: [src/lib/git.ts](../../src/lib/git.ts), [src/lib/git-log-options.ts](../../src/lib/git-log-options.ts).

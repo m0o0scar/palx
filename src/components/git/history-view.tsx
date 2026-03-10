@@ -23,8 +23,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { startTtydProcess } from '@/app/actions/git';
 import { listSessions, SessionMetadata } from '@/app/actions/session';
 import { subscribeToSessionsUpdated } from '@/lib/session-updates';
-import { quoteShellArg } from '@/lib/shell';
-import { buildTtydTerminalSrc } from '@/lib/terminal-session';
+import { buildShellSetDirectoryCommand, joinShellStatements, quoteShellArg } from '@/lib/shell';
+import { buildTtydTerminalSrc, type TerminalShellKind } from '@/lib/terminal-session';
 import {
   applyThemeToTerminalWindow,
   resolveShouldUseDarkTheme,
@@ -64,7 +64,6 @@ type ConflictAgentOperation =
     stashChanges: boolean;
   };
 
-const CONFLICT_AGENT_CODEX_ENV_PREFIX = 'NO_COLOR=1 FORCE_COLOR=0 TERM=xterm';
 const CONFLICT_AGENT_CODEX_FLAGS = '-c tui.theme="ansi" --sandbox danger-full-access --ask-for-approval on-request --search';
 
 function buildConflictAgentPrompt(operation: ConflictAgentOperation): string {
@@ -109,13 +108,28 @@ function buildConflictAgentPrompt(operation: ConflictAgentOperation): string {
   ].join('\n');
 }
 
-function buildConflictAgentCommand(repoPath: string, operation: ConflictAgentOperation): string {
+function buildConflictAgentCommand(
+  repoPath: string,
+  operation: ConflictAgentOperation,
+  shellKind: TerminalShellKind,
+): string {
   const prompt = buildConflictAgentPrompt(operation);
-  return [
-    `cd ${quoteShellArg(repoPath)}`,
+  if (shellKind === 'powershell') {
+    return joinShellStatements([
+      buildShellSetDirectoryCommand(repoPath, shellKind),
+      "$env:NO_COLOR = '1'",
+      "$env:FORCE_COLOR = '0'",
+      "$env:TERM = 'xterm'",
+      "if ($env:OPENAI_API_KEY) { $env:OPENAI_API_KEY | codex login --with-api-key; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }",
+      `codex ${CONFLICT_AGENT_CODEX_FLAGS} ${quoteShellArg(prompt, shellKind)}`,
+    ], shellKind);
+  }
+
+  return joinShellStatements([
+    buildShellSetDirectoryCommand(repoPath, shellKind),
     'if [ -n "$OPENAI_API_KEY" ]; then printenv OPENAI_API_KEY | codex login --with-api-key || exit 1; fi',
-    `${CONFLICT_AGENT_CODEX_ENV_PREFIX} codex ${CONFLICT_AGENT_CODEX_FLAGS} ${quoteShellArg(prompt)}`,
-  ].join(' && ');
+    `NO_COLOR=1 FORCE_COLOR=0 TERM=xterm codex ${CONFLICT_AGENT_CODEX_FLAGS} ${quoteShellArg(prompt, shellKind)}`,
+  ], shellKind);
 }
 
 function clampHistoryPanelHeight(height: number): number {
@@ -2020,8 +2034,14 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
       }
 
       const sessionName = `git-conflict-${Date.now()}`;
-      setConflictAgentTerminalSrc(buildTtydTerminalSrc(sessionName, 'terminal'));
-      setConflictAgentCommand(buildConflictAgentCommand(repoPath, operation));
+      const shellKind = ttydResult.shellKind === 'powershell' ? 'powershell' : 'posix';
+      const persistenceMode = ttydResult.persistenceMode === 'tmux' ? 'tmux' : 'shell';
+      setConflictAgentTerminalSrc(buildTtydTerminalSrc(sessionName, 'terminal', undefined, {
+        persistenceMode,
+        shellKind,
+        workingDirectory: repoPath,
+      }));
+      setConflictAgentCommand(buildConflictAgentCommand(repoPath, operation, shellKind));
       setConflictAgentOperation(operation);
       setIsConflictAgentModalOpen(true);
     } catch (error) {
@@ -4758,12 +4778,12 @@ export function HistoryView({ repoPath }: { repoPath: string }) {
                 )}
                 <span className={headerActionLabelClass}>Open Terminal</span>
               </button>
-              <button
-                className={headerActionButtonClass}
-                onClick={() => void handleOpenRepoFolder()}
-                disabled={isOpeningRepoFolder}
-                title="Open repository folder in Finder"
-              >
+                <button
+                  className={headerActionButtonClass}
+                  onClick={() => void handleOpenRepoFolder()}
+                  disabled={isOpeningRepoFolder}
+                  title="Open repository folder"
+                >
                 {isOpeningRepoFolder ? (
                   <span className="loading loading-spinner loading-xs"></span>
                 ) : (

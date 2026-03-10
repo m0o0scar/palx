@@ -32,7 +32,7 @@ System-facing behavior:
 
 ### Auth interfaces
 - Auth routes are handled by `@auth0/nextjs-auth0` middleware integration when required env vars are present ([src/lib/auth0.ts](../../../src/lib/auth0.ts), [src/proxy.ts](../../../src/proxy.ts)).
-- For unauthenticated API access, middleware returns `401` JSON except allowed notification ingress `POST /api/notifications`.
+- For unauthenticated API access, middleware returns `401` JSON for protected API routes.
 
 ### Credential APIs
 - `GET /api/credentials`: list metadata.

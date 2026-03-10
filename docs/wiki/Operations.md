@@ -137,4 +137,4 @@ Legacy note:
 
 ### Notifications not arriving
 - Ensure session page has active socket (`GET /api/notifications/socket`) and browser notification permission is granted.
-- `POST /api/notifications` returns `delivered` count; `0` means no active listener for that session.
+- Session notifications are emitted from Palx-managed agent runtime transitions; no external notification ingress exists.
