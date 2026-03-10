@@ -3,7 +3,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import simpleGit from 'simple-git';
 import { getErrorMessage } from '../../lib/error-utils';
 import { removeWorktree, terminateSessionTerminalSessions } from './git';
@@ -62,6 +62,8 @@ export type SessionLaunchContext = {
   startupScript?: string;
   attachmentPaths?: string[];
   attachmentNames?: string[];
+  projectRepoPaths?: string[];
+  projectRepoRelativePaths?: string[];
   agentProvider?: AgentProvider;
   model?: string;
   reasoningEffort?: ReasoningEffort;
@@ -111,6 +113,40 @@ export type SessionCreateGitContextInput = {
   baseBranch?: string;
 };
 
+export type SessionCreateMetadata = {
+  agent: string;
+  agentProvider?: AgentProvider;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  title?: string;
+  devServerScript?: string;
+  preparedWorkspaceId?: string;
+};
+
+export type SessionCreateResult = {
+  success: boolean;
+  sessionName?: string;
+  workspacePath?: string;
+  workspaceMode?: SessionWorkspaceMode;
+  activeRepoPath?: string;
+  gitRepos?: SessionGitRepoContext[];
+  branchName?: string;
+  worktreePath?: string;
+  error?: string;
+};
+
+export type SessionWorkspacePreparation = {
+  preparationId: string;
+  sessionName: string;
+  projectPath: string;
+  contextFingerprint: string;
+  workspacePath: string;
+  workspaceMode: SessionWorkspaceMode;
+  activeRepoPath?: string;
+  gitRepos: SessionGitRepoContext[];
+  expiresAt: string;
+};
+
 type SessionRow = {
   session_name: string;
   project_path: string | null;
@@ -152,12 +188,29 @@ type SessionLaunchContextRow = {
   startup_script: string | null;
   attachment_paths_json: string | null;
   attachment_names_json: string | null;
+  project_repo_paths_json: string | null;
+  project_repo_relative_paths_json: string | null;
   agent_provider: string | null;
   model: string | null;
   reasoning_effort: string | null;
   session_mode: string | null;
   is_resume: number | null;
   timestamp: string;
+};
+
+type SessionWorkspacePreparationRow = {
+  preparation_id: string;
+  project_path: string;
+  context_fingerprint: string;
+  session_name: string;
+  payload_json: string;
+  status: string;
+  cancel_requested: number;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+  released_at: string | null;
 };
 
 type SessionAgentHistoryRow = {
@@ -293,6 +346,8 @@ function rowToSessionLaunchContext(row: SessionLaunchContextRow): SessionLaunchC
     startupScript: row.startup_script ?? undefined,
     attachmentPaths: parseStringArray(row.attachment_paths_json),
     attachmentNames: parseStringArray(row.attachment_names_json),
+    projectRepoPaths: parseStringArray(row.project_repo_paths_json),
+    projectRepoRelativePaths: parseStringArray(row.project_repo_relative_paths_json),
     agentProvider,
     model: row.model ?? undefined,
     reasoningEffort: normalizeProviderReasoningEffort(agentProvider, row.reasoning_effort),
@@ -363,6 +418,126 @@ function hasOverlappingRepoRoots(repoPaths: string[]): boolean {
     }
   }
   return false;
+}
+
+const SESSION_WORKSPACE_PREPARATION_STATUS_READY = 'ready';
+const SESSION_WORKSPACE_PREPARATION_STATUS_CONSUMED = 'consumed';
+const SESSION_WORKSPACE_PREPARATION_STATUS_RELEASED = 'released';
+const SESSION_WORKSPACE_PREPARATION_TTL_MS = 15 * 60 * 1000;
+
+type ProvisionedSessionWorkspace = {
+  sessionName: string;
+  projectPath: string;
+  workspacePath: string;
+  workspaceMode: SessionWorkspaceMode;
+  activeRepoPath?: string;
+  gitRepos: SessionGitRepoContext[];
+  contextFingerprint: string;
+};
+
+type SessionWorkspacePreparationPayload = {
+  sessionName: string;
+  projectPath: string;
+  workspacePath: string;
+  workspaceMode: SessionWorkspaceMode;
+  activeRepoPath?: string;
+  gitRepos: SessionGitRepoContext[];
+  contextFingerprint: string;
+};
+
+type ResolvedSessionWorkspaceContextInput = {
+  normalizedProjectPath: string;
+  discoveredRepoPaths: string[];
+  hasOverlap: boolean;
+  normalizedContexts: SessionCreateGitContextInput[];
+  contextFingerprint: string;
+};
+
+function toCanonicalGitContexts(
+  contexts: SessionCreateGitContextInput[],
+): Array<{ repoPath: string; baseBranch: string }> {
+  return contexts
+    .map((context) => ({
+      repoPath: normalizePath(context.repoPath),
+      baseBranch: context.baseBranch?.trim() || '',
+    }))
+    .sort((left, right) => left.repoPath.localeCompare(right.repoPath));
+}
+
+function buildSessionWorkspaceContextFingerprint(
+  projectPath: string,
+  contexts: SessionCreateGitContextInput[],
+): string {
+  const normalizedProjectPath = normalizePath(projectPath);
+  const canonicalContexts = toCanonicalGitContexts(contexts);
+  return createHash('sha1')
+    .update(JSON.stringify({
+      projectPath: normalizedProjectPath,
+      contexts: canonicalContexts,
+    }))
+    .digest('hex');
+}
+
+function toSessionWorkspacePreparationPayload(
+  provision: ProvisionedSessionWorkspace,
+): SessionWorkspacePreparationPayload {
+  return {
+    sessionName: provision.sessionName,
+    projectPath: provision.projectPath,
+    workspacePath: provision.workspacePath,
+    workspaceMode: provision.workspaceMode,
+    activeRepoPath: provision.activeRepoPath,
+    gitRepos: provision.gitRepos,
+    contextFingerprint: provision.contextFingerprint,
+  };
+}
+
+function parseSessionWorkspacePreparationPayload(
+  payloadJson: string,
+): SessionWorkspacePreparationPayload | null {
+  try {
+    const parsed = JSON.parse(payloadJson) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const payload = parsed as Partial<SessionWorkspacePreparationPayload>;
+    if (
+      typeof payload.sessionName !== 'string'
+      || typeof payload.projectPath !== 'string'
+      || typeof payload.workspacePath !== 'string'
+      || typeof payload.workspaceMode !== 'string'
+      || !Array.isArray(payload.gitRepos)
+      || typeof payload.contextFingerprint !== 'string'
+    ) {
+      return null;
+    }
+
+    const normalizedWorkspaceMode = normalizeSessionWorkspaceMode(payload.workspaceMode);
+    const gitRepos = payload.gitRepos
+      .filter((entry): entry is SessionGitRepoContext => Boolean(entry) && typeof entry === 'object')
+      .map((entry) => ({
+        sourceRepoPath: normalizeOptionalText(entry.sourceRepoPath) || '',
+        relativeRepoPath: normalizeOptionalText(entry.relativeRepoPath) || '',
+        worktreePath: normalizeOptionalText(entry.worktreePath) || '',
+        branchName: normalizeOptionalText(entry.branchName) || '',
+        baseBranch: normalizeOptionalText(entry.baseBranch),
+      }))
+      .filter((entry) => (
+        Boolean(entry.sourceRepoPath)
+        && Boolean(entry.worktreePath)
+        && Boolean(entry.branchName)
+      ));
+
+    return {
+      sessionName: payload.sessionName.trim(),
+      projectPath: normalizePath(payload.projectPath),
+      workspacePath: normalizePath(payload.workspacePath),
+      workspaceMode: normalizedWorkspaceMode,
+      activeRepoPath: normalizeOptionalText(payload.activeRepoPath),
+      gitRepos,
+      contextFingerprint: payload.contextFingerprint.trim(),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function buildSessionName(): string {
@@ -451,6 +626,48 @@ function normalizeGitContextInput(
   });
 }
 
+function resolveRequestedGitContexts(
+  projectPath: string,
+  gitContextsOrBaseBranch: string | SessionCreateGitContextInput[],
+): SessionCreateGitContextInput[] {
+  return typeof gitContextsOrBaseBranch === 'string'
+    ? [{ repoPath: projectPath, baseBranch: gitContextsOrBaseBranch }]
+    : gitContextsOrBaseBranch;
+}
+
+async function resolveSessionWorkspaceContextInput(
+  projectPath: string,
+  gitContextsOrBaseBranch: string | SessionCreateGitContextInput[],
+): Promise<ResolvedSessionWorkspaceContextInput> {
+  const normalizedProjectPath = normalizePath(projectPath);
+  const projectStats = await fs.stat(normalizedProjectPath);
+  if (!projectStats.isDirectory()) {
+    throw new Error('Project path must be a directory.');
+  }
+
+  const discovery = await discoverProjectGitRepos(normalizedProjectPath);
+  const discoveredRepoPaths = discovery.repos.map((repo) => repo.repoPath);
+  const hasOverlap = hasOverlappingRepoRoots(discoveredRepoPaths);
+  const requestedContexts = resolveRequestedGitContexts(normalizedProjectPath, gitContextsOrBaseBranch);
+  const normalizedContexts = normalizeGitContextInput(
+    normalizedProjectPath,
+    discoveredRepoPaths,
+    requestedContexts,
+  );
+  const contextFingerprint = buildSessionWorkspaceContextFingerprint(
+    normalizedProjectPath,
+    normalizedContexts,
+  );
+
+  return {
+    normalizedProjectPath,
+    discoveredRepoPaths,
+    hasOverlap,
+    normalizedContexts,
+    contextFingerprint,
+  };
+}
+
 async function createSingleRepoSession(
   projectPath: string,
   sessionName: string,
@@ -520,6 +737,209 @@ async function createMultiRepoSession(
     activeRepoPath: contexts[0]?.repoPath || '',
     gitRepos,
   };
+}
+
+async function provisionSessionWorkspace(
+  projectPath: string,
+  gitContextsOrBaseBranch: string | SessionCreateGitContextInput[],
+  options: { sessionName?: string; resolvedInput?: ResolvedSessionWorkspaceContextInput } = {},
+): Promise<ProvisionedSessionWorkspace> {
+  const resolvedInput = options.resolvedInput
+    ?? await resolveSessionWorkspaceContextInput(projectPath, gitContextsOrBaseBranch);
+
+  const sessionName = normalizeOptionalText(options.sessionName) || buildSessionName();
+  let workspaceMode: SessionWorkspaceMode = 'folder';
+  let workspacePath = resolvedInput.normalizedProjectPath;
+  let activeRepoPath: string | undefined;
+  let gitRepos: SessionGitRepoContext[] = [];
+
+  if (resolvedInput.discoveredRepoPaths.length === 1 && !resolvedInput.hasOverlap) {
+    workspaceMode = 'single_worktree';
+    const singleResult = await createSingleRepoSession(
+      resolvedInput.normalizedProjectPath,
+      sessionName,
+      resolvedInput.normalizedContexts[0] ?? { repoPath: resolvedInput.discoveredRepoPaths[0] },
+    );
+    workspacePath = singleResult.workspacePath;
+    activeRepoPath = singleResult.activeRepoPath;
+    gitRepos = singleResult.gitRepos;
+  } else if (resolvedInput.discoveredRepoPaths.length > 1 && !resolvedInput.hasOverlap) {
+    workspaceMode = 'multi_repo_worktree';
+    const multiResult = await createMultiRepoSession(
+      resolvedInput.normalizedProjectPath,
+      sessionName,
+      resolvedInput.normalizedContexts,
+    );
+    workspacePath = multiResult.workspacePath;
+    activeRepoPath = multiResult.activeRepoPath;
+    gitRepos = multiResult.gitRepos;
+  }
+
+  return {
+    sessionName,
+    projectPath: resolvedInput.normalizedProjectPath,
+    workspacePath,
+    workspaceMode,
+    activeRepoPath,
+    gitRepos,
+    contextFingerprint: resolvedInput.contextFingerprint,
+  };
+}
+
+async function persistSessionMetadataFromProvision(
+  provision: ProvisionedSessionWorkspace,
+  metadata: SessionCreateMetadata,
+): Promise<SessionMetadata> {
+  const sessionData: SessionMetadata = {
+    sessionName: provision.sessionName,
+    projectPath: provision.projectPath,
+    workspacePath: provision.workspacePath,
+    workspaceMode: provision.workspaceMode,
+    activeRepoPath: provision.activeRepoPath,
+    gitRepos: provision.gitRepos,
+    agent: metadata.agent,
+    agentProvider: metadata.agentProvider ?? (metadata.agent as AgentProvider),
+    model: metadata.model,
+    reasoningEffort: metadata.reasoningEffort,
+    title: metadata.title,
+    devServerScript: metadata.devServerScript,
+    initialized: false,
+    timestamp: new Date().toISOString(),
+  };
+
+  await saveSessionMetadata(sessionData);
+  try {
+    await publishSessionListUpdated();
+  } catch (notificationError) {
+    console.warn('Failed to publish session list update after create:', notificationError);
+  }
+
+  return sessionData;
+}
+
+function toSessionCreateResult(metadata: SessionMetadata): SessionCreateResult {
+  const compatibility = toCompatibilityFields(metadata);
+  return {
+    success: true,
+    sessionName: metadata.sessionName,
+    workspacePath: metadata.workspacePath,
+    workspaceMode: metadata.workspaceMode,
+    activeRepoPath: metadata.activeRepoPath,
+    gitRepos: metadata.gitRepos,
+    branchName: compatibility.branchName,
+    worktreePath: compatibility.worktreePath,
+  };
+}
+
+async function cleanupWorkspaceRoot(
+  workspacePath: string,
+  workspaceMode: SessionWorkspaceMode,
+): Promise<void> {
+  if (workspaceMode === 'folder') return;
+
+  const sessionRootPath = path.dirname(workspacePath);
+  if (sessionRootPath && sessionRootPath.startsWith(path.join(os.homedir(), '.viba', 'projects'))) {
+    try {
+      await fs.rm(sessionRootPath, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors.
+    }
+  }
+}
+
+async function cleanupProvisionedSessionWorkspace(
+  provision: Pick<ProvisionedSessionWorkspace, 'workspaceMode' | 'workspacePath' | 'gitRepos'>,
+): Promise<void> {
+  if (provision.workspaceMode === 'single_worktree' || provision.workspaceMode === 'multi_repo_worktree') {
+    for (const gitRepo of provision.gitRepos) {
+      await removeWorktree(gitRepo.sourceRepoPath, gitRepo.worktreePath, gitRepo.branchName);
+    }
+  }
+
+  await cleanupWorkspaceRoot(provision.workspacePath, provision.workspaceMode);
+}
+
+function getPreparationExpiryTimestamp(
+  now = Date.now(),
+): string {
+  return new Date(now + SESSION_WORKSPACE_PREPARATION_TTL_MS).toISOString();
+}
+
+function rowToSessionWorkspacePreparation(
+  row: SessionWorkspacePreparationRow,
+): (SessionWorkspacePreparation & { status: string; cancelRequested: boolean }) | null {
+  const payload = parseSessionWorkspacePreparationPayload(row.payload_json);
+  if (!payload) return null;
+
+  return {
+    preparationId: row.preparation_id,
+    sessionName: payload.sessionName,
+    projectPath: payload.projectPath,
+    contextFingerprint: row.context_fingerprint,
+    workspacePath: payload.workspacePath,
+    workspaceMode: payload.workspaceMode,
+    activeRepoPath: payload.activeRepoPath,
+    gitRepos: payload.gitRepos,
+    expiresAt: row.expires_at,
+    status: row.status,
+    cancelRequested: row.cancel_requested === 1,
+  };
+}
+
+async function sweepExpiredSessionWorkspacePreparations(): Promise<void> {
+  const db = getLocalDb();
+  const nowIso = new Date().toISOString();
+  const expiredRows = db.prepare(`
+    SELECT
+      preparation_id, project_path, context_fingerprint, session_name, payload_json,
+      status, cancel_requested, created_at, updated_at, expires_at, consumed_at, released_at
+    FROM session_workspace_preparations
+    WHERE
+      status = @readyStatus
+      AND expires_at <= @now
+  `).all({
+    readyStatus: SESSION_WORKSPACE_PREPARATION_STATUS_READY,
+    now: nowIso,
+  }) as SessionWorkspacePreparationRow[];
+
+  for (const row of expiredRows) {
+    const payload = parseSessionWorkspacePreparationPayload(row.payload_json);
+    if (payload) {
+      try {
+        await cleanupProvisionedSessionWorkspace({
+          workspaceMode: payload.workspaceMode,
+          workspacePath: payload.workspacePath,
+          gitRepos: payload.gitRepos,
+        });
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup expired session workspace preparation:', cleanupError);
+      }
+    }
+
+    db.prepare(`
+      UPDATE session_workspace_preparations
+      SET
+        status = @releasedStatus,
+        updated_at = @now,
+        released_at = COALESCE(released_at, @now)
+      WHERE preparation_id = @preparationId
+    `).run({
+      releasedStatus: SESSION_WORKSPACE_PREPARATION_STATUS_RELEASED,
+      now: nowIso,
+      preparationId: row.preparation_id,
+    });
+  }
+
+  db.prepare(`
+    DELETE FROM session_workspace_preparations
+    WHERE
+      status IN (@consumedStatus, @releasedStatus)
+      AND updated_at <= @cutoff
+  `).run({
+    consumedStatus: SESSION_WORKSPACE_PREPARATION_STATUS_CONSUMED,
+    releasedStatus: SESSION_WORKSPACE_PREPARATION_STATUS_RELEASED,
+    cutoff: new Date(Date.now() - (24 * 60 * 60 * 1000)).toISOString(),
+  });
 }
 
 async function getSessionPromptsDir(): Promise<string> {
@@ -628,12 +1048,12 @@ export async function saveSessionLaunchContext(
     db.prepare(`
       INSERT OR REPLACE INTO session_launch_contexts (
         session_name, title, initial_message, raw_initial_message, startup_script,
-        attachment_paths_json, attachment_names_json, agent_provider, model, reasoning_effort,
-        session_mode, is_resume, timestamp
+        attachment_paths_json, attachment_names_json, project_repo_paths_json, project_repo_relative_paths_json,
+        agent_provider, model, reasoning_effort, session_mode, is_resume, timestamp
       ) VALUES (
         @sessionName, @title, @initialMessage, @rawInitialMessage, @startupScript,
-        @attachmentPathsJson, @attachmentNamesJson, @agentProvider, @model, @reasoningEffort,
-        @sessionMode, @isResume, @timestamp
+        @attachmentPathsJson, @attachmentNamesJson, @projectRepoPathsJson, @projectRepoRelativePathsJson,
+        @agentProvider, @model, @reasoningEffort, @sessionMode, @isResume, @timestamp
       )
     `).run({
       sessionName: contextData.sessionName,
@@ -643,6 +1063,10 @@ export async function saveSessionLaunchContext(
       startupScript: contextData.startupScript ?? null,
       attachmentPathsJson: contextData.attachmentPaths ? JSON.stringify(contextData.attachmentPaths) : null,
       attachmentNamesJson: contextData.attachmentNames ? JSON.stringify(contextData.attachmentNames) : null,
+      projectRepoPathsJson: contextData.projectRepoPaths ? JSON.stringify(contextData.projectRepoPaths) : null,
+      projectRepoRelativePathsJson: contextData.projectRepoRelativePaths
+        ? JSON.stringify(contextData.projectRepoRelativePaths)
+        : null,
       agentProvider: agentProvider ?? null,
       model: contextData.model ?? null,
       reasoningEffort: normalizeNullableProviderReasoningEffort(
@@ -668,8 +1092,8 @@ export async function consumeSessionLaunchContext(
     const row = db.prepare(`
       SELECT
         session_name, title, initial_message, raw_initial_message, startup_script,
-        attachment_paths_json, attachment_names_json, agent_provider, model, reasoning_effort,
-        session_mode, is_resume, timestamp
+        attachment_paths_json, attachment_names_json, project_repo_paths_json, project_repo_relative_paths_json,
+        agent_provider, model, reasoning_effort, session_mode, is_resume, timestamp
       FROM session_launch_contexts
       WHERE session_name = ?
     `).get(sessionName) as SessionLaunchContextRow | undefined;
@@ -681,7 +1105,7 @@ export async function consumeSessionLaunchContext(
   }
 }
 
-async function getSessionLaunchContext(
+export async function readSessionLaunchContext(
   sessionName: string
 ): Promise<{ success: boolean; context?: SessionLaunchContext; error?: string }> {
   try {
@@ -689,8 +1113,8 @@ async function getSessionLaunchContext(
     const row = db.prepare(`
       SELECT
         session_name, title, initial_message, raw_initial_message, startup_script,
-        attachment_paths_json, attachment_names_json, agent_provider, model, reasoning_effort,
-        session_mode, is_resume, timestamp
+        attachment_paths_json, attachment_names_json, project_repo_paths_json, project_repo_relative_paths_json,
+        agent_provider, model, reasoning_effort, session_mode, is_resume, timestamp
       FROM session_launch_contexts
       WHERE session_name = ?
     `).get(sessionName) as SessionLaunchContextRow | undefined;
@@ -710,7 +1134,7 @@ export async function getSessionPrefillContext(
     return { success: false, error: 'Session metadata not found' };
   }
 
-  const launchContextResult = await getSessionLaunchContext(sessionName);
+  const launchContextResult = await readSessionLaunchContext(sessionName);
   if (!launchContextResult.success) {
     return { success: false, error: launchContextResult.error || 'Failed to load session launch context' };
   }
@@ -1174,113 +1598,264 @@ export async function clearSessionAgentHistory(
   }
 }
 
-export async function createSession(
+async function getSessionWorkspacePreparationRow(
+  preparationId: string,
+): Promise<SessionWorkspacePreparationRow | null> {
+  const normalizedPreparationId = normalizeOptionalText(preparationId);
+  if (!normalizedPreparationId) return null;
+
+  const db = getLocalDb();
+  const row = db.prepare(`
+    SELECT
+      preparation_id, project_path, context_fingerprint, session_name, payload_json,
+      status, cancel_requested, created_at, updated_at, expires_at, consumed_at, released_at
+    FROM session_workspace_preparations
+    WHERE preparation_id = ?
+  `).get(normalizedPreparationId) as SessionWorkspacePreparationRow | undefined;
+  return row ?? null;
+}
+
+export async function prepareSessionWorkspace(
   projectPath: string,
   gitContextsOrBaseBranch: string | SessionCreateGitContextInput[],
-  metadata: {
-    agent: string;
-    agentProvider?: AgentProvider;
-    model: string;
-    reasoningEffort?: ReasoningEffort;
-    title?: string;
-    devServerScript?: string;
+): Promise<{ success: boolean; preparation?: SessionWorkspacePreparation; error?: string }> {
+  try {
+    await sweepExpiredSessionWorkspacePreparations();
+
+    const resolvedInput = await resolveSessionWorkspaceContextInput(projectPath, gitContextsOrBaseBranch);
+    const db = getLocalDb();
+    const nowIso = new Date().toISOString();
+    const existing = db.prepare(`
+      SELECT
+        preparation_id, project_path, context_fingerprint, session_name, payload_json,
+        status, cancel_requested, created_at, updated_at, expires_at, consumed_at, released_at
+      FROM session_workspace_preparations
+      WHERE
+        project_path = @projectPath
+        AND context_fingerprint = @contextFingerprint
+        AND status = @readyStatus
+        AND expires_at > @now
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get({
+      projectPath: resolvedInput.normalizedProjectPath,
+      contextFingerprint: resolvedInput.contextFingerprint,
+      readyStatus: SESSION_WORKSPACE_PREPARATION_STATUS_READY,
+      now: nowIso,
+    }) as SessionWorkspacePreparationRow | undefined;
+
+    if (existing) {
+      const parsedExisting = rowToSessionWorkspacePreparation(existing);
+      if (parsedExisting) {
+        return { success: true, preparation: parsedExisting };
+      }
+    }
+
+    const provision = await provisionSessionWorkspace(projectPath, gitContextsOrBaseBranch, {
+      resolvedInput,
+      sessionName: buildSessionName(),
+    });
+    const preparationId = randomUUID();
+    const expiresAt = getPreparationExpiryTimestamp();
+    const payloadJson = JSON.stringify(toSessionWorkspacePreparationPayload(provision));
+
+    db.prepare(`
+      INSERT INTO session_workspace_preparations (
+        preparation_id, project_path, context_fingerprint, session_name, payload_json,
+        status, cancel_requested, created_at, updated_at, expires_at, consumed_at, released_at
+      ) VALUES (
+        @preparationId, @projectPath, @contextFingerprint, @sessionName, @payloadJson,
+        @status, 0, @now, @now, @expiresAt, NULL, NULL
+      )
+    `).run({
+      preparationId,
+      projectPath: provision.projectPath,
+      contextFingerprint: provision.contextFingerprint,
+      sessionName: provision.sessionName,
+      payloadJson,
+      status: SESSION_WORKSPACE_PREPARATION_STATUS_READY,
+      now: nowIso,
+      expiresAt,
+    });
+
+    return {
+      success: true,
+      preparation: {
+        preparationId,
+        sessionName: provision.sessionName,
+        projectPath: provision.projectPath,
+        contextFingerprint: provision.contextFingerprint,
+        workspacePath: provision.workspacePath,
+        workspaceMode: provision.workspaceMode,
+        activeRepoPath: provision.activeRepoPath,
+        gitRepos: provision.gitRepos,
+        expiresAt,
+      },
+    };
+  } catch (e: unknown) {
+    console.error('Failed to prepare session workspace:', e);
+    return { success: false, error: getErrorMessage(e) };
   }
+}
+
+export async function releasePreparedSessionWorkspace(
+  preparationId: string,
+): Promise<{ success: boolean; released: boolean; error?: string }> {
+  try {
+    await sweepExpiredSessionWorkspacePreparations();
+
+    const row = await getSessionWorkspacePreparationRow(preparationId);
+    if (!row) {
+      return { success: true, released: false };
+    }
+
+    if (row.status !== SESSION_WORKSPACE_PREPARATION_STATUS_READY) {
+      return { success: true, released: false };
+    }
+
+    const payload = parseSessionWorkspacePreparationPayload(row.payload_json);
+    if (payload) {
+      await cleanupProvisionedSessionWorkspace({
+        workspaceMode: payload.workspaceMode,
+        workspacePath: payload.workspacePath,
+        gitRepos: payload.gitRepos,
+      });
+    }
+
+    const db = getLocalDb();
+    const nowIso = new Date().toISOString();
+    db.prepare(`
+      UPDATE session_workspace_preparations
+      SET
+        status = @releasedStatus,
+        updated_at = @now,
+        released_at = COALESCE(released_at, @now)
+      WHERE
+        preparation_id = @preparationId
+        AND status = @readyStatus
+    `).run({
+      releasedStatus: SESSION_WORKSPACE_PREPARATION_STATUS_RELEASED,
+      now: nowIso,
+      preparationId: row.preparation_id,
+      readyStatus: SESSION_WORKSPACE_PREPARATION_STATUS_READY,
+    });
+
+    return { success: true, released: true };
+  } catch (e: unknown) {
+    console.error('Failed to release prepared session workspace:', e);
+    return { success: false, released: false, error: getErrorMessage(e) };
+  }
+}
+
+export async function consumePreparedSessionWorkspace(
+  preparationId: string,
+  projectPath: string,
+  gitContextsOrBaseBranch: string | SessionCreateGitContextInput[],
 ): Promise<{
   success: boolean;
-  sessionName?: string;
-  workspacePath?: string;
-  workspaceMode?: SessionWorkspaceMode;
-  activeRepoPath?: string;
-  gitRepos?: SessionGitRepoContext[];
-  branchName?: string;
-  worktreePath?: string;
+  consumed: boolean;
+  preparation?: SessionWorkspacePreparation;
+  mismatch?: boolean;
   error?: string;
 }> {
   try {
-    const normalizedProjectPath = normalizePath(projectPath);
-    const projectStats = await fs.stat(normalizedProjectPath);
-    if (!projectStats.isDirectory()) {
-      return { success: false, error: 'Project path must be a directory.' };
+    await sweepExpiredSessionWorkspacePreparations();
+
+    const row = await getSessionWorkspacePreparationRow(preparationId);
+    if (!row) {
+      return { success: true, consumed: false };
     }
 
-    const discovery = await discoverProjectGitRepos(normalizedProjectPath);
-    const discoveredRepoPaths = discovery.repos.map((repo) => repo.repoPath);
-    const hasOverlap = hasOverlappingRepoRoots(discoveredRepoPaths);
-
-    const requestedContexts = typeof gitContextsOrBaseBranch === 'string'
-      ? [{ repoPath: normalizedProjectPath, baseBranch: gitContextsOrBaseBranch }]
-      : gitContextsOrBaseBranch;
-
-    const normalizedContexts = normalizeGitContextInput(normalizedProjectPath, discoveredRepoPaths, requestedContexts);
-    const sessionName = buildSessionName();
-
-    let workspaceMode: SessionWorkspaceMode = 'folder';
-    let workspacePath = normalizedProjectPath;
-    let activeRepoPath: string | undefined;
-    let gitRepos: SessionGitRepoContext[] = [];
-
-    if (discoveredRepoPaths.length === 1 && !hasOverlap) {
-      workspaceMode = 'single_worktree';
-      const singleResult = await createSingleRepoSession(
-        normalizedProjectPath,
-        sessionName,
-        normalizedContexts[0] ?? { repoPath: discoveredRepoPaths[0] },
-      );
-      workspacePath = singleResult.workspacePath;
-      activeRepoPath = singleResult.activeRepoPath;
-      gitRepos = singleResult.gitRepos;
-    } else if (discoveredRepoPaths.length > 1 && !hasOverlap) {
-      workspaceMode = 'multi_repo_worktree';
-      const multiResult = await createMultiRepoSession(
-        normalizedProjectPath,
-        sessionName,
-        normalizedContexts,
-      );
-      workspacePath = multiResult.workspacePath;
-      activeRepoPath = multiResult.activeRepoPath;
-      gitRepos = multiResult.gitRepos;
-    } else {
-      workspaceMode = 'folder';
-      workspacePath = normalizedProjectPath;
-      activeRepoPath = undefined;
-      gitRepos = [];
+    if (row.status !== SESSION_WORKSPACE_PREPARATION_STATUS_READY) {
+      return { success: true, consumed: false };
     }
 
-    const sessionData: SessionMetadata = {
-      sessionName,
-      projectPath: normalizedProjectPath,
-      workspacePath,
-      workspaceMode,
-      activeRepoPath,
-      gitRepos,
-      agent: metadata.agent,
-      agentProvider: metadata.agentProvider ?? (metadata.agent as AgentProvider),
-      model: metadata.model,
-      reasoningEffort: metadata.reasoningEffort,
-      title: metadata.title,
-      devServerScript: metadata.devServerScript,
-      initialized: false,
-      timestamp: new Date().toISOString(),
-    };
-
-    await saveSessionMetadata(sessionData);
-    try {
-      await publishSessionListUpdated();
-    } catch (notificationError) {
-      console.warn('Failed to publish session list update after create:', notificationError);
+    const parsedPreparation = rowToSessionWorkspacePreparation(row);
+    if (!parsedPreparation) {
+      return { success: false, consumed: false, error: 'Prepared workspace payload is invalid.' };
     }
 
-    const compatibility = toCompatibilityFields(sessionData);
+    const resolvedInput = await resolveSessionWorkspaceContextInput(projectPath, gitContextsOrBaseBranch);
+    if (
+      parsedPreparation.projectPath !== resolvedInput.normalizedProjectPath
+      || parsedPreparation.contextFingerprint !== resolvedInput.contextFingerprint
+    ) {
+      return { success: true, consumed: false, mismatch: true };
+    }
+
+    const db = getLocalDb();
+    const nowIso = new Date().toISOString();
+    const consumeResult = db.prepare(`
+      UPDATE session_workspace_preparations
+      SET
+        status = @consumedStatus,
+        updated_at = @now,
+        consumed_at = COALESCE(consumed_at, @now)
+      WHERE
+        preparation_id = @preparationId
+        AND status = @readyStatus
+    `).run({
+      consumedStatus: SESSION_WORKSPACE_PREPARATION_STATUS_CONSUMED,
+      now: nowIso,
+      preparationId: row.preparation_id,
+      readyStatus: SESSION_WORKSPACE_PREPARATION_STATUS_READY,
+    });
+
+    if (consumeResult.changes === 0) {
+      return { success: true, consumed: false };
+    }
+
     return {
       success: true,
-      sessionName,
-      workspacePath,
-      workspaceMode,
-      activeRepoPath,
-      gitRepos,
-      branchName: compatibility.branchName,
-      worktreePath: compatibility.worktreePath,
+      consumed: true,
+      preparation: parsedPreparation,
     };
+  } catch (e: unknown) {
+    console.error('Failed to consume prepared session workspace:', e);
+    return { success: false, consumed: false, error: getErrorMessage(e) };
+  }
+}
+
+export async function createSession(
+  projectPath: string,
+  gitContextsOrBaseBranch: string | SessionCreateGitContextInput[],
+  metadata: SessionCreateMetadata,
+): Promise<SessionCreateResult> {
+  try {
+    await sweepExpiredSessionWorkspacePreparations();
+
+    let provision: ProvisionedSessionWorkspace | null = null;
+    const normalizedPreparationId = normalizeOptionalText(metadata.preparedWorkspaceId);
+    if (normalizedPreparationId) {
+      const consumedPreparedWorkspace = await consumePreparedSessionWorkspace(
+        normalizedPreparationId,
+        projectPath,
+        gitContextsOrBaseBranch,
+      );
+      if (!consumedPreparedWorkspace.success) {
+        console.warn(
+          `Failed to consume prepared workspace ${normalizedPreparationId}: ${consumedPreparedWorkspace.error || 'unknown error'}`,
+        );
+      } else if (consumedPreparedWorkspace.consumed && consumedPreparedWorkspace.preparation) {
+        const prepared = consumedPreparedWorkspace.preparation;
+        provision = {
+          sessionName: prepared.sessionName,
+          projectPath: prepared.projectPath,
+          workspacePath: prepared.workspacePath,
+          workspaceMode: prepared.workspaceMode,
+          activeRepoPath: prepared.activeRepoPath,
+          gitRepos: prepared.gitRepos,
+          contextFingerprint: prepared.contextFingerprint,
+        };
+      }
+    }
+
+    if (!provision) {
+      provision = await provisionSessionWorkspace(projectPath, gitContextsOrBaseBranch);
+    }
+
+    const sessionData = await persistSessionMetadataFromProvision(provision, metadata);
+    return toSessionCreateResult(sessionData);
   } catch (e: unknown) {
     console.error('Failed to create session:', e);
     return { success: false, error: getErrorMessage(e) };
@@ -1297,16 +1872,7 @@ export async function markSessionInitialized(sessionName: string): Promise<void>
 }
 
 async function cleanupSessionWorkspace(metadata: SessionMetadata): Promise<void> {
-  if (metadata.workspaceMode === 'folder') return;
-
-  const sessionRootPath = path.dirname(metadata.workspacePath);
-  if (sessionRootPath && sessionRootPath.startsWith(path.join(os.homedir(), '.viba', 'projects'))) {
-    try {
-      await fs.rm(sessionRootPath, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors.
-    }
-  }
+  await cleanupWorkspaceRoot(metadata.workspacePath, metadata.workspaceMode);
 }
 
 export async function deleteSession(sessionName: string): Promise<{ success: boolean; error?: string }> {

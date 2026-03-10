@@ -46,31 +46,15 @@ export async function getSessionPageBootstrap(sessionId: string): Promise<Sessio
     }
 
     const isFirstOpen = metadata.initialized === false;
-    const [discoveryResult, repoDisplayName, iconResult, launchContextResult] = await Promise.all([
-        discoverProjectGitRepos(metadata.projectPath).catch(() => null),
+    const [repoDisplayName, iconResult, launchContextResult] = await Promise.all([
         getProjectAlias(metadata.projectPath),
         resolveRepoCardIcon(metadata.projectPath).catch(() => ({ success: false as const, iconPath: null })),
         consumeSessionLaunchContext(sessionId),
     ]);
 
-    const terminalRepoPaths = resolveSessionTerminalRepoPaths({
-        sessionRepoPaths: metadata.gitRepos.map((repo) => repo.sourceRepoPath),
-        discoveredProjectRepoPaths: discoveryResult?.repos.map((repo) => repo.repoPath) ?? null,
-        activeRepoPath: metadata.activeRepoPath,
-        projectPath: metadata.projectPath,
-    });
-
-    const terminalSources = await getSessionTerminalSources(
-        metadata.sessionName,
-        terminalRepoPaths,
-        metadata.agent,
-    );
-
-    const projectGitRepoRelativePaths = discoveryResult
-        ? discoveryResult.repos.map((repo) => repo.relativePath)
-        : metadata.gitRepos.map((repo) => repo.relativeRepoPath);
-
     let launchContext: SessionPageLaunchContext | null = null;
+    let launchContextProjectRepoPaths: string[] = [];
+    let launchContextProjectRepoRelativePaths: string[] = [];
     if (launchContextResult?.success && launchContextResult.context) {
         const context = launchContextResult.context;
         const launchAttachmentPaths = (context.attachmentPaths || [])
@@ -86,6 +70,11 @@ export async function getSessionPageBootstrap(sessionId: string): Promise<Sessio
                         .map((name) => `${metadata.workspacePath}-attachments/${name}`)
                 )
             );
+        launchContextProjectRepoPaths = (context.projectRepoPaths || [])
+            .map((entry) => entry.trim())
+            .filter(Boolean);
+        launchContextProjectRepoRelativePaths = (context.projectRepoRelativePaths || [])
+            .map((entry) => entry.trim());
 
         launchContext = {
             initialMessage: context.initialMessage,
@@ -96,6 +85,33 @@ export async function getSessionPageBootstrap(sessionId: string): Promise<Sessio
             attachmentPaths: resolvedAttachmentPaths,
         };
     }
+
+    const discoveryResult = launchContextProjectRepoPaths.length > 0
+        ? null
+        : await discoverProjectGitRepos(metadata.projectPath).catch(() => null);
+
+    const discoveredProjectRepoPaths = launchContextProjectRepoPaths.length > 0
+        ? launchContextProjectRepoPaths
+        : (discoveryResult?.repos.map((repo) => repo.repoPath) ?? null);
+
+    const terminalRepoPaths = resolveSessionTerminalRepoPaths({
+        sessionRepoPaths: metadata.gitRepos.map((repo) => repo.sourceRepoPath),
+        discoveredProjectRepoPaths,
+        activeRepoPath: metadata.activeRepoPath,
+        projectPath: metadata.projectPath,
+    });
+
+    const terminalSources = await getSessionTerminalSources(
+        metadata.sessionName,
+        terminalRepoPaths,
+        metadata.agent,
+    );
+
+    const projectGitRepoRelativePaths = launchContextProjectRepoRelativePaths.length > 0
+        ? launchContextProjectRepoRelativePaths
+        : (discoveryResult
+            ? discoveryResult.repos.map((repo) => repo.relativePath)
+            : metadata.gitRepos.map((repo) => repo.relativeRepoPath));
 
     return {
         success: true,

@@ -7,6 +7,7 @@ import {
   getSessionAgentSnapshot,
   getSessionMetadata,
   markSessionInitialized,
+  readSessionLaunchContext,
 } from '@/app/actions/session';
 import { getAgentAdapter } from '@/lib/agent/providers';
 import { readCommandOutput } from '@/lib/agent/common';
@@ -346,10 +347,18 @@ function updateRunDiagnosticsForRuntimeState(
 }
 
 async function resolveSessionGitAuthEnv(metadata: NonNullable<Awaited<ReturnType<typeof getSessionMetadata>>>): Promise<Record<string, string>> {
-  const discoveryResult = await discoverProjectGitRepos(metadata.projectPath).catch(() => null);
+  const launchContextResult = await readSessionLaunchContext(metadata.sessionName).catch(() => null);
+  const launchContextRepoPaths = (launchContextResult?.success ? (launchContextResult.context?.projectRepoPaths ?? []) : [])
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const discoveryResult = launchContextRepoPaths.length > 0
+    ? null
+    : await discoverProjectGitRepos(metadata.projectPath).catch(() => null);
   const repoPaths = resolveSessionTerminalRepoPaths({
     sessionRepoPaths: metadata.gitRepos.map((repo) => repo.sourceRepoPath),
-    discoveredProjectRepoPaths: discoveryResult?.repos.map((repo) => repo.repoPath) ?? null,
+    discoveredProjectRepoPaths: launchContextRepoPaths.length > 0
+      ? launchContextRepoPaths
+      : (discoveryResult?.repos.map((repo) => repo.repoPath) ?? null),
     activeRepoPath: metadata.activeRepoPath,
     projectPath: metadata.projectPath,
   });

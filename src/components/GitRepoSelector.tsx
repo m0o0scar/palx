@@ -8,6 +8,7 @@ import {
   listRepoFiles,
   resolveRepoCardIcon,
   saveAttachments,
+  startTtydProcess,
 } from '@/app/actions/git';
 import {
   cloneRemoteProject,
@@ -16,7 +17,17 @@ import {
   getProjectActivity,
   resolveProjectByName,
 } from '@/app/actions/project';
-import { createSession, deleteSession, getSessionPrefillContext, listSessions, saveSessionLaunchContext, SessionMetadata } from '@/app/actions/session';
+import {
+  createSession,
+  deleteSession,
+  getSessionPrefillContext,
+  listSessions,
+  prepareSessionWorkspace,
+  releasePreparedSessionWorkspace,
+  saveSessionLaunchContext,
+  type SessionCreateGitContextInput,
+  SessionMetadata,
+} from '@/app/actions/session';
 import { deleteDraft, listDrafts, saveDraft, DraftMetadata } from '@/app/actions/draft';
 import { getConfig, updateConfig, updateProjectSettings, Config } from '@/app/actions/config';
 import { listCredentials } from '@/app/actions/credentials';
@@ -72,6 +83,13 @@ type PredefinedPrompt = {
   content: string;
 };
 
+type WorkspacePreparationState = {
+  preparationId: string;
+  contextFingerprint: string;
+  projectPath: string;
+  expiresAt: string;
+};
+
 type GitRepoSelectorProps = {
   mode?: 'home' | 'new';
   projectPath?: string | null;
@@ -115,6 +133,21 @@ function toProjectRelativeRepoPath(projectPath: string, repoPath: string): strin
 function arePathListsEqual(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
+}
+
+function buildWorkspacePreparationInputKey(
+  projectPath: string,
+  gitContexts: SessionCreateGitContextInput[],
+): string {
+  return JSON.stringify({
+    projectPath: normalizePathForComparison(projectPath),
+    gitContexts: gitContexts
+      .map((context) => ({
+        repoPath: normalizePathForComparison(context.repoPath),
+        baseBranch: (context.baseBranch || '').trim(),
+      }))
+      .sort((left, right) => left.repoPath.localeCompare(right.repoPath)),
+  });
 }
 
 function getClipboardImageFiles(data: DataTransfer | null): File[] {
@@ -214,6 +247,7 @@ export default function GitRepoSelector({
   const [baseBranchByRepo, setBaseBranchByRepo] = useState<Record<string, string>>({});
   const [isLoadingProjectGitRepos, setIsLoadingProjectGitRepos] = useState(false);
   const [isProjectGitReposTruncated, setIsProjectGitReposTruncated] = useState(false);
+  const [isLoadingProjectActivity, setIsLoadingProjectActivity] = useState(false);
   const [existingSessions, setExistingSessions] = useState<SessionMetadata[]>([]);
   const [allSessions, setAllSessions] = useState<SessionMetadata[]>([]);
   const [existingDrafts, setExistingDrafts] = useState<DraftMetadata[]>([]);
@@ -267,6 +301,12 @@ export default function GitRepoSelector({
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const sessionNavigationCommittedRef = useRef(false);
   const agentRuntimeSettingsRequestRef = useRef(0);
+  const [preparedWorkspace, setPreparedWorkspace] = useState<WorkspacePreparationState | null>(null);
+  const [isPreparingWorkspace, setIsPreparingWorkspace] = useState(false);
+  const activePreparedWorkspaceRef = useRef<WorkspacePreparationState | null>(null);
+  const workspacePreparationInputKeyRef = useRef<string | null>(null);
+  const workspacePreparationRequestRef = useRef(0);
+  const ttydWarmupStartedRef = useRef(false);
 
   const collapsedSessionSetupLabel = 'Show Session Setup';
 
@@ -286,6 +326,8 @@ export default function GitRepoSelector({
     setBaseBranchByRepo({});
     setCurrentBranchName('');
     setIsProjectGitReposTruncated(false);
+    setIsLoadingProjectGitRepos(true);
+    setIsLoadingProjectActivity(true);
     setExistingSessions([]);
     setExistingDrafts([]);
     setStartupScript('');
@@ -311,12 +353,38 @@ export default function GitRepoSelector({
     window.location.replace(targetPath);
   }, []);
 
+  const setPreparedWorkspaceState = useCallback((next: WorkspacePreparationState | null) => {
+    activePreparedWorkspaceRef.current = next;
+    setPreparedWorkspace(next);
+  }, []);
+
+  const releasePreparedWorkspaceById = useCallback(async (preparationId: string) => {
+    const normalizedPreparationId = preparationId.trim();
+    if (!normalizedPreparationId) return;
+
+    try {
+      await releasePreparedSessionWorkspace(normalizedPreparationId);
+    } catch (releaseError) {
+      console.error(`Failed to release prepared workspace ${normalizedPreparationId}:`, releaseError);
+    }
+  }, []);
+
+  const releaseActivePreparedWorkspace = useCallback(async () => {
+    const currentPreparation = activePreparedWorkspaceRef.current;
+    if (!currentPreparation) return;
+
+    setPreparedWorkspaceState(null);
+    workspacePreparationInputKeyRef.current = null;
+    await releasePreparedWorkspaceById(currentPreparation.preparationId);
+  }, [releasePreparedWorkspaceById, setPreparedWorkspaceState]);
+
   const refreshSessionData = useCallback(async (
     repo: string | null = selectedRepo,
     options?: { includeGlobal?: boolean },
     selectedProjectRequestId?: number,
   ) => {
     const includeGlobal = options?.includeGlobal ?? mode === 'home';
+    const isProjectScopedLoad = !includeGlobal && Boolean(repo);
 
     try {
       if (!includeGlobal && repo) {
@@ -357,6 +425,16 @@ export default function GitRepoSelector({
       }
     } catch (e) {
       console.error('Failed to refresh sessions and drafts', e);
+    } finally {
+      if (
+        isProjectScopedLoad
+        && (
+          selectedProjectRequestId === undefined
+          || isActiveSelectedProjectLoad(selectedProjectRequestId)
+        )
+      ) {
+        setIsLoadingProjectActivity(false);
+      }
     }
   }, [isActiveSelectedProjectLoad, mode, selectedRepo]);
 
@@ -608,6 +686,18 @@ export default function GitRepoSelector({
     return toProjectRelativeRepoPath(selectedRepo, repoPath);
   }, [selectedRepo]);
 
+  const selectedProjectGitContexts = useMemo<SessionCreateGitContextInput[]>(() => {
+    return projectGitRepos.map((repoPath) => ({
+      repoPath,
+      baseBranch: baseBranchByRepo[repoPath]?.trim() || undefined,
+    }));
+  }, [baseBranchByRepo, projectGitRepos]);
+
+  const workspacePreparationInputKey = useMemo(() => {
+    if (!selectedRepo) return null;
+    return buildWorkspacePreparationInputKey(selectedRepo, selectedProjectGitContexts);
+  }, [selectedProjectGitContexts, selectedRepo]);
+
   const ensureProjectRegistered = useCallback(async (projectPath: string) => {
     try {
       const response = await fetch('/api/projects', {
@@ -696,6 +786,8 @@ export default function GitRepoSelector({
         || isActiveSelectedProjectLoad(selectedProjectRequestId)
       ) {
         setError('Failed to open project.');
+        setIsLoadingProjectGitRepos(false);
+        setIsLoadingProjectActivity(false);
       }
       return false;
     } finally {
@@ -756,6 +848,7 @@ export default function GitRepoSelector({
     const nextRepo = e.target.value;
     if (!nextRepo || nextRepo === selectedRepo) return;
 
+    void releaseActivePreparedWorkspace();
     pendingProjectRouteSyncRef.current = nextRepo;
     const changed = await handleSelectRepo(nextRepo);
     if (!changed) {
@@ -776,6 +869,11 @@ export default function GitRepoSelector({
     router.replace(`/new?${params.toString()}`);
   };
 
+  const handleReturnHome = useCallback(async () => {
+    await releaseActivePreparedWorkspace();
+    router.push('/');
+  }, [releaseActivePreparedWorkspace, router]);
+
   useEffect(() => {
     if (mode !== 'new') return;
 
@@ -795,6 +893,9 @@ export default function GitRepoSelector({
       setSelectedRepo(null);
       setExistingSessions([]);
       setCurrentBranchName('');
+      setIsLoadingProjectGitRepos(false);
+      setIsLoadingProjectActivity(false);
+      void releaseActivePreparedWorkspace();
       return;
     }
 
@@ -810,12 +911,135 @@ export default function GitRepoSelector({
     void handleSelectRepo(repoPath);
     // `handleSelectRepo` is intentionally excluded to avoid retriggering from function identity changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, repoPath, selectedRepo]);
+  }, [mode, releaseActivePreparedWorkspace, repoPath, selectedRepo]);
 
   useEffect(() => {
     if (mode !== 'new' || !selectedRepo) return;
     setLastAttachmentBrowserPath((prev) => prev || selectedRepo);
   }, [mode, selectedRepo]);
+
+  useEffect(() => {
+    if (mode !== 'new') return;
+    if (ttydWarmupStartedRef.current) return;
+    ttydWarmupStartedRef.current = true;
+
+    void startTtydProcess().catch((warmupError) => {
+      console.warn('Failed to prewarm terminal service from /new:', warmupError);
+    });
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== 'new' || !selectedRepo || isLoadingProjectGitRepos || !workspacePreparationInputKey) {
+      setIsPreparingWorkspace(false);
+      return;
+    }
+
+    if (
+      workspacePreparationInputKeyRef.current === workspacePreparationInputKey
+      && activePreparedWorkspaceRef.current?.projectPath === selectedRepo
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const requestId = workspacePreparationRequestRef.current + 1;
+    workspacePreparationRequestRef.current = requestId;
+    setIsPreparingWorkspace(true);
+
+    const runPreparation = async () => {
+      const result = await prepareSessionWorkspace(selectedRepo, selectedProjectGitContexts);
+      if (cancelled || workspacePreparationRequestRef.current !== requestId) {
+        if (result.success && result.preparation) {
+          await releasePreparedWorkspaceById(result.preparation.preparationId);
+        }
+        return;
+      }
+
+      if (!result.success || !result.preparation) {
+        console.warn('Failed to prepare session workspace:', result.error || 'unknown error');
+        setIsPreparingWorkspace(false);
+        return;
+      }
+
+      const nextPreparation: WorkspacePreparationState = {
+        preparationId: result.preparation.preparationId,
+        contextFingerprint: result.preparation.contextFingerprint,
+        projectPath: result.preparation.projectPath,
+        expiresAt: result.preparation.expiresAt,
+      };
+
+      const previousPreparation = activePreparedWorkspaceRef.current;
+      setPreparedWorkspaceState(nextPreparation);
+      workspacePreparationInputKeyRef.current = workspacePreparationInputKey;
+      setIsPreparingWorkspace(false);
+
+      if (
+        previousPreparation
+        && previousPreparation.preparationId !== nextPreparation.preparationId
+      ) {
+        await releasePreparedWorkspaceById(previousPreparation.preparationId);
+      }
+    };
+
+    void runPreparation();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isLoadingProjectGitRepos,
+    mode,
+    releasePreparedWorkspaceById,
+    selectedProjectGitContexts,
+    selectedRepo,
+    setPreparedWorkspaceState,
+    workspacePreparationInputKey,
+  ]);
+
+  useEffect(() => {
+    if (mode !== 'new') return;
+
+    const handlePageHide = () => {
+      const currentPreparation = activePreparedWorkspaceRef.current;
+      if (!currentPreparation) return;
+
+      const body = JSON.stringify({ preparationId: currentPreparation.preparationId });
+      const url = '/api/session-workspace-preparations/release';
+
+      try {
+        if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+          const payload = new Blob([body], { type: 'application/json' });
+          if (navigator.sendBeacon(url, payload)) {
+            return;
+          }
+        }
+      } catch {
+        // Fall back to fetch keepalive.
+      }
+
+      void fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body,
+        keepalive: true,
+      }).catch(() => {});
+    };
+
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [mode]);
+
+  useEffect(() => {
+    return () => {
+      const currentPreparation = activePreparedWorkspaceRef.current;
+      if (!currentPreparation) return;
+      void releasePreparedWorkspaceById(currentPreparation.preparationId);
+    };
+  }, [releasePreparedWorkspaceById]);
 
   useEffect(() => {
     if (mode !== 'new') return;
@@ -1722,10 +1946,12 @@ export default function GitRepoSelector({
 
       // 2. Create session workspace (single/multi/folder mode decided by server runtime discovery).
       const derivedTitle = deriveSessionTitleFromTaskDescription(initialMessage);
-      const gitContexts = projectGitRepos.map((repoPath) => ({
-        repoPath,
-        baseBranch: baseBranchByRepo[repoPath]?.trim() || undefined,
-      }));
+      const gitContexts = selectedProjectGitContexts;
+      const preparedWorkspaceId = (
+        activePreparedWorkspaceRef.current?.projectPath === selectedRepo
+          ? activePreparedWorkspaceRef.current.preparationId
+          : undefined
+      );
 
       const wtResult = await createSession(selectedRepo, gitContexts, {
         agent: resolvedProvider,
@@ -1733,10 +1959,17 @@ export default function GitRepoSelector({
         model: resolvedModel,
         reasoningEffort: resolvedReasoningEffort,
         title: derivedTitle,
-        devServerScript: resolvedDevServerScript || undefined
+        devServerScript: resolvedDevServerScript || undefined,
+        preparedWorkspaceId,
       });
 
       if (wtResult.success && wtResult.sessionName && wtResult.workspacePath) {
+        if (preparedWorkspaceId) {
+          setPreparedWorkspaceState(null);
+          workspacePreparationInputKeyRef.current = null;
+          void releasePreparedWorkspaceById(preparedWorkspaceId);
+        }
+
         const allAttachmentPaths = Array.from(
           new Set(
             [...attachments, ...prefilledAttachmentPaths]
@@ -1781,6 +2014,10 @@ export default function GitRepoSelector({
           startupScript: startupScript || undefined,
           attachmentPaths: allAttachmentPaths,
           attachmentNames: allAttachmentNames,
+          projectRepoPaths: projectGitRepos,
+          projectRepoRelativePaths: projectGitRepos.map((repoPath) => (
+            toProjectRelativeRepoPath(selectedRepo, repoPath)
+          )),
           agentProvider: resolvedProvider,
           model: resolvedModel,
           reasoningEffort: resolvedReasoningEffort,
@@ -2393,7 +2630,7 @@ export default function GitRepoSelector({
               <button
                 type="button"
                 className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
-                onClick={() => router.push('/')}
+                onClick={() => { void handleReturnHome(); }}
                 aria-label="Back to home"
               >
                 <ChevronRight className="h-6 w-6 rotate-180" />
@@ -2707,13 +2944,18 @@ export default function GitRepoSelector({
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
                 <h3 className="mb-4 text-lg font-bold text-slate-900 dark:text-white">Ongoing Tasks</h3>
                 <div className="space-y-2">
-                  {existingSessions.length === 0 && (
+                  {isLoadingProjectActivity ? (
+                    <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
+                      <span className="loading loading-spinner loading-xs mr-2"></span>
+                      Loading ongoing tasks...
+                    </div>
+                  ) : existingSessions.length === 0 && (
                     <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
                       No ongoing sessions for this project.
                     </div>
                   )}
 
-                  {existingSessions.map((session) => (
+                  {!isLoadingProjectActivity && existingSessions.map((session) => (
                     <div
                       key={session.sessionName}
                       className="group relative flex items-center gap-3 rounded-lg border border-transparent px-3 py-3 transition-colors hover:border-slate-100 hover:bg-slate-50 dark:hover:border-slate-700/70 dark:hover:bg-slate-800/50"
@@ -2769,13 +3011,18 @@ export default function GitRepoSelector({
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:shadow-[0_16px_36px_-24px_rgba(2,6,23,0.95)]">
                 <h3 className="mb-4 text-lg font-bold text-slate-900 dark:text-white">Drafts</h3>
                 <div className="space-y-2">
-                  {existingDrafts.length === 0 && (
+                  {isLoadingProjectActivity ? (
+                    <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
+                      <span className="loading loading-spinner loading-xs mr-2"></span>
+                      Loading drafts...
+                    </div>
+                  ) : existingDrafts.length === 0 && (
                     <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:border-[#30363d] dark:bg-[#0d1117]/45 dark:text-slate-400">
                       No drafts for this project.
                     </div>
                   )}
 
-                  {existingDrafts.map((draft) => (
+                  {!isLoadingProjectActivity && existingDrafts.map((draft) => (
                     <div
                       key={draft.id}
                       className="group relative flex items-center gap-3 rounded-lg border border-transparent px-3 py-3 transition-colors hover:border-slate-100 hover:bg-slate-50 dark:hover:border-slate-700/70 dark:hover:bg-slate-800/50"
@@ -2959,6 +3206,16 @@ export default function GitRepoSelector({
                   <span className="mr-auto hidden text-xs text-slate-400 dark:text-slate-500 sm:block">
                     Press <kbd className="rounded border border-slate-200 bg-slate-100 px-2 py-1 font-sans text-[11px] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Enter</kbd> to submit, <kbd className="rounded border border-slate-200 bg-slate-100 px-2 py-1 font-sans text-[11px] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Shift+Enter</kbd> for new line
                   </span>
+                  {isPreparingWorkspace && (
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      Prewarming workspace...
+                    </span>
+                  )}
+                  {!isPreparingWorkspace && preparedWorkspace && (
+                    <span className="text-xs text-emerald-600 dark:text-emerald-400">
+                      Workspace ready
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="inline-flex items-center gap-2 rounded-lg bg-slate-200 px-5 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-300 dark:bg-slate-700 dark:text-white dark:hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-70"
@@ -3035,7 +3292,7 @@ export default function GitRepoSelector({
               <div className="text-sm opacity-70 mt-2">No project specified.</div>
             )}
             <div className="mt-4">
-              <button className="btn btn-primary btn-sm" onClick={() => router.push('/')}>
+              <button className="btn btn-primary btn-sm" onClick={() => { void handleReturnHome(); }}>
                 Choose Project
               </button>
             </div>

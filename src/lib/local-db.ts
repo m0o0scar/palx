@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getAppDataDir } from './platform-utils';
+import { getAppDataDir } from './platform-utils.ts';
 
 type JsonObject = Record<string, unknown>;
 
@@ -178,12 +178,29 @@ function createSchema(db: Database.Database): void {
       startup_script TEXT,
       attachment_paths_json TEXT,
       attachment_names_json TEXT,
+      project_repo_paths_json TEXT,
+      project_repo_relative_paths_json TEXT,
       agent_provider TEXT,
       model TEXT,
       reasoning_effort TEXT,
       session_mode TEXT,
       is_resume INTEGER,
       timestamp TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS session_workspace_preparations (
+      preparation_id TEXT PRIMARY KEY,
+      project_path TEXT NOT NULL,
+      context_fingerprint TEXT NOT NULL,
+      session_name TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      cancel_requested INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      released_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS drafts (
@@ -770,6 +787,8 @@ function runSchemaMigrations(db: Database.Database): void {
   addColumnIfMissing(db, 'sessions', 'last_error TEXT');
   addColumnIfMissing(db, 'sessions', 'last_activity_at TEXT');
   addColumnIfMissing(db, 'session_launch_contexts', 'reasoning_effort TEXT');
+  addColumnIfMissing(db, 'session_launch_contexts', 'project_repo_paths_json TEXT');
+  addColumnIfMissing(db, 'session_launch_contexts', 'project_repo_relative_paths_json TEXT');
   addColumnIfMissing(db, 'drafts', 'project_path TEXT');
   addColumnIfMissing(db, 'drafts', 'git_contexts_json TEXT');
   addColumnIfMissing(db, 'drafts', 'reasoning_effort TEXT');
@@ -947,6 +966,24 @@ function runSchemaMigrations(db: Database.Database): void {
   createIndexIfColumnsExist(db, 'drafts', 'drafts_project_path_idx', ['project_path']);
   createIndexIfColumnsExist(db, 'drafts', 'drafts_timestamp_idx', ['timestamp']);
   createIndexIfColumnsExist(db, 'session_git_repos', 'session_git_repos_session_idx', ['session_name']);
+  createIndexIfColumnsExist(
+    db,
+    'session_workspace_preparations',
+    'session_workspace_preparations_status_idx',
+    ['status'],
+  );
+  createIndexIfColumnsExist(
+    db,
+    'session_workspace_preparations',
+    'session_workspace_preparations_expires_idx',
+    ['expires_at'],
+  );
+  createIndexIfColumnsExist(
+    db,
+    'session_workspace_preparations',
+    'session_workspace_preparations_fingerprint_idx',
+    ['project_path', 'context_fingerprint', 'status'],
+  );
   createIndexIfColumnsExist(db, 'session_agent_history_items', 'session_agent_history_session_idx', ['session_name']);
   createIndexIfColumnsExist(db, 'session_agent_history_items', 'session_agent_history_thread_idx', ['session_name', 'thread_id']);
   createIndexIfColumnsExist(db, 'session_agent_history_items', 'session_agent_history_order_idx', ['session_name', 'ordinal', 'created_at']);
