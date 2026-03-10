@@ -322,7 +322,7 @@ export function CommitChangesView({
       {/* File list */}
       {!isMobileViewport && (
         <div className={cn(fileListWidthClass, 'border-r border-base-300 flex flex-col bg-base-200/30 shrink-0')}>
-          <div className="px-3 py-2 text-xs font-bold opacity-70 border-b border-base-300 bg-base-100">
+          <div className="h-9 flex items-center shrink-0 px-3 text-xs font-bold opacity-70 border-b border-base-300 bg-base-100">
             {files.length} file{files.length !== 1 ? 's' : ''} changed
           </div>
           <div className="flex-1 overflow-y-auto min-h-0">
@@ -343,7 +343,7 @@ export function CommitChangesView({
       <div className="flex-1 min-w-0 overflow-hidden">
         {isMobileViewport ? (
           <div className="h-full flex flex-col">
-            <div className="px-4 py-2 text-xs font-mono opacity-70 border-b border-base-300 bg-base-100 shrink-0 truncate flex items-center justify-between">
+            <div className="h-9 flex items-center justify-between shrink-0 px-4 text-xs font-mono opacity-70 border-b border-base-300 bg-base-100 truncate">
               <span className="truncate">{files.length} file{files.length !== 1 ? 's' : ''} changed</span>
               <div className="flex items-center gap-2 shrink-0 ml-4">
                 <label htmlFor="commit-diff-split-view" className="text-[10px] uppercase tracking-wider font-bold cursor-pointer opacity-70">Split View</label>
@@ -404,7 +404,7 @@ export function CommitChangesView({
           </div>
         ) : selectedFile ? (
           <div className="h-full flex flex-col">
-            <div className="px-4 py-2 text-xs font-mono opacity-70 border-b border-base-300 bg-base-100 shrink-0 truncate flex items-center justify-between">
+            <div className="h-9 flex items-center justify-between shrink-0 px-4 text-xs font-mono opacity-70 border-b border-base-300 bg-base-100 truncate">
               <span className="truncate">{selectedFile}</span>
               <div className="flex items-center gap-2 shrink-0 ml-4">
                 <label htmlFor="commit-diff-split-view" className="text-[10px] uppercase tracking-wider font-bold cursor-pointer opacity-70">Split View</label>
