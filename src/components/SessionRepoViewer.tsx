@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useGitAction, useGitBranches, useGitLog, useGitMergeBase, useGitStatus } from '@/hooks/use-git';
@@ -103,7 +103,7 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint, repoOp
   const [commitDialogOpen, setCommitDialogOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
   const [commitMessageError, setCommitMessageError] = useState<string | null>(null);
-  const [isRefreshingLocalChanges, setIsRefreshingLocalChanges] = useState(false);
+  const [isRefreshingRepoData, setIsRefreshingRepoData] = useState(false);
   const queryClient = useQueryClient();
   const action = useGitAction();
   const { data: branchData } = useGitBranches(effectiveRepoPath);
@@ -114,7 +114,6 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint, repoOp
     isFetching,
     isError,
     error,
-    refetch,
   } = useGitLog(effectiveRepoPath, 200, { scope: 'current' });
   const allCommits = useMemo(() => log?.all ?? [], [log]);
   const currentBranch = branchData?.current?.trim() || effectiveBranchHint?.trim() || 'unknown';
@@ -227,19 +226,28 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint, repoOp
     setSelection({ mode: 'manual', hash: commitHash });
   };
 
-  const handleRefreshLocalChanges = async () => {
-    setIsRefreshingLocalChanges(true);
+  const refetchCommitHistoryData = useCallback(async () => {
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'log'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'branches'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'merge-base'], type: 'active' }),
+    ]);
+  }, [effectiveRepoPath, queryClient]);
+
+  const handleRefreshRepoData = useCallback(async () => {
+    setIsRefreshingRepoData(true);
     try {
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'status'], type: 'active' }),
         queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'diff'], type: 'active' }),
         queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'commit-diff'], type: 'active' }),
         queryClient.refetchQueries({ queryKey: ['git', effectiveRepoPath, 'commit-file-diff'], type: 'active' }),
+        refetchCommitHistoryData(),
       ]);
     } finally {
-      setIsRefreshingLocalChanges(false);
+      setIsRefreshingRepoData(false);
     }
-  };
+  }, [effectiveRepoPath, queryClient, refetchCommitHistoryData]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-50 dark:bg-[#0d1117]">
@@ -273,12 +281,12 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint, repoOp
             <button
               type="button"
               className="btn btn-ghost btn-xs h-6 min-h-6 border-none px-2 text-[10px] text-slate-600 hover:bg-slate-100 disabled:text-slate-400 dark:text-slate-300 dark:hover:bg-[#30363d]/60 dark:disabled:text-slate-600"
-              onClick={() => void handleRefreshLocalChanges()}
-              disabled={action.isPending || isRefreshingLocalChanges}
-              title="Refresh local uncommitted changes"
-              aria-label="Refresh local uncommitted changes"
+              onClick={() => void handleRefreshRepoData()}
+              disabled={action.isPending || isRefreshingRepoData}
+              title="Refresh repo diff and commit history"
+              aria-label="Refresh repo diff and commit history"
             >
-              <RefreshCw className={`h-3 w-3 ${isRefreshingLocalChanges ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-3 w-3 ${isRefreshingRepoData ? 'animate-spin' : ''}`} />
               Refresh
             </button>
             <button
@@ -320,11 +328,11 @@ export function SessionRepoViewer({ repoPath, branchHint, baseBranchHint, repoOp
           <button
             type="button"
             className="btn btn-ghost btn-xs h-6 min-h-6 w-7 border-none p-0 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-[#30363d]/60"
-            onClick={() => void refetch()}
+            onClick={() => void refetchCommitHistoryData()}
             title="Refresh commit history"
             aria-label="Refresh commit history"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-3.5 w-3.5 ${(isFetching || isRefreshingRepoData) ? 'animate-spin' : ''}`} />
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
