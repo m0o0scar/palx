@@ -1381,8 +1381,7 @@ export default function GitRepoSelector({
     setSelectedReasoningEffort(event.target.value as ReasoningEffort | '');
   };
 
-  const handleSessionModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const nextMode = e.target.value === 'plan' ? 'plan' : 'fast';
+  const handleSessionModeChange = (nextMode: SessionMode) => {
     setSessionMode(nextMode);
 
     try {
@@ -3184,22 +3183,6 @@ export default function GitRepoSelector({
                         />
                       </label>
 
-                      <label className="flex flex-col gap-2">
-                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Session Mode</span>
-                        <div className="relative">
-                          <select
-                            className="h-10 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
-                            value={sessionMode}
-                            onChange={handleSessionModeChange}
-                            disabled={loading}
-                          >
-                            <option value="fast">Fast Mode (default)</option>
-                            <option value="plan">Plan Mode</option>
-                          </select>
-                          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
-                        </div>
-                      </label>
-
                     </div>
                   )}
                 </div>
@@ -3337,31 +3320,65 @@ export default function GitRepoSelector({
                     <Bot className="h-5 w-5 text-primary" />
                     Task Description
                   </label>
-                  {hasPredefinedPrompts && (
-                    <div className="ml-auto w-full sm:w-[340px]">
-                      <div className="relative">
-                        <select
-                          className="h-12 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
-                          value={activePredefinedPrompt?.id ?? ''}
-                          onChange={(event) => handleSelectPredefinedPrompt(event.target.value)}
-                          disabled={loading}
-                          aria-label="Select predefined prompt"
-                        >
-                          <option value="">Select Prompt</option>
-                          {predefinedPromptGroups.map(({ group, prompts }) => (
-                            <optgroup key={group} label={group}>
-                              {prompts.map((prompt) => (
-                                <option key={prompt.id} value={prompt.id}>
-                                  {prompt.label}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
-                      </div>
+                  <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-3 sm:w-auto">
+                    <div
+                      className="inline-flex items-center overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm dark:border-[#30363d] dark:bg-[#0d1117]"
+                      role="group"
+                      aria-label="Session mode"
+                    >
+                      <button
+                        type="button"
+                        className={`h-12 px-4 text-sm font-semibold transition ${sessionMode === 'fast'
+                          ? 'bg-primary text-white'
+                          : 'text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-[#161b22]'
+                          }`}
+                        onClick={() => handleSessionModeChange('fast')}
+                        aria-pressed={sessionMode === 'fast'}
+                        disabled={loading}
+                      >
+                        Fast
+                      </button>
+                      <div className="h-6 w-px bg-slate-200 dark:bg-[#30363d]" />
+                      <button
+                        type="button"
+                        className={`h-12 px-4 text-sm font-semibold transition ${sessionMode === 'plan'
+                          ? 'bg-primary text-white'
+                          : 'text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-[#161b22]'
+                          }`}
+                        onClick={() => handleSessionModeChange('plan')}
+                        aria-pressed={sessionMode === 'plan'}
+                        disabled={loading}
+                      >
+                        Plan
+                      </button>
                     </div>
-                  )}
+
+                    {hasPredefinedPrompts && (
+                      <div className="w-full sm:w-[340px]">
+                        <div className="relative">
+                          <select
+                            className="h-12 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 font-mono text-sm text-slate-900 outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-[#30363d] dark:bg-[#0d1117] dark:text-slate-100"
+                            value={activePredefinedPrompt?.id ?? ''}
+                            onChange={(event) => handleSelectPredefinedPrompt(event.target.value)}
+                            disabled={loading}
+                            aria-label="Select predefined prompt"
+                          >
+                            <option value="">Select Prompt</option>
+                            {predefinedPromptGroups.map(({ group, prompts }) => (
+                              <optgroup key={group} label={group}>
+                                {prompts.map((prompt) => (
+                                  <option key={prompt.id} value={prompt.id}>
+                                    {prompt.label}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ))}
+                          </select>
+                          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="group relative mb-4 flex h-[360px] flex-grow flex-col md:h-[420px]">
