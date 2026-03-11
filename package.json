@@ -1,6 +1,6 @@
 {
   "name": "vibe-pal",
-  "version": "0.74.0",
+  "version": "0.75.0",
   "private": false,
   "description": "Local session manager for AI coding agents.",
   "repository": {
