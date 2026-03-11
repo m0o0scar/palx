@@ -13,6 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_ROOT = path.resolve(__dirname, "..");
 const require = createRequire(import.meta.url);
+const { getFreePort } = require("gfport");
 const DEFAULT_PORT = 3200;
 const CODEX_SKILL_TARGET_AGENTS = ["codex", "cursor", "gemini-cli"];
 const CODEX_SKILL_DEFINITIONS = [
@@ -325,28 +326,8 @@ Options:
 `);
 }
 
-function checkPortAvailable(port) {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-
-    server.once("error", () => resolve(false));
-    server.once("listening", () => {
-      server.close(() => resolve(true));
-    });
-
-    server.listen(port, "127.0.0.1");
-  });
-}
-
-async function findAvailablePort(startPort, maxAttempts = 20) {
-  for (let i = 0; i < maxAttempts; i += 1) {
-    const candidate = startPort + i;
-    const available = await checkPortAvailable(candidate);
-    if (available) {
-      return candidate;
-    }
-  }
-  throw new Error(`Could not find an available port in range ${startPort}-${startPort + maxAttempts - 1}.`);
+async function findAvailablePort(startPort) {
+  return getFreePort(startPort);
 }
 
 export async function resolveStartupPort(

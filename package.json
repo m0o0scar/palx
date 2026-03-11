@@ -23,7 +23,7 @@
     "README.md"
   ],
   "scripts": {
-    "dev": "gfport 3200 -- next dev --webpack -p {PORT}",
+    "dev": "node ./bin/viba.mjs --dev",
     "build": "next build --webpack",
     "prepack": "node -e \"require('node:fs').rmSync('.next',{recursive:true,force:true})\" && npm run build",
     "start": "node ./bin/viba.mjs",
