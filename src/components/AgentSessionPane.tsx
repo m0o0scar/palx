@@ -346,6 +346,7 @@ function MarkdownMessage({ value }: { value: string | null | undefined }) {
 }
 
 type CollapsibleHistoryItemProps = {
+  itemId: string;
   label: string;
   title?: string;
   className: string;
@@ -354,10 +355,13 @@ type CollapsibleHistoryItemProps = {
   titleClassName: string;
   timestamp?: string;
   timestampClassName: string;
+  isOpen: boolean;
+  onToggle: (itemId: string, open: boolean) => void;
   children: React.ReactNode;
 };
 
 function renderCollapsibleHistoryItem({
+  itemId,
   label,
   title,
   className,
@@ -366,12 +370,20 @@ function renderCollapsibleHistoryItem({
   titleClassName,
   timestamp,
   timestampClassName,
+  isOpen,
+  onToggle,
   children,
 }: CollapsibleHistoryItemProps) {
   const summaryTitle = title ? `${label}: ${title}` : label;
 
   return (
-    <details className={`min-w-0 overflow-hidden ${className}`}>
+    <details
+      open={isOpen}
+      className={`min-w-0 overflow-hidden ${className}`}
+      onToggle={(event) => {
+        onToggle(itemId, event.currentTarget.open);
+      }}
+    >
       <summary className={summaryClassName} title={summaryTitle}>
         <span className={labelClassName}>{label}</span>
         {title ? <span className={titleClassName}>{title}</span> : null}
@@ -386,6 +398,8 @@ function renderCollapsibleHistoryItem({
 
 function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistoryItemOptions = {}) {
   const timestamp = formatTimestamp(item.updatedAt || item.createdAt);
+  const isExpanded = Boolean(options.expandedItems?.[item.id]);
+  const handleToggleExpanded = options.onToggleExpanded ?? (() => {});
 
   switch (item.kind) {
     case 'user':
@@ -418,6 +432,7 @@ function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistory
       );
     case 'reasoning':
       return renderCollapsibleHistoryItem({
+        itemId: item.id,
         label: 'Reasoning',
         title: plainTextPreview(item.summary) || plainTextPreview(item.text) || undefined,
         className: 'rounded-xl bg-violet-50/45 px-3 py-2 text-sm text-violet-950 dark:bg-violet-500/8 dark:text-violet-100',
@@ -426,6 +441,8 @@ function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistory
         titleClassName: 'min-w-0 truncate whitespace-nowrap text-[11px] font-normal text-violet-700/75 dark:text-violet-200/75',
         timestamp,
         timestampClassName: 'mt-2 text-[10px] text-violet-700/65 dark:text-violet-200/65',
+        isOpen: isExpanded,
+        onToggle: handleToggleExpanded,
         children: (
           <>
             {trimEmpty(item.summary) ? (
@@ -451,6 +468,7 @@ function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistory
       );
     case 'command':
       return renderCollapsibleHistoryItem({
+        itemId: item.id,
         label: 'Command',
         title: firstLinePreview(item.command) || undefined,
         className: 'rounded-xl bg-slate-50/65 px-3 py-2 text-sm dark:bg-[#0d1117]/75',
@@ -459,6 +477,8 @@ function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistory
         titleClassName: 'min-w-0 truncate whitespace-nowrap font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400',
         timestamp,
         timestampClassName: 'mt-2 text-[10px] text-slate-400 dark:text-slate-500',
+        isOpen: isExpanded,
+        onToggle: handleToggleExpanded,
         children: (
           <>
             <div className="flex flex-wrap items-center gap-2">
@@ -485,6 +505,7 @@ function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistory
         || undefined;
 
       return renderCollapsibleHistoryItem({
+        itemId: item.id,
         label: `Tool: ${toolName}`,
         title: toolTitle,
         className: 'rounded-xl bg-slate-50/65 px-3 py-2 text-sm dark:bg-[#0d1117]/75',
@@ -493,6 +514,8 @@ function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistory
         titleClassName: 'min-w-0 truncate whitespace-nowrap text-[11px] font-normal text-slate-500 dark:text-slate-400',
         timestamp,
         timestampClassName: 'mt-2 text-[10px] text-slate-400 dark:text-slate-500',
+        isOpen: isExpanded,
+        onToggle: handleToggleExpanded,
         children: (
           <>
             <div className="flex flex-wrap items-center gap-2">
@@ -514,6 +537,7 @@ function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistory
     }
     case 'fileChange':
       return renderCollapsibleHistoryItem({
+        itemId: item.id,
         label: 'File Changes',
         title: item.changes[0]?.path?.trim()
           ? (item.changes.length > 1
@@ -526,6 +550,8 @@ function renderHistoryItem(item: SessionAgentHistoryItem, options: RenderHistory
         titleClassName: 'min-w-0 truncate whitespace-nowrap text-[11px] font-normal text-emerald-700/75 dark:text-emerald-200/75',
         timestamp,
         timestampClassName: 'mt-2 text-[10px] text-emerald-700/65 dark:text-emerald-200/65',
+        isOpen: isExpanded,
+        onToggle: handleToggleExpanded,
         children: (
           <>
             <div className="flex flex-wrap items-center gap-2">
@@ -569,15 +595,19 @@ function createPendingMessage(text: string, attachmentPaths: string[]): PendingM
 type VirtualHistoryRowProps = {
   item: SessionAgentHistoryItem;
   onMeasure: (key: string, height: number) => void;
+  expandedItems: Record<string, boolean>;
+  onToggleExpanded: (itemId: string, open: boolean) => void;
 };
 
 type RenderHistoryItemOptions = {
   status?: string | null;
   pulse?: boolean;
+  expandedItems?: Record<string, boolean>;
+  onToggleExpanded?: (itemId: string, open: boolean) => void;
 };
 
-function VirtualHistoryRow({ item, onMeasure }: VirtualHistoryRowProps) {
-  const itemKey = `${item.id}-${item.updatedAt}`;
+function VirtualHistoryRow({ item, onMeasure, expandedItems, onToggleExpanded }: VirtualHistoryRowProps) {
+  const itemKey = item.id;
   const rowRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -602,7 +632,11 @@ function VirtualHistoryRow({ item, onMeasure }: VirtualHistoryRowProps) {
 
   return (
     <div ref={rowRef} className="min-w-0 max-w-full">
-      {renderHistoryItem(item, item.itemStatus === 'sending' ? { status: 'sending', pulse: true } : undefined)}
+      {renderHistoryItem(item, {
+        ...(item.itemStatus === 'sending' ? { status: 'sending', pulse: true } : {}),
+        expandedItems,
+        onToggleExpanded,
+      })}
     </div>
   );
 }
@@ -655,6 +689,7 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
   const [historySizeVersion, setHistorySizeVersion] = useState(0);
   const [timelineScrollTop, setTimelineScrollTop] = useState(0);
   const [timelineViewportHeight, setTimelineViewportHeight] = useState(0);
+  const [expandedHistoryItems, setExpandedHistoryItems] = useState<Record<string, boolean>>({});
 
   const scheduleRefresh = useCallback((delay = 120) => {
     if (refreshTimerRef.current !== null) {
@@ -879,7 +914,7 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
     let offset = 0;
 
     virtualizedHistory.forEach((item, index) => {
-      const itemKey = `${item.id}-${item.updatedAt}`;
+      const itemKey = item.id;
       const size = historySizeMapRef.current[itemKey] ?? estimateHistoryItemHeight(item);
       metrics.push({
         start: offset,
@@ -930,7 +965,7 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
         const actualIndex = visibleHistoryRange.startIndex + index;
         return {
           item,
-          itemKey: `${item.id}-${item.updatedAt}`,
+          itemKey: item.id,
           top: historyMetrics.items[actualIndex]?.start ?? 0,
         };
       });
@@ -948,7 +983,7 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
   }, []);
 
   useEffect(() => {
-    const activeKeys = new Set(displayHistory.map((item) => `${item.id}-${item.updatedAt}`));
+    const activeKeys = new Set(displayHistory.map((item) => item.id));
     const currentKeys = Object.keys(historySizeMapRef.current);
     if (currentKeys.every((key) => activeKeys.has(key))) return;
 
@@ -962,6 +997,34 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
     historySizeMapRef.current = nextSizeMap;
     setHistorySizeVersion((current) => current + 1);
   }, [displayHistory]);
+
+  useEffect(() => {
+    const activeItemIds = new Set(displayHistory.map((item) => item.id));
+    setExpandedHistoryItems((current) => {
+      const nextEntries = Object.entries(current).filter(([itemId, isOpen]) => isOpen && activeItemIds.has(itemId));
+      if (nextEntries.length === Object.keys(current).length) {
+        return current;
+      }
+      return Object.fromEntries(nextEntries);
+    });
+  }, [displayHistory]);
+
+  const handleToggleExpanded = useCallback((itemId: string, open: boolean) => {
+    setExpandedHistoryItems((current) => {
+      if (open) {
+        if (current[itemId]) return current;
+        return {
+          ...current,
+          [itemId]: true,
+        };
+      }
+
+      if (!current[itemId]) return current;
+      const next = { ...current };
+      delete next[itemId];
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     setOptimisticMessages((current) => reconcileOptimisticUserMessages(history, current));
@@ -1425,7 +1488,12 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
                     className="absolute left-0 right-0"
                     style={{ top }}
                   >
-                    <VirtualHistoryRow item={item} onMeasure={handleMeasureHistoryItem} />
+                    <VirtualHistoryRow
+                      item={item}
+                      onMeasure={handleMeasureHistoryItem}
+                      expandedItems={expandedHistoryItems}
+                      onToggleExpanded={handleToggleExpanded}
+                    />
                   </div>
                 ))}
               </div>
@@ -1433,8 +1501,12 @@ const AgentSessionPane = forwardRef<AgentSessionPaneHandle, AgentSessionPaneProp
             {liveTailHistory.length > 0 ? (
               <div className="space-y-3">
                 {liveTailHistory.map((item) => (
-                  <div key={`${item.id}-${item.updatedAt}`}>
-                    {renderHistoryItem(item, item.itemStatus === 'sending' ? { status: 'sending', pulse: true } : undefined)}
+                  <div key={item.id}>
+                    {renderHistoryItem(item, {
+                      ...(item.itemStatus === 'sending' ? { status: 'sending', pulse: true } : {}),
+                      expandedItems: expandedHistoryItems,
+                      onToggleExpanded: handleToggleExpanded,
+                    })}
                   </div>
                 ))}
               </div>
