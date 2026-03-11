@@ -263,11 +263,11 @@ const providerConfigs: Record<AcpProviderId, AcpProviderConfig> = {
     },
     acp: {
       binaryNames: ["gemini"],
-      args: ["--experimental-acp"],
+      args: ["--yolo", "--experimental-acp"],
       buildArgs: (model) =>
         model?.trim()
-          ? ["--model", model.trim(), "--experimental-acp"]
-          : ["--experimental-acp"],
+          ? ["--yolo", "--model", model.trim(), "--experimental-acp"]
+          : ["--yolo", "--experimental-acp"],
     },
     version: {
       binaryNames: ["gemini"],
@@ -364,8 +364,8 @@ const providerConfigs: Record<AcpProviderId, AcpProviderConfig> = {
     },
     acp: {
       binaryNames: ["cursor-agent", "agent"],
-      args: ["acp"],
-      buildArgs: (model) => (model?.trim() ? ["--model", model.trim(), "acp"] : ["acp"]),
+      args: ["-f", "acp"],
+      buildArgs: (model) => (model?.trim() ? ["-f", "--model", model.trim(), "acp"] : ["-f", "acp"]),
     },
     version: {
       binaryNames: ["cursor-agent", "agent"],

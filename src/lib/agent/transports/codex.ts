@@ -165,6 +165,7 @@ const CLIENT_INFO = {
   name: "palx",
   version: "0.66.0",
 };
+const SESSION_CODEX_SANDBOX_MODE = "danger-full-access";
 
 // Palx requires web search in Codex sessions. The Codex API rejects
 // reasoning.effort="minimal" when web_search is enabled, so do not expose it.
@@ -354,7 +355,7 @@ class CodexAppServerConnection {
       "-c",
       'approval_policy="never"',
       "-c",
-      'sandbox_mode="workspace-write"',
+      `sandbox_mode=${JSON.stringify(SESSION_CODEX_SANDBOX_MODE)}`,
     ];
 
     if (options.model?.trim()) {
@@ -880,7 +881,7 @@ export async function readThreadHistory(input: {
       threadId: input.threadId,
       cwd: input.workspacePath,
       approvalPolicy: "never",
-      sandbox: "workspace-write",
+      sandbox: SESSION_CODEX_SANDBOX_MODE,
       persistExtendedHistory: true,
     })) as {
       thread?: ThreadSummary;
@@ -1319,7 +1320,7 @@ export async function streamChat(
           threadId,
           cwd: input.workspacePath,
           approvalPolicy: "never",
-          sandbox: "workspace-write",
+          sandbox: SESSION_CODEX_SANDBOX_MODE,
           persistExtendedHistory: true,
         })) as {
           thread?: { id?: string };
@@ -1332,7 +1333,7 @@ export async function streamChat(
         return (await connection.request("thread/start", {
           cwd: input.workspacePath,
           approvalPolicy: "never",
-          sandbox: "workspace-write",
+          sandbox: SESSION_CODEX_SANDBOX_MODE,
           experimentalRawEvents: true,
           persistExtendedHistory: true,
         })) as {
