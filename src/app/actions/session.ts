@@ -2241,6 +2241,40 @@ async function cleanupSessionWorkspace(metadata: SessionMetadata): Promise<void>
   await cleanupWorkspaceRoot(metadata.workspacePath, metadata.workspaceMode);
 }
 
+export async function prepareSessionDevServerTerminalRun(sessionName: string): Promise<{
+  success: boolean;
+  removedStaleLock?: boolean;
+  error?: string;
+}> {
+  try {
+    const metadata = await getSessionMetadata(sessionName);
+    if (!metadata) {
+      return { success: false, error: 'Session metadata not found' };
+    }
+
+    const script = metadata.devServerScript?.trim();
+    if (!script) {
+      return { success: false, error: 'Dev server script is not configured for this session.' };
+    }
+
+    const removedStaleLock = await cleanupStaleNextDevLock(metadata.workspacePath).catch((error) => {
+      console.warn('Failed to cleanup stale Next dev lock:', error);
+      return false;
+    });
+
+    return {
+      success: true,
+      removedStaleLock,
+    };
+  } catch (error) {
+    console.error('Failed to prepare session dev server terminal run:', error);
+    return {
+      success: false,
+      error: getErrorMessage(error),
+    };
+  }
+}
+
 export async function getSessionDevServerState(sessionName: string): Promise<{
   success: boolean;
   running?: boolean;

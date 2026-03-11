@@ -5,13 +5,11 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import {
     createSessionBaseBranch,
     deleteSessionInBackground,
-    getSessionDevServerState,
     getSessionDivergence,
     listSessionBaseBranches,
     mergeSessionToBase,
+    prepareSessionDevServerTerminalRun,
     rebaseSessionOntoBase,
-    startSessionDevServer,
-    stopSessionDevServer,
     updateSessionBaseBranch,
 } from '@/app/actions/session';
 import {
@@ -37,6 +35,7 @@ import {
 import { normalizePreviewUrl } from '@/lib/url';
 import { sanitizeBranchName } from '@/lib/utils';
 import { useTerminalLink, type TerminalWindow } from '@/hooks/useTerminalLink';
+import { inferPreviewUrlFromTerminalText, terminalTranscriptContainsCommand } from '@/lib/dev-server-terminal';
 import { buildShellExportEnvironmentCommand, buildShellSetDirectoryCommand } from '@/lib/shell';
 import {
     applyThemeToTerminalIframe,
@@ -79,6 +78,7 @@ const TERMINAL_SIZE_STORAGE_KEY = 'viba-terminal-size';
 const SPLIT_RATIO_STORAGE_KEY = 'viba-agent-preview-split-ratio';
 const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'viba-right-panel-collapsed';
 const PREVIEW_TARGET_STORAGE_KEY_PREFIX = 'viba-session-preview-target-url:';
+const DEV_SERVER_TERMINAL_MARKER_STORAGE_KEY_PREFIX = 'viba-session-dev-server-terminal:';
 const DEFAULT_AGENT_PANE_RATIO = 0.5;
 const MOBILE_VIEWPORT_QUERY = '(max-width: 767px)';
 const TERMINAL_HEADER_HEIGHT = 36;
@@ -105,6 +105,10 @@ const clampAgentPaneRatio = (value: number): number => Math.max(0.2, Math.min(0.
 
 const getPreviewTargetStorageKey = (sessionName: string): string => (
     `${PREVIEW_TARGET_STORAGE_KEY_PREFIX}${sessionName}`
+);
+
+const getDevServerTerminalMarkerStorageKey = (sessionName: string): string => (
+    `${DEV_SERVER_TERMINAL_MARKER_STORAGE_KEY_PREFIX}${sessionName}`
 );
 
 const formatAgentRunState = (runState: SessionAgentRunState | 'idle' | null | undefined): string => {
@@ -781,6 +785,118 @@ export function SessionView({
 
         void ensureTerminalService();
     }, [ensureTerminalService, isRepoViewActive, isRightPanelCollapsed]);
+
+    const setDevServerTerminalMarker = useCallback((active: boolean) => {
+        try {
+            const storageKey = getDevServerTerminalMarkerStorageKey(sessionName);
+            if (active) {
+                window.sessionStorage.setItem(storageKey, '1');
+            } else {
+                window.sessionStorage.removeItem(storageKey);
+            }
+        } catch {
+            // Ignore storage failures.
+        }
+    }, [sessionName]);
+
+    const hasDevServerTerminalMarker = useCallback((): boolean => {
+        try {
+            return window.sessionStorage.getItem(getDevServerTerminalMarkerStorageKey(sessionName)) === '1';
+        } catch {
+            return false;
+        }
+    }, [sessionName]);
+
+    const revealDevServerTerminal = useCallback(() => {
+        setIsRepoViewActive(false);
+        setIsRightPanelCollapsed(false);
+        setIsPreviewVisible(true);
+        setIsTerminalMinimized(false);
+        setActiveTerminalTabId(MAIN_TERMINAL_TAB_ID);
+    }, []);
+
+    const getFloatingTerminalSession = useCallback((tabId = MAIN_TERMINAL_TAB_ID) => {
+        const iframe = terminalFramesRef.current[tabId] || null;
+        if (!iframe) return null;
+        try {
+            const win = iframe.contentWindow as TerminalWindow | null;
+            if (!win?.term) return null;
+            return {
+                iframe,
+                win,
+                term: win.term,
+            };
+        } catch {
+            return null;
+        }
+    }, []);
+
+    const focusFloatingTerminalSession = useCallback((tabId = MAIN_TERMINAL_TAB_ID): boolean => {
+        const terminalSession = getFloatingTerminalSession(tabId);
+        if (!terminalSession) return false;
+        try {
+            terminalSession.win.focus();
+            const textarea = terminalSession.iframe.contentDocument?.querySelector('textarea.xterm-helper-textarea') as HTMLElement | null;
+            if (!textarea || typeof textarea.focus !== 'function') return false;
+            try {
+                textarea.focus({ preventScroll: true });
+            } catch {
+                textarea.focus();
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    }, [getFloatingTerminalSession]);
+
+    const readTerminalTranscript = useCallback((term: NonNullable<TerminalWindow['term']>, maxLines = 160): string => {
+        const activeBuffer = term?.buffer?.active;
+        if (!activeBuffer || typeof activeBuffer.getLine !== 'function') {
+            return '';
+        }
+
+        const cursorLine = activeBuffer.baseY + activeBuffer.cursorY;
+        const lines: string[] = [];
+        for (let offset = maxLines - 1; offset >= 0; offset -= 1) {
+            const line = activeBuffer.getLine(cursorLine - offset);
+            const text = line?.translateToString(true) ?? '';
+            if (!text) continue;
+            lines.push(text);
+        }
+        return lines.join('\n');
+    }, []);
+
+    const sendTerminalInput = useCallback((term: NonNullable<TerminalWindow['term']>, text: string): boolean => {
+        const triggerDataEvent = term._core?.coreService?.triggerDataEvent;
+        if (typeof triggerDataEvent === 'function') {
+            triggerDataEvent(text, true);
+            return true;
+        }
+        if (typeof term.paste === 'function') {
+            term.paste(text);
+            return true;
+        }
+        return false;
+    }, []);
+
+    const waitForFloatingTerminalSession = useCallback(async (
+        tabId = MAIN_TERMINAL_TAB_ID,
+        options?: { requireShellPrompt?: boolean; timeoutMs?: number },
+    ) => {
+        const requireShellPrompt = Boolean(options?.requireShellPrompt);
+        const timeoutMs = options?.timeoutMs ?? 8000;
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < timeoutMs) {
+            const terminalSession = getFloatingTerminalSession(tabId);
+            if (terminalSession && (!requireShellPrompt || isShellPromptReady(terminalSession.term))) {
+                return terminalSession;
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 150));
+        }
+
+        return null;
+    }, [getFloatingTerminalSession, isShellPromptReady]);
 
     const focusTerminalInputForSlot = useCallback((slot: TerminalBootstrapSlot): boolean => {
         if (slot === 'agent') {
@@ -1804,88 +1920,141 @@ export function SessionView({
         setFeedback(`Opened preview in new tab: ${normalizedTarget}`);
     }, [loadedPreviewTargetUrl, previewInputUrl]);
 
-    const refreshDevServerState = useCallback(async (options?: { quiet?: boolean }) => {
-        const result = await getSessionDevServerState(sessionName);
-        if (!result.success) {
-            if (!options?.quiet) {
-                setFeedback(result.error || 'Failed to load dev server state');
-            }
+    const syncDevServerStateFromTerminal = useCallback(async () => {
+        const script = devServerScript?.trim();
+        if (!script) {
+            setDevServerState({ running: false, previewUrl: null });
+            pendingDevServerPreviewLoadRef.current = false;
+            setIsAwaitingDevServerPreview(false);
+            setDevServerTerminalMarker(false);
             return null;
         }
 
-        const nextState = {
-            running: Boolean(result.running),
-            previewUrl: result.previewUrl || null,
-        };
-        setDevServerState(nextState);
-
-        if (pendingDevServerPreviewLoadRef.current && nextState.previewUrl) {
-            pendingDevServerPreviewLoadRef.current = false;
-            setIsAwaitingDevServerPreview(false);
-            void loadPreview(nextState.previewUrl, true);
+        const terminalSession = getFloatingTerminalSession(MAIN_TERMINAL_TAB_ID);
+        if (!terminalSession) {
+            return null;
         }
 
-        return nextState;
-    }, [loadPreview, sessionName]);
+        const transcript = readTerminalTranscript(terminalSession.term);
+        const previewUrlFromTerminal = inferPreviewUrlFromTerminalText(transcript);
+        const hasTerminalMarker = hasDevServerTerminalMarker();
+        const commandVisibleInTranscript = terminalTranscriptContainsCommand(transcript, script);
+        const startedByDevButton = hasTerminalMarker
+            || (pendingDevServerPreviewLoadRef.current && commandVisibleInTranscript);
+        const isRunning = !isShellPromptReady(terminalSession.term) && startedByDevButton;
+
+        setDevServerState((current) => {
+            const nextState = {
+                running: isRunning,
+                previewUrl: previewUrlFromTerminal || current.previewUrl,
+            };
+            if (current.running === nextState.running && current.previewUrl === nextState.previewUrl) {
+                return current;
+            }
+            return nextState;
+        });
+
+        if (previewUrlFromTerminal && pendingDevServerPreviewLoadRef.current) {
+            pendingDevServerPreviewLoadRef.current = false;
+            setIsAwaitingDevServerPreview(false);
+            void loadPreview(previewUrlFromTerminal, true);
+        }
+
+        if (!isRunning && hasTerminalMarker) {
+            pendingDevServerPreviewLoadRef.current = false;
+            setIsAwaitingDevServerPreview(false);
+            setDevServerTerminalMarker(false);
+        }
+
+        return {
+            running: isRunning,
+            previewUrl: previewUrlFromTerminal,
+        };
+    }, [
+        devServerScript,
+        getFloatingTerminalSession,
+        hasDevServerTerminalMarker,
+        isShellPromptReady,
+        loadPreview,
+        readTerminalTranscript,
+        setDevServerTerminalMarker,
+    ]);
 
     useEffect(() => {
         if (!devServerScript?.trim()) {
             setDevServerState({ running: false, previewUrl: null });
             pendingDevServerPreviewLoadRef.current = false;
             setIsAwaitingDevServerPreview(false);
+            setDevServerTerminalMarker(false);
             return;
         }
 
         let cancelled = false;
-        const refresh = async (quiet = false) => {
+        const sync = async () => {
             if (cancelled) return;
-            await refreshDevServerState({ quiet });
+            await syncDevServerStateFromTerminal();
         };
 
-        void refresh(false);
+        void sync();
         const intervalId = window.setInterval(() => {
-            void refresh(true);
-        }, 3000);
+            void sync();
+        }, 1500);
 
         return () => {
             cancelled = true;
             window.clearInterval(intervalId);
         };
-    }, [devServerScript, refreshDevServerState, sessionName]);
+    }, [devServerScript, setDevServerTerminalMarker, syncDevServerStateFromTerminal]);
 
     const handleStartDevServer = async () => {
         const script = devServerScript?.trim();
         if (!script) return;
 
+        revealDevServerTerminal();
         setIsStartingDevServer(true);
         pendingDevServerPreviewLoadRef.current = true;
         setIsAwaitingDevServerPreview(true);
-        setFeedback('Starting dev server...');
+        setFeedback('Starting dev server in terminal...');
 
         try {
-            const result = await startSessionDevServer(sessionName);
-            if (!result.success) {
+            await ensureTerminalService();
+
+            const preparation = await prepareSessionDevServerTerminalRun(sessionName);
+            if (!preparation.success) {
                 pendingDevServerPreviewLoadRef.current = false;
                 setIsAwaitingDevServerPreview(false);
-                setFeedback(result.error || 'Failed to start dev server');
+                setFeedback(preparation.error || 'Failed to prepare dev server');
                 return;
             }
 
-            if (result.previewUrl) {
+            const terminalSession = await waitForFloatingTerminalSession(MAIN_TERMINAL_TAB_ID, {
+                requireShellPrompt: true,
+                timeoutMs: 10000,
+            });
+            if (!terminalSession) {
                 pendingDevServerPreviewLoadRef.current = false;
                 setIsAwaitingDevServerPreview(false);
-                await loadPreview(result.previewUrl, true);
-            } else {
-                await refreshDevServerState({ quiet: true });
+                setFeedback('Terminal is busy or not ready yet');
+                return;
             }
 
-            if (result.alreadyRunning) {
-                setFeedback('Dev server is already running');
-            } else if (result.removedStaleLock) {
-                setFeedback('Removed stale Next.js dev lock and started dev server');
-            } else {
-                setFeedback('Dev server started in background');
+            const commandSent = sendTerminalInput(terminalSession.term, script);
+            const enterSent = commandSent && sendTerminalInput(terminalSession.term, '\r');
+            if (!enterSent) {
+                pendingDevServerPreviewLoadRef.current = false;
+                setIsAwaitingDevServerPreview(false);
+                setFeedback('Failed to send dev server command to terminal');
+                return;
             }
+
+            setDevServerTerminalMarker(true);
+            setDevServerState((current) => ({ ...current, running: true }));
+            focusFloatingTerminalSession(MAIN_TERMINAL_TAB_ID);
+            setFeedback(
+                preparation.removedStaleLock
+                    ? 'Removed stale Next.js dev lock and started dev server in terminal'
+                    : 'Dev server started in terminal'
+            );
         } catch (error) {
             pendingDevServerPreviewLoadRef.current = false;
             setIsAwaitingDevServerPreview(false);
@@ -1899,27 +2068,44 @@ export function SessionView({
     const handleStopDevServer = useCallback(async () => {
         if (!devServerScript?.trim()) return;
 
+        revealDevServerTerminal();
         setIsStoppingDevServer(true);
         pendingDevServerPreviewLoadRef.current = false;
         setIsAwaitingDevServerPreview(false);
-        setFeedback('Stopping dev server...');
+        setFeedback('Stopping dev server in terminal...');
 
         try {
-            const result = await stopSessionDevServer(sessionName);
-            if (!result.success) {
-                setFeedback(result.error || 'Failed to stop dev server');
+            await ensureTerminalService();
+            const terminalSession = await waitForFloatingTerminalSession(MAIN_TERMINAL_TAB_ID, {
+                timeoutMs: 5000,
+            });
+            if (!terminalSession) {
+                setFeedback('Terminal is not ready yet');
                 return;
             }
 
-            await refreshDevServerState({ quiet: true });
-            setFeedback('Dev server stopped');
+            const interruptSent = sendTerminalInput(terminalSession.term, '\u0003');
+            if (!interruptSent) {
+                setFeedback('Failed to send interrupt to terminal');
+                return;
+            }
+
+            focusFloatingTerminalSession(MAIN_TERMINAL_TAB_ID);
+            setFeedback('Sent interrupt to dev server terminal');
         } catch (error) {
             console.error('Failed to stop dev server:', error);
             setFeedback(error instanceof Error ? error.message : 'Failed to stop dev server');
         } finally {
             setIsStoppingDevServer(false);
         }
-    }, [devServerScript, refreshDevServerState, sessionName]);
+    }, [
+        devServerScript,
+        ensureTerminalService,
+        focusFloatingTerminalSession,
+        revealDevServerTerminal,
+        sendTerminalInput,
+        waitForFloatingTerminalSession,
+    ]);
     const handleTerminalLoad = (iframeFromEvent?: HTMLIFrameElement | null, tabIdFromEvent?: string) => {
         const tabId = tabIdFromEvent || activeTerminalTabId;
         const iframe = iframeFromEvent
@@ -2088,10 +2274,10 @@ export function SessionView({
     const devButtonTitle = !hasDevServerScript
         ? 'Set a dev server script to enable this button'
         : devServerState.running
-            ? 'Stop tracked dev server'
+            ? 'Interrupt dev server running in terminal'
             : isTerminalForegroundProcessRunning
-                ? 'Start tracked dev server (another foreground terminal process is visible)'
-                : 'Start tracked dev server';
+                ? 'Run dev server in terminal (another foreground terminal process is visible)'
+                : 'Run dev server in terminal';
     const isMobileRightPanelOverlay = isMobileViewport;
     const isMobileOverlayExpanded = isMobileRightPanelOverlay && !isRightPanelCollapsed;
     const isPreviewPanelActive = !isRightPanelCollapsed && !isRepoViewActive;
