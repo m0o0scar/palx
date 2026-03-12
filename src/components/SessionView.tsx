@@ -2456,8 +2456,8 @@ export function SessionView({
             ? 'w-0 min-w-0 flex-none'
             : 'min-w-[360px] flex-1'}`;
     const sessionHeaderClass = isMobileViewport
-        ? 'z-20 flex items-center justify-between bg-white px-4 py-2 text-xs font-mono dark:bg-[#161b22] dark:text-slate-300'
-        : 'z-20 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2 text-xs font-mono shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:text-slate-300';
+        ? 'relative z-40 flex items-center justify-between bg-white px-4 py-2 text-xs font-mono dark:bg-[#161b22] dark:text-slate-300'
+        : 'relative z-20 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2 text-xs font-mono shadow-sm dark:border-[#30363d] dark:bg-[#161b22] dark:text-slate-300';
     const agentPanelClass = isMobileViewport
         ? 'agent-activity-panel flex h-full min-w-0 flex-col overflow-hidden bg-white transition-[width] duration-300 ease-in-out dark:bg-[#161b22]'
         : 'agent-activity-panel flex h-full min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-[width] duration-300 ease-in-out dark:border-[#30363d] dark:bg-[#161b22]';
