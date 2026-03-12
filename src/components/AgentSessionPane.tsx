@@ -20,6 +20,7 @@ import {
   type OptimisticUserMessage,
 } from '@/lib/optimistic-user-history';
 import { projectSessionHistoryEvent } from '@/lib/agent/session-history-events';
+import { normalizeMarkdownLists } from '@/lib/markdown';
 import { getBaseName } from '@/lib/path';
 import { buildRepoMentionSuggestions } from '@/lib/repo-mention-suggestions';
 import type {
@@ -270,7 +271,7 @@ function getClipboardImageFiles(data: DataTransfer | null): File[] {
 }
 
 function MarkdownMessage({ value }: { value: string | null | undefined }) {
-  const text = trimEmpty(value);
+  const text = normalizeMarkdownLists(trimEmpty(value));
   if (!text) return null;
 
   return (
