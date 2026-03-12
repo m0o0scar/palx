@@ -29,7 +29,7 @@ function readIsDocumentForegrounded(): boolean {
 
 function withFaviconCacheBuster(href: string, key: string): string {
     const separator = href.includes('?') ? '&' : '?';
-    return `${href}${separator}${key}=${Date.now()}`;
+    return `${href}${separator}${key}=${encodeURIComponent(href)}`;
 }
 
 function upsertManagedFaviconLink(rel: 'icon' | 'shortcut icon', href: string): void {

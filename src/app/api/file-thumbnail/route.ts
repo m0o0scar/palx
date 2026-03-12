@@ -32,11 +32,26 @@ export async function GET(request: NextRequest) {
       return new Response('Not found', { status: 404 });
     }
 
+    const etag = `W/"${stats.size}-${Math.trunc(stats.mtimeMs).toString(16)}"`;
+    const lastModified = stats.mtime.toUTCString();
+    const cacheHeaders = {
+      'Cache-Control': 'private, max-age=60',
+      ETag: etag,
+      'Last-Modified': lastModified,
+    };
+    const ifNoneMatch = request.headers.get('if-none-match');
+    if (ifNoneMatch === etag) {
+      return new Response(null, {
+        status: 304,
+        headers: cacheHeaders,
+      });
+    }
+
     const fileBuffer = await fs.readFile(filePath);
     return new Response(fileBuffer, {
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'private, max-age=60',
+        ...cacheHeaders,
       },
     });
   } catch {
