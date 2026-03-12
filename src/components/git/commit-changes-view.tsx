@@ -7,9 +7,9 @@ import { ImageDiffView } from './image-diff-view';
 import { useEscapeDismiss } from '@/hooks/use-escape-dismiss';
 import { CommitFileTreeItem, buildCommitFileTree, collectCommitFolderPaths, getParentPaths } from './commit-file-tree';
 import { DiffView } from './diff-view';
+import { SESSION_MOBILE_VIEWPORT_QUERY } from '@/lib/responsive';
 
 const MAX_SELECTION_STATE_ENTRIES = 40;
-const MOBILE_VIEWPORT_QUERY = '(max-width: 767px)';
 
 function pruneSelectionStateMap<T>(state: Record<string, T>, currentKey: string): Record<string, T> {
   const entries = Object.entries(state);
@@ -290,7 +290,7 @@ export function CommitChangesView({
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const mediaQuery = window.matchMedia(MOBILE_VIEWPORT_QUERY);
+    const mediaQuery = window.matchMedia(SESSION_MOBILE_VIEWPORT_QUERY);
     const updateViewport = () => setIsMobileViewport(mediaQuery.matches);
     updateViewport();
 
