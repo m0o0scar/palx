@@ -477,6 +477,10 @@ class HistoryProjector {
       return;
     }
 
+    if (itemType === 'userMessage') {
+      return;
+    }
+
     if (itemType === 'agentMessage') {
       const existing = this.getAssistant(itemId);
       this.persist({

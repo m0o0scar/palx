@@ -137,6 +137,37 @@ describe('projectSessionHistoryEvent', () => {
     assert.equal(result.history[0]?.status, 'completed');
   });
 
+  it('ignores provider user message lifecycle items when a local user entry already exists', () => {
+    const existing = createItem({
+      id: 'local-user-1',
+      kind: 'user',
+      threadId: null,
+      turnId: null,
+      text: 'approve',
+    });
+
+    const event: ChatStreamEvent = {
+      type: 'item_started',
+      item: {
+        id: 'provider-user-1',
+        type: 'userMessage',
+        content: [
+          {
+            type: 'text',
+            text: 'approve',
+          },
+        ],
+      },
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+    };
+
+    const result = projectSessionHistoryEvent([existing], 'session-1', event, '2026-03-12T00:00:01.000Z');
+    assert.equal(result.handled, false);
+    assert.equal(result.changed, false);
+    assert.deepStrictEqual(result.history, [existing]);
+  });
+
   it('leaves history untouched for turn lifecycle events', () => {
     const existing = createItem({
       id: 'assistant-1',

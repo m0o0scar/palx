@@ -148,25 +148,7 @@ function buildNormalizedItemDraft(
 
   switch (itemType) {
     case 'userMessage': {
-      const text = Array.isArray(item.content)
-        ? item.content
-            .map((content) => (
-              content && typeof content === 'object' && (content as { type?: unknown }).type === 'text'
-                ? normalizeText((content as { text?: unknown }).text)
-                : ''
-            ))
-            .filter(Boolean)
-            .join('\n')
-        : '';
-
-      return {
-        kind: 'user',
-        id: itemId,
-        text,
-        threadId: event.threadId,
-        turnId: event.turnId,
-        itemStatus: existing?.itemStatus ?? null,
-      };
+      return null;
     }
     case 'agentMessage':
       return {
