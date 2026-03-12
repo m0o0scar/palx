@@ -282,6 +282,7 @@ export function SessionView({
     const agentFrameLinkCleanupRef = useRef<(() => void) | null>(null);
     const terminalFrameLinkCleanupRefs = useRef<Record<string, CleanupRef>>({});
     const terminalProcessMonitorCleanupRef = useRef<(() => void) | null>(null);
+    const devServerTerminalSyncCleanupRef = useRef<(() => void) | null>(null);
     const terminalAutoScrollCleanupRef = useRef<Record<string, (() => void) | null>>({});
     const iframeBeforeUnloadCleanupRef = useRef<Record<string, (() => void) | null>>({});
     const [terminalPersistenceMode, setTerminalPersistenceMode] = useState<'tmux' | 'shell'>(initialTerminalPersistenceMode);
@@ -363,6 +364,38 @@ export function SessionView({
         }
     }, []);
 
+    const observeTerminalOutput = useCallback((
+        iframe: HTMLIFrameElement,
+        term: NonNullable<TerminalWindow['term']>,
+        callback: () => void,
+        options?: { includeCharacterData?: boolean }
+    ): (() => void) => {
+        const xterm = term as TerminalWithOnWriteParsed;
+        let writeDisposable: TerminalOnWriteParsedDisposable | null = null;
+        let mutationObserver: MutationObserver | null = null;
+
+        if (typeof xterm.onWriteParsed === 'function') {
+            writeDisposable = xterm.onWriteParsed(callback) || null;
+        } else {
+            const screen = iframe.contentDocument?.querySelector('.xterm-screen') || iframe.contentDocument?.body;
+            if (screen) {
+                mutationObserver = new MutationObserver(callback);
+                mutationObserver.observe(screen, {
+                    childList: true,
+                    subtree: true,
+                    characterData: options?.includeCharacterData ?? true,
+                });
+            }
+        }
+
+        return () => {
+            if (writeDisposable && typeof writeDisposable.dispose === 'function') {
+                writeDisposable.dispose();
+            }
+            mutationObserver?.disconnect();
+        };
+    }, []);
+
     const installBeforeUnloadGuard = useCallback((slot: TerminalBootstrapSlot, iframe: HTMLIFrameElement): void => {
         cleanupBeforeUnloadGuard(slot);
 
@@ -403,36 +436,19 @@ export function SessionView({
                 const baseY = typeof activeBuffer?.baseY === 'number' ? activeBuffer.baseY : 0;
                 const viewportY = typeof activeBuffer?.viewportY === 'number' ? activeBuffer.viewportY : baseY;
 
-                if (activeBuffer && (baseY - viewportY < 10)) {
-                    xterm.scrollToBottom?.();
-                } else {
-                    xterm.scrollToBottom?.();
-                }
+                if (!activeBuffer || (baseY - viewportY) >= 10) return;
+                xterm.scrollToBottom?.();
             };
 
-            let writeDisposable: TerminalOnWriteParsedDisposable | null = null;
-            let mutationObserver: MutationObserver | null = null;
-
-            if (typeof xterm.onWriteParsed === 'function') {
-                writeDisposable = xterm.onWriteParsed(scrollHandler) || null;
-            } else {
-                const screen = iframe.contentDocument?.querySelector('.xterm-screen') || iframe.contentDocument?.body;
-                if (screen) {
-                    mutationObserver = new MutationObserver(scrollHandler);
-                    mutationObserver.observe(screen, { childList: true, subtree: true, characterData: true });
-                }
-            }
+            const cleanupOutputObserver = observeTerminalOutput(iframe, term, scrollHandler);
 
             terminalAutoScrollCleanupRef.current[slot] = () => {
-                if (writeDisposable && typeof writeDisposable.dispose === 'function') {
-                    writeDisposable.dispose();
-                }
-                mutationObserver?.disconnect();
+                cleanupOutputObserver();
             };
         } catch (error) {
             console.error('Failed to setup auto-scroll:', error);
         }
-    }, [cleanupTerminalAutoScroll]);
+    }, [cleanupTerminalAutoScroll, observeTerminalOutput]);
 
     const cleanupAllIframeResources = useCallback((): void => {
         cleanupTerminalLinkHandler('agent');
@@ -602,6 +618,13 @@ export function SessionView({
         }
     }, []);
 
+    const stopDevServerTerminalSync = useCallback(() => {
+        if (devServerTerminalSyncCleanupRef.current) {
+            devServerTerminalSyncCleanupRef.current();
+            devServerTerminalSyncCleanupRef.current = null;
+        }
+    }, []);
+
     const startTerminalProcessMonitor = useCallback((
         iframe: HTMLIFrameElement,
         term: NonNullable<TerminalWindow['term']>
@@ -609,9 +632,6 @@ export function SessionView({
         stopTerminalProcessMonitor();
 
         let disposed = false;
-        let writeDisposable: { dispose?: () => void } | null = null;
-        let mutationObserver: MutationObserver | null = null;
-        let intervalId: number | null = null;
 
         const updateProcessState = () => {
             if (disposed) return;
@@ -620,35 +640,19 @@ export function SessionView({
         };
 
         updateProcessState();
-        intervalId = window.setInterval(updateProcessState, 1000);
+        const cleanupOutputObserver = observeTerminalOutput(iframe, term, updateProcessState);
 
         try {
-            const xterm = term as TerminalWithOnWriteParsed;
-            if (typeof xterm.onWriteParsed === 'function') {
-                writeDisposable = xterm.onWriteParsed(updateProcessState) || null;
-            } else {
-                const screen = iframe.contentDocument?.querySelector('.xterm-screen') || iframe.contentDocument?.body;
-                if (screen) {
-                    mutationObserver = new MutationObserver(updateProcessState);
-                    mutationObserver.observe(screen, { childList: true, subtree: true, characterData: true });
-                }
-            }
+            updateProcessState();
         } catch (error) {
             console.error('Failed to setup terminal process monitor:', error);
         }
 
         terminalProcessMonitorCleanupRef.current = () => {
             disposed = true;
-            if (intervalId !== null) {
-                window.clearInterval(intervalId);
-                intervalId = null;
-            }
-            if (writeDisposable && typeof writeDisposable.dispose === 'function') {
-                writeDisposable.dispose();
-            }
-            mutationObserver?.disconnect();
+            cleanupOutputObserver();
         };
-    }, [isShellPromptReady, stopTerminalProcessMonitor]);
+    }, [isShellPromptReady, observeTerminalOutput, stopTerminalProcessMonitor]);
 
     useEffect(() => {
         return () => {
@@ -657,9 +661,19 @@ export function SessionView({
     }, [stopTerminalProcessMonitor]);
 
     useEffect(() => {
+        return () => {
+            stopDevServerTerminalSync();
+        };
+    }, [stopDevServerTerminalSync]);
+
+    useEffect(() => {
         setIsTerminalForegroundProcessRunning(false);
         stopTerminalProcessMonitor();
     }, [sessionName, stopTerminalProcessMonitor]);
+
+    useEffect(() => {
+        stopDevServerTerminalSync();
+    }, [sessionName, stopDevServerTerminalSync]);
 
     const [feedback, setFeedback] = useState<string>('Initializing...');
     const [agentHeaderMeta, setAgentHeaderMeta] = useState<AgentSessionHeaderMeta | null>(null);
@@ -2058,40 +2072,80 @@ export function SessionView({
         setDevServerTerminalMarker,
     ]);
 
+    const startDevServerTerminalSync = useCallback((
+        iframe: HTMLIFrameElement,
+        term: NonNullable<TerminalWindow['term']>
+    ) => {
+        stopDevServerTerminalSync();
+
+        let disposed = false;
+        let scheduled = false;
+        let scheduleTimer: number | null = null;
+
+        const scheduleSync = () => {
+            if (disposed || scheduled) return;
+            scheduled = true;
+            scheduleTimer = window.setTimeout(() => {
+                scheduled = false;
+                scheduleTimer = null;
+                if (disposed) return;
+                void syncDevServerStateFromTerminal();
+            }, 0);
+        };
+
+        scheduleSync();
+        const cleanupOutputObserver = observeTerminalOutput(iframe, term, scheduleSync);
+
+        devServerTerminalSyncCleanupRef.current = () => {
+            disposed = true;
+            if (scheduleTimer !== null) {
+                window.clearTimeout(scheduleTimer);
+                scheduleTimer = null;
+            }
+            cleanupOutputObserver();
+        };
+    }, [observeTerminalOutput, stopDevServerTerminalSync, syncDevServerStateFromTerminal]);
+
     useEffect(() => {
         if (!devServerScript?.trim()) {
             setDevServerState({ running: false, previewUrl: null });
             pendingDevServerPreviewLoadRef.current = false;
             setIsAwaitingDevServerPreview(false);
             setDevServerTerminalMarker(false);
-            return;
-        }
-        if (isRightPanelCollapsed || isRepoViewActive || !isSessionPageForegrounded) {
+            stopDevServerTerminalSync();
             return;
         }
 
-        let cancelled = false;
-        const sync = async () => {
-            if (cancelled) return;
-            await syncDevServerStateFromTerminal();
-        };
+        const shouldWatchDevServerTerminal = (
+            isSessionPageForegrounded
+            && (isAwaitingDevServerPreview || devServerState.running || hasDevServerTerminalMarker())
+        );
+        if (!shouldWatchDevServerTerminal) {
+            stopDevServerTerminalSync();
+            return;
+        }
 
-        void sync();
-        const intervalId = window.setInterval(() => {
-            void sync();
-        }, 1500);
+        const terminalSession = getFloatingTerminalSession(MAIN_TERMINAL_TAB_ID);
+        if (!terminalSession) {
+            stopDevServerTerminalSync();
+            return;
+        }
+
+        startDevServerTerminalSync(terminalSession.iframe, terminalSession.term);
 
         return () => {
-            cancelled = true;
-            window.clearInterval(intervalId);
+            stopDevServerTerminalSync();
         };
     }, [
         devServerScript,
-        isRepoViewActive,
-        isRightPanelCollapsed,
+        devServerState.running,
+        getFloatingTerminalSession,
+        hasDevServerTerminalMarker,
+        isAwaitingDevServerPreview,
         isSessionPageForegrounded,
         setDevServerTerminalMarker,
-        syncDevServerStateFromTerminal,
+        startDevServerTerminalSync,
+        stopDevServerTerminalSync,
     ]);
 
     const handleStartDevServer = async () => {
@@ -2256,6 +2310,14 @@ export function SessionView({
                         startTerminalProcessMonitor(iframe, term);
                     }
 
+                    if (
+                        tabId === MAIN_TERMINAL_TAB_ID
+                        && isSessionPageForegrounded
+                        && (isAwaitingDevServerPreview || devServerState.running || hasDevServerTerminalMarker())
+                    ) {
+                        startDevServerTerminalSync(iframe, term);
+                    }
+
                     installTerminalAutoScroll(bootstrapSlot, iframe, term);
 
                     const alreadyBootstrapped = hasTerminalBootstrapped(bootstrapSlot);
@@ -2378,8 +2440,12 @@ export function SessionView({
     const isMobileOverlayExpanded = isMobileRightPanelOverlay && !isRightPanelCollapsed;
     const isPreviewPanelActive = !isRightPanelCollapsed && !isRepoViewActive;
     const isChangesPanelActive = !isRightPanelCollapsed && isRepoViewActive;
+    const shouldMountVisibleTmuxTerminal = !isRightPanelCollapsed && !isRepoViewActive && !isTerminalMinimized;
     const renderedTerminalTabIds = terminalPersistenceMode === 'tmux'
-        ? [activeTerminalTabId]
+        ? Array.from(new Set([
+            ...(shouldMountVisibleTmuxTerminal ? [activeTerminalTabId] : []),
+            ...(isAwaitingDevServerPreview ? [MAIN_TERMINAL_TAB_ID] : []),
+        ]))
         : terminalTabIds;
     const showDesktopSplitHandle = !isRightPanelCollapsed && !isMobileRightPanelOverlay;
     const rightPanelWrapperClass = isMobileRightPanelOverlay
