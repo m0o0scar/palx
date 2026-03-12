@@ -37,6 +37,7 @@ import { sanitizeBranchName } from '@/lib/utils';
 import { useTerminalLink, type TerminalWindow } from '@/hooks/useTerminalLink';
 import { inferPreviewUrlFromTerminalText, terminalTranscriptContainsCommand } from '@/lib/dev-server-terminal';
 import { buildShellExportEnvironmentCommand, buildShellSetDirectoryCommand } from '@/lib/shell';
+import { SESSION_MOBILE_VIEWPORT_QUERY } from '@/lib/responsive';
 import {
     applyThemeToTerminalIframe,
     applyThemeToTerminalWindow,
@@ -80,7 +81,6 @@ const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = 'viba-right-panel-collapsed';
 const PREVIEW_TARGET_STORAGE_KEY_PREFIX = 'viba-session-preview-target-url:';
 const DEV_SERVER_TERMINAL_MARKER_STORAGE_KEY_PREFIX = 'viba-session-dev-server-terminal:';
 const DEFAULT_AGENT_PANE_RATIO = 0.5;
-const MOBILE_VIEWPORT_QUERY = '(max-width: 767px)';
 const TERMINAL_HEADER_HEIGHT = 36;
 const TERMINAL_BOOTSTRAP_STORAGE_PREFIX = 'viba:terminal-bootstrap:';
 const TERMINAL_BOOTSTRAP_RUNTIME_KEY = '__vibaTerminalBootstrapRegistry';
@@ -1198,7 +1198,7 @@ export function SessionView({
     }, [isRepoViewActive, isRightPanelCollapsed]);
 
     useEffect(() => {
-        const mediaQuery = window.matchMedia(MOBILE_VIEWPORT_QUERY);
+        const mediaQuery = window.matchMedia(SESSION_MOBILE_VIEWPORT_QUERY);
         const applyViewportMode = () => {
             setIsMobileViewport(mediaQuery.matches);
         };
