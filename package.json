@@ -49,6 +49,7 @@
     "better-sqlite3": "^11.10.0",
     "clsx": "^2.1.1",
     "daisyui": "^5.5.18",
+    "gfport": "^1.0.1",
     "http-proxy-middleware": "^3.0.5",
     "keytar": "^7.9.0",
     "lucide-react": "^0.563.0",
@@ -74,7 +75,6 @@
     "@types/ws": "^8.18.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
-    "gfport": "^1.0.1",
     "tailwindcss": "^4",
     "typescript": "5.9.3"
   }
