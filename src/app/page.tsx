@@ -1,13 +1,8 @@
 import Image from 'next/image';
-import DismissibleAuthWarning from '@/components/DismissibleAuthWarning';
 import HomeDashboardContainer from '@/components/HomeDashboardContainer';
-import { isAuth0Configured, missingAuth0EnvVars } from '@/lib/auth0';
+import { isAuth0Configured } from '@/lib/auth0';
 
 export default function Home() {
-  const authWarning = !isAuth0Configured
-    ? `Authentication is disabled because required Auth0 credentials are missing (${missingAuth0EnvVars.join(', ')}). This app is not protected and anybody with local/network access to this URL can use it.`
-    : null;
-
   return (
     <div className="min-h-screen bg-[#f6f6f8] text-slate-950 transition-colors dark:bg-[#0d1117] dark:text-white">
       <a
@@ -30,7 +25,6 @@ export default function Home() {
         </span>
       </a>
       <main className="relative z-10 flex min-h-screen flex-col items-center justify-start p-4 transition-colors md:p-6">
-        <DismissibleAuthWarning warning={authWarning} />
         <HomeDashboardContainer showLogout logoutEnabled={isAuth0Configured} />
       </main>
     </div>
